@@ -19,6 +19,7 @@ use crate::display::SharedStats;
 use crate::ifac::{self, IfacState};
 use crate::lora::LoRaWriter;
 use crate::rng::EspRng;
+use crate::util::hex;
 
 /// Events processed by the driver loop.
 pub enum Event {
@@ -399,9 +400,4 @@ pub fn spawn_tick_thread(tx: mpsc::Sender<Event>, interval_ms: u64) {
 fn now() -> f64 {
     let ticks = unsafe { esp_idf_sys::esp_timer_get_time() };
     ticks as f64 / 1_000_000.0
-}
-
-/// Format bytes as hex string for logging.
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }

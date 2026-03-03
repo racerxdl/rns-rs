@@ -3,7 +3,7 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 
 # Custom partition table with larger app partition (4MB - 64KB)
 CONFIG_PARTITION_TABLE_CUSTOM=y
-CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="/home/lelloman/lelloprojects/rns-rs/rns-esp32/partitions.csv"
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
 # Enable SPI
 CONFIG_SPI_MASTER_IN_IRAM=y

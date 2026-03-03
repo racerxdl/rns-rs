@@ -81,11 +81,17 @@ pub fn init(
     mut rst: PinDriver<'static, AnyIOPin, Output>,
 ) -> Option<Display> {
     // Reset the display — hold low, then release
-    rst.set_high().ok();
+    if let Err(e) = rst.set_high() {
+        log::warn!("OLED RST set_high failed: {:?}", e);
+    }
     std::thread::sleep(std::time::Duration::from_millis(1));
-    rst.set_low().ok();
+    if let Err(e) = rst.set_low() {
+        log::warn!("OLED RST set_low failed: {:?}", e);
+    }
     std::thread::sleep(std::time::Duration::from_millis(10));
-    rst.set_high().ok();
+    if let Err(e) = rst.set_high() {
+        log::warn!("OLED RST release failed: {:?}", e);
+    }
     std::thread::sleep(std::time::Duration::from_millis(20));
 
     // Keep RST pin alive — dropping it would float the line and reset the display

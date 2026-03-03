@@ -10,6 +10,7 @@ mod driver;
 mod ifac;
 mod lora;
 mod rng;
+mod util;
 
 use std::sync::{mpsc, Arc, Mutex};
 
@@ -22,6 +23,8 @@ use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvs, NvsDefault};
 
 use rns_core::transport::types::{InterfaceId, TransportConfig};
 use rns_crypto::identity::Identity;
+
+use crate::util::hex;
 
 const NVS_NAMESPACE: &str = "rns";
 const NVS_KEY_IDENTITY: &str = "id_prv";
@@ -167,9 +170,4 @@ fn load_or_create_identity(nvs_partition: &EspDefaultNvsPartition) -> Identity {
     }
 
     identity
-}
-
-/// Format bytes as hex string.
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
