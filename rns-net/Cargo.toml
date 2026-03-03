@@ -32,3 +32,6 @@ name = "tcp_connect"
 
 [[example]]
 name = "rnsd"
+
+[[example]]
+name = "rnode_lora"
