@@ -209,6 +209,23 @@ pub fn start(
             );
         })?;
 
+    // Spawn keepalive thread — sends periodic DETECT to prevent firmware
+    // bridge idle timeout (ESP32 RNode reverts to standalone after 30s idle).
+    let keepalive_writer = shared_writer.clone();
+    let keepalive_name = config.name.clone();
+    thread::Builder::new()
+        .name(format!("rnode-keepalive-{}", config.base_interface_id.0))
+        .spawn(move || {
+            let detect = rnode_kiss::detect_request();
+            loop {
+                thread::sleep(Duration::from_secs(15));
+                if let Err(e) = keepalive_writer.lock().unwrap().write_all(&detect) {
+                    log::debug!("[{}] keepalive write failed: {}", keepalive_name, e);
+                    return;
+                }
+            }
+        })?;
+
     Ok(writers)
 }
 
