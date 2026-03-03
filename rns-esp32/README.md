@@ -11,6 +11,9 @@ Reticulum LoRa transport node firmware for **Heltec WiFi LoRa 32 (V3)** with SX1
 
 ## Features
 
+- **Dual mode operation**:
+  - **Standalone**: Runs a full Reticulum transport node over LoRa
+  - **RNode Bridge**: Acts as a KISS interface over USB serial for a PC running `rns-net`
 - LoRa packet transport for Reticulum network
 - OLED display with multiple info pages (cycled via long-press PRG button)
 - Identity persistence via NVS (Non-Volatile Storage)
@@ -19,6 +22,21 @@ Reticulum LoRa transport node firmware for **Heltec WiFi LoRa 32 (V3)** with SX1
   - **Short press**: Send ping broadcast
   - **Double press**: Trigger Reticulum announce
   - **Long press (>800ms)**: Cycle display page
+
+## RNode Bridge Mode
+
+When a PC connects via USB serial and sends an RNode DETECT handshake, the device automatically switches from standalone mode to bridge mode. In bridge mode it:
+
+- Responds to the RNode KISS protocol (DETECT, FW_VERSION, PLATFORM, MCU)
+- Accepts radio configuration commands (frequency, bandwidth, SF, CR, TX power)
+- Bridges KISS data frames between USB serial and the SX1262 LoRa radio
+- Reverts to standalone mode after 30 seconds of serial inactivity
+
+Use the `rnode_lora` example from `rns-net` to connect from a PC:
+
+```bash
+RUST_LOG=info cargo run --example rnode_lora -- /dev/ttyUSB0
+```
 
 ## Prerequisites
 
@@ -72,8 +90,9 @@ Edit `src/config.rs` to modify LoRa parameters:
 ## Architecture
 
 ```
-main.rs         - Hardware init, thread spawning
-├── lora.rs     - SX1262 SPI driver (TX/RX)
+main.rs         - Hardware init, thread spawning, mode switching
+├── lora.rs     - SX1262 SPI driver (TX/RX), radio reconfiguration
+├── rnode.rs    - RNode KISS protocol handler, USB bridge mode
 ├── display.rs  - SSD1306 OLED rendering
 ├── button.rs   - GPIO0 button with gesture detection
 ├── driver.rs   - Event loop, TransportEngine integration
