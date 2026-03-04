@@ -4,8 +4,8 @@
 //! switches to TX, sends, then returns to RX. Each LoRa packet = one
 //! Reticulum frame (no HDLC/KISS framing).
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -379,28 +379,13 @@ impl Radio {
 /// Shared radio handle.
 pub type SharedRadio = Arc<Mutex<Radio>>;
 
-/// Shared pause flag: when true, the radio is owned by the RNode bridge.
-pub type PauseFlag = Arc<AtomicBool>;
-
 /// Writer end: sends frames over LoRa.
 pub struct LoRaWriter {
     radio: SharedRadio,
-    paused: Option<PauseFlag>,
 }
 
 impl LoRaWriter {
-    /// Set the pause flag. When paused, send_frame silently drops frames
-    /// to avoid interfering with the RNode bridge.
-    pub fn set_pause_flag(&mut self, flag: PauseFlag) {
-        self.paused = Some(flag);
-    }
-
     pub fn send_frame(&mut self, data: &[u8]) -> std::io::Result<()> {
-        if let Some(ref paused) = self.paused {
-            if paused.load(Ordering::SeqCst) {
-                return Ok(()); // Bridge owns the radio, silently drop
-            }
-        }
         let mut radio = self.radio.lock().unwrap();
         let result = radio.transmit(data);
         // Return to RX after transmitting
@@ -443,25 +428,24 @@ pub fn init(
         config::LORA_BANDWIDTH, config::LORA_TX_POWER);
 
     let shared = Arc::new(Mutex::new(radio));
-    let writer = LoRaWriter { radio: shared.clone(), paused: None };
+    let writer = LoRaWriter { radio: shared.clone() };
 
     Ok((shared, writer))
 }
 
 /// Reader loop: polls for received frames and sends them to the event channel.
-/// Run this in a dedicated thread. When `paused` is true, skips radio polling
-/// (used during RNode bridge mode when the bridge owns radio access).
+/// Run this in a dedicated thread. Exits when `shutdown` is set to true.
 pub fn reader_loop(
     radio: SharedRadio,
     tx: std::sync::mpsc::Sender<crate::driver::Event>,
     interface_id: rns_core::transport::types::InterfaceId,
-    paused: Arc<AtomicBool>,
+    shutdown: Arc<AtomicBool>,
 ) {
     log::info!("LoRa reader loop started");
     loop {
-        if paused.load(Ordering::SeqCst) {
-            thread::sleep(Duration::from_millis(50));
-            continue;
+        if shutdown.load(Ordering::SeqCst) {
+            log::info!("LoRa reader: shutdown requested, exiting");
+            break;
         }
 
         let frame = {

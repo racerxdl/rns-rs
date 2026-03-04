@@ -4,8 +4,12 @@
 //! TransportEngine integration. No hooks, hole-punching, link manager,
 //! RPC, discovery, tunnels, or compression.
 
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
+use std::thread::JoinHandle;
 use std::time::Duration;
+
+use esp_idf_hal::uart::UartDriver;
 
 use rns_core::constants;
 use rns_core::transport::TransportEngine;
@@ -39,6 +43,16 @@ pub enum Event {
     CycleDisplayPage,
     /// Shutdown the driver.
     Shutdown,
+}
+
+/// Reason the driver event loop exited.
+pub enum DriverExit {
+    /// UART detected an RNode DETECT handshake; switch to bridge mode.
+    BridgeRequested,
+    /// Shutdown event received.
+    Shutdown,
+    /// Event channel disconnected.
+    Disconnected,
 }
 
 /// Per-interface state tracked by the driver.
@@ -123,17 +137,23 @@ impl Driver {
         log::info!("Interface {:?} registered", id);
     }
 
-    /// Run the main event loop. Blocks until Shutdown event.
-    pub fn run(&mut self) {
+    /// Run the main event loop. Blocks until bridge detected, shutdown, or disconnect.
+    pub fn run(&mut self, uart: &UartDriver<'_>) -> DriverExit {
         log::info!("Driver event loop started");
 
-        loop {
-            let event = match self.rx.recv_timeout(Duration::from_millis(100)) {
+        let exit = loop {
+            let event = match self.rx.recv_timeout(Duration::from_secs(3)) {
                 Ok(e) => e,
-                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    // On idle, check UART for RNode DETECT handshake (~1ms)
+                    if crate::rnode::wait_for_detect_quick(uart) {
+                        break DriverExit::BridgeRequested;
+                    }
+                    continue;
+                }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
                     log::warn!("Event channel disconnected, shutting down");
-                    break;
+                    break DriverExit::Disconnected;
                 }
             };
 
@@ -173,12 +193,13 @@ impl Driver {
                 }
                 Event::Shutdown => {
                     log::info!("Driver shutdown requested");
-                    break;
+                    break DriverExit::Shutdown;
                 }
             }
-        }
+        };
 
         log::info!("Driver event loop exited");
+        exit
     }
 
     /// Process an inbound frame: IFAC unmask → engine.handle_inbound → dispatch.
@@ -381,19 +402,27 @@ impl Driver {
 }
 
 /// Spawn a tick thread that sends Event::Tick at a regular interval.
-pub fn spawn_tick_thread(tx: mpsc::Sender<Event>, interval_ms: u64) {
+/// Exits when `shutdown` is set to true or the channel closes.
+pub fn spawn_tick_thread(
+    tx: mpsc::Sender<Event>,
+    interval_ms: u64,
+    shutdown: Arc<AtomicBool>,
+) -> JoinHandle<()> {
     std::thread::Builder::new()
         .name("tick".into())
         .stack_size(2048)
         .spawn(move || {
             loop {
                 std::thread::sleep(Duration::from_millis(interval_ms));
+                if shutdown.load(Ordering::SeqCst) {
+                    break;
+                }
                 if tx.send(Event::Tick).is_err() {
                     break;
                 }
             }
         })
-        .expect("failed to spawn tick thread");
+        .expect("failed to spawn tick thread")
 }
 
 /// Get current time as seconds since boot (monotonic).

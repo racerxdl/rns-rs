@@ -16,7 +16,6 @@ mod util;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
 
 use esp_idf_hal::gpio::{AnyIOPin, PinDriver};
 use esp_idf_hal::i2c::{I2cConfig, I2cDriver};
@@ -97,12 +96,8 @@ fn main() {
     let dio1 = PinDriver::input(AnyIOPin::from(peripherals.pins.gpio14)).expect("DIO1 pin");
 
     // Initialize LoRa radio
-    let (radio, mut writer) = lora::init(spi_driver, cs, rst, busy, dio1)
+    let (radio, writer) = lora::init(spi_driver, cs, rst, busy, dio1)
         .expect("LoRa radio init");
-
-    // Pause flag for LoRa reader and writer (set during RNode bridge mode)
-    let reader_paused = Arc::new(AtomicBool::new(false));
-    writer.set_pause_flag(reader_paused.clone());
 
     // Initialize UART0 for RNode serial protocol (USB-UART bridge on Heltec V3)
     let uart_config = uart::config::Config::default().baudrate(Hertz(115200));
@@ -116,38 +111,12 @@ fn main() {
     )
     .expect("UART0 init");
 
-    // Spawn serial monitor thread: watches UART for RNode DETECT handshake
-    let monitor_radio = radio.clone();
-    let monitor_paused = reader_paused.clone();
-    let monitor_stats = display_stats.clone();
-    std::thread::Builder::new()
-        .name("serial".into())
-        .stack_size(8192)
-        .spawn(move || {
-            serial_monitor_loop(uart, monitor_radio, monitor_paused, monitor_stats);
-        })
-        .expect("failed to spawn serial monitor thread");
-
-    // Create event channel for standalone mode
+    // Create event channel (lives for the entire program)
     let (tx, rx) = mpsc::channel();
 
     let interface_id = InterfaceId(1);
 
-    // Spawn LoRa reader thread (runs for the lifetime of the program)
-    let reader_tx = tx.clone();
-    let reader_pause_flag = reader_paused.clone();
-    std::thread::Builder::new()
-        .name("lora_rx".into())
-        .stack_size(4096)
-        .spawn(move || {
-            lora::reader_loop(radio, reader_tx, interface_id, reader_pause_flag);
-        })
-        .expect("failed to spawn LoRa reader thread");
-
-    // Spawn tick thread
-    driver::spawn_tick_thread(tx.clone(), config::TICK_INTERVAL_MS);
-
-    // Spawn button handler thread (GPIO0 = PRG button)
+    // Spawn button handler thread (always-on, GPIO0 = PRG button)
     let button_pin = PinDriver::input(AnyIOPin::from(peripherals.pins.gpio0)).expect("PRG button pin");
     let button_tx = tx.clone();
     std::thread::Builder::new()
@@ -166,7 +135,7 @@ fn main() {
         max_paths_per_destination: 2,
     };
 
-    // Build driver and register interface
+    // Build driver and register interface (once, reused across mode switches)
     let mut driver_inst = driver::Driver::new(transport_config, rx);
     driver_inst.set_stats(display_stats.clone());
     driver_inst.set_identity(identity);
@@ -174,49 +143,61 @@ fn main() {
 
     log::info!("Reticulum transport node running");
 
-    // Run the driver event loop (blocks)
-    // The serial monitor thread handles bridge mode independently —
-    // it pauses the lora reader and runs the bridge directly.
-    driver_inst.run();
-}
-
-/// Serial monitor loop: watches UART for RNode DETECT handshake,
-/// then enters bridge mode. Runs in a dedicated thread.
-fn serial_monitor_loop(
-    uart: UartDriver<'static>,
-    radio: lora::SharedRadio,
-    paused: Arc<AtomicBool>,
-    stats: display::SharedStats,
-) {
+    // Mode controller loop: alternates between standalone and bridge modes
     loop {
-        // Monitor mode: use proper KISS decoder to watch for DETECT.
-        // wait_for_detect handles split reads and responds to the
-        // DETECT + FW_VERSION + PLATFORM + MCU batch before returning.
-        if rnode::wait_for_detect(&uart) {
-            log::info!("RNode DETECT handled, entering bridge mode");
+        // Create shutdown flag for this iteration's mode-specific threads
+        let shutdown = Arc::new(AtomicBool::new(false));
 
-            // Pause the LoRa reader and writer (standalone driver won't TX)
-            paused.store(true, Ordering::SeqCst);
-            std::thread::sleep(Duration::from_millis(50));
+        // Spawn LoRa reader thread
+        let reader_radio = radio.clone();
+        let reader_tx = tx.clone();
+        let reader_shutdown = shutdown.clone();
+        let reader_handle = std::thread::Builder::new()
+            .name("lora_rx".into())
+            .stack_size(4096)
+            .spawn(move || {
+                lora::reader_loop(reader_radio, reader_tx, interface_id, reader_shutdown);
+            })
+            .expect("failed to spawn LoRa reader thread");
 
-            // Update display
-            if let Ok(mut s) = stats.lock() {
-                s.set_status("RNode Bridge");
+        // Spawn tick thread
+        let tick_handle = driver::spawn_tick_thread(
+            tx.clone(),
+            config::TICK_INTERVAL_MS,
+            shutdown.clone(),
+        );
+
+        // Update display
+        if let Ok(mut s) = display_stats.lock() {
+            s.set_status("Standalone");
+        }
+
+        // Run the driver event loop (blocks until bridge detected, shutdown, or disconnect)
+        let exit = driver_inst.run(&uart);
+
+        // Signal mode-specific threads to stop
+        shutdown.store(true, Ordering::SeqCst);
+        let _ = reader_handle.join();
+        let _ = tick_handle.join();
+
+        match exit {
+            driver::DriverExit::BridgeRequested => {
+                log::info!("Entering RNode bridge mode");
+                if let Ok(mut s) = display_stats.lock() {
+                    s.set_status("RNode Bridge");
+                }
+
+                // Run bridge mode (blocks until idle timeout)
+                let mut bridge = rnode::RNodeBridge::new(radio.clone(), &uart);
+                let _exit = bridge.run();
+
+                // Restore radio to default standalone config
+                rnode::restore_default_radio_config(&radio);
+                log::info!("RNode bridge exited, resuming standalone");
             }
-
-            // Run bridge mode (blocks until idle timeout)
-            let mut bridge = rnode::RNodeBridge::new(radio.clone(), &uart);
-            let _exit = bridge.run();
-
-            // Restore radio to default standalone config
-            rnode::restore_default_radio_config(&radio);
-
-            // Resume standalone mode
-            log::info!("RNode bridge exited, resuming standalone");
-            paused.store(false, Ordering::SeqCst);
-
-            if let Ok(mut s) = stats.lock() {
-                s.set_status("Standalone");
+            driver::DriverExit::Shutdown | driver::DriverExit::Disconnected => {
+                log::info!("Driver exited, shutting down");
+                break;
             }
         }
     }

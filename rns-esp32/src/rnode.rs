@@ -326,17 +326,15 @@ impl<'a, 'b> RNodeBridge<'a, 'b> {
     }
 }
 
-/// Watch UART for the RNode DETECT handshake using a proper KISS decoder.
-/// When DETECT is received, responds to it and any other info queries
-/// (FW_VERSION, PLATFORM, MCU) that arrive in the same batch.
+/// Check UART for RNode DETECT handshake (100ms timeout).
+/// Called from the driver's idle path after `recv_timeout` expires.
+/// The 100ms is just enough to capture the full DETECT batch from the PC;
+/// the actual poll rate is controlled by the driver's `recv_timeout`.
 /// Returns `true` if DETECT was received and responded to.
-/// Returns `false` on timeout (no DETECT seen).
-pub fn wait_for_detect(uart: &UartDriver<'_>) -> bool {
+pub fn wait_for_detect_quick(uart: &UartDriver<'_>) -> bool {
     let mut decoder = KissDecoder::new();
     let mut rx_buf = [0u8; 256];
 
-    // The PC sends DETECT + FW_VERSION + PLATFORM + MCU as one batch.
-    // Read with a short timeout; this is called in a loop by the monitor.
     match uart.read(&mut rx_buf, 100) {
         Ok(n) if n > 0 => {
             let frames = decoder.feed(&rx_buf[..n]);
@@ -349,12 +347,11 @@ pub fn wait_for_detect(uart: &UartDriver<'_>) -> bool {
             }
 
             if detected {
-                // Respond to all frames in the batch
                 for frame in frames {
                     match frame.command {
                         CMD_DETECT => {
                             if frame.data.first() == Some(&DETECT_REQ) {
-                                log::info!("RNode: DETECT handshake received, responding");
+                                log::info!("RNode: DETECT handshake received (quick), responding");
                                 let resp = kiss_encode(CMD_DETECT, &[DETECT_RESP]);
                                 let _ = uart.write(&resp);
                             }
