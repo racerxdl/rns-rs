@@ -35,11 +35,11 @@ pub enum Event {
     InterfaceDown(InterfaceId),
     /// Periodic tick for transport engine maintenance.
     Tick,
-    /// Send a ping broadcast over LoRa (button: short press).
+    /// Send a ping broadcast over LoRa (button: double press).
     SendPing,
-    /// Trigger a Reticulum announce (button: double press).
+    /// Trigger a Reticulum announce (button: long press, node mode only).
     SendAnnounce,
-    /// Cycle display page (button: long press).
+    /// Cycle display page (button: short press).
     CycleDisplayPage,
     /// Shutdown the driver.
     Shutdown,

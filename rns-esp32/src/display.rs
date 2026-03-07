@@ -27,7 +27,9 @@ type Display = Ssd1306<
     BufferedGraphicsMode<DisplaySize128x64>,
 >;
 
-const NUM_PAGES: u8 = 3;
+/// Pages 0..NUM_PAGES-1 are content pages; page NUM_PAGES-1 is "display off".
+const NUM_PAGES: u8 = 4;
+const PAGE_OFF: u8 = 3;
 
 /// Shared display stats updated by the driver.
 pub struct DisplayStats {
@@ -202,8 +204,14 @@ fn render_identity(display: &mut Display, stats: &DisplayStats) {
     let _ = Text::new(&format!("[3/{}]", NUM_PAGES), Point::new(104, 62), style).draw(display);
 }
 
-/// Render the current page.
-fn render(display: &mut Display, stats: &DisplayStats) {
+/// Render the current page. Returns whether the display should be on.
+fn render(display: &mut Display, stats: &DisplayStats) -> bool {
+    if stats.page == PAGE_OFF {
+        display.clear_buffer();
+        let _ = display.flush();
+        return false;
+    }
+
     display.clear_buffer();
 
     match stats.page {
@@ -214,15 +222,23 @@ fn render(display: &mut Display, stats: &DisplayStats) {
     }
 
     let _ = display.flush();
+    true
 }
 
 /// Display refresh loop. Run in a dedicated thread.
 pub fn refresh_loop(mut display: Display, stats: SharedStats) {
+    let mut display_on = true;
+
     loop {
         {
             let mut s = stats.lock().unwrap();
-            render(&mut display, &s);
+            let should_be_on = render(&mut display, &s);
             s.tick_status();
+
+            if should_be_on != display_on {
+                let _ = display.set_display_on(should_be_on);
+                display_on = should_be_on;
+            }
         }
         std::thread::sleep(std::time::Duration::from_millis(500));
     }

@@ -1,9 +1,9 @@
 //! GPIO0 (PRG) button handler with debounce and gesture detection.
 //!
 //! Detects three gestures:
-//! - Short press → send ping
-//! - Long press (>800ms) → cycle display page
-//! - Double press (<400ms gap) → trigger announce
+//! - Short press → cycle display page
+//! - Long press (>800ms) → trigger announce (node mode only)
+//! - Double press (<400ms gap) → send ping
 
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -38,21 +38,21 @@ pub fn button_loop(
                 let held = start.elapsed();
 
                 if held >= Duration::from_millis(LONG_PRESS_MS) {
-                    // Long press → cycle display page
-                    let _ = tx.send(Event::CycleDisplayPage);
+                    // Long press → trigger announce
+                    let _ = tx.send(Event::SendAnnounce);
                     pending_short = false;
                 } else if held >= Duration::from_millis(DEBOUNCE_MS) {
                     // Short press candidate — check for double press
                     if let Some(prev) = last_press {
                         if prev.elapsed() < Duration::from_millis(DOUBLE_PRESS_WINDOW_MS) {
-                            // Double press → trigger announce
-                            let _ = tx.send(Event::SendAnnounce);
+                            // Double press → send ping
+                            let _ = tx.send(Event::SendPing);
                             pending_short = false;
                             last_press = None;
                         } else {
                             // Too slow for double, commit previous pending short
                             if pending_short {
-                                let _ = tx.send(Event::SendPing);
+                                let _ = tx.send(Event::CycleDisplayPage);
                             }
                             pending_short = true;
                             last_press = Some(Instant::now());
@@ -69,7 +69,7 @@ pub fn button_loop(
         if pending_short {
             if let Some(prev) = last_press {
                 if prev.elapsed() >= Duration::from_millis(DOUBLE_PRESS_WINDOW_MS) {
-                    let _ = tx.send(Event::SendPing);
+                    let _ = tx.send(Event::CycleDisplayPage);
                     pending_short = false;
                     last_press = None;
                 }
