@@ -148,7 +148,6 @@ impl Driver {
             let event = match self.rx.recv_timeout(Duration::from_secs(3)) {
                 Ok(e) => e,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    // On idle, check UART for RNode DETECT handshake (~1ms)
                     if crate::rnode::wait_for_detect_quick(uart) {
                         break DriverExit::BridgeRequested;
                     }
@@ -159,6 +158,12 @@ impl Driver {
                     break DriverExit::Disconnected;
                 }
             };
+
+            // Check UART for RNode DETECT handshake after each event.
+            // This runs on every tick (~1s) so detection is responsive.
+            if crate::rnode::wait_for_detect_quick(uart) {
+                break DriverExit::BridgeRequested;
+            }
 
             match event {
                 Event::Frame { interface_id, data } => {

@@ -11,9 +11,9 @@ CONFIG_SPI_MASTER_IN_IRAM=y
 # NVS for identity persistence
 CONFIG_NVS_ENCRYPTION=n
 
-# Redirect console to USB-Serial-JTAG so UART0 is clean for KISS protocol.
+# Disable console on UART0 so it is clean for KISS protocol.
 # ESP-IDF defaults to outputting logs on UART0, which corrupts RNode framing.
-CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_NONE=y
 
 # Logging
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
