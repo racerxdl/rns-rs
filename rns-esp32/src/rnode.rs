@@ -26,6 +26,9 @@ const CMD_SF: u8 = 0x04;
 const CMD_CR: u8 = 0x05;
 const CMD_RADIO_STATE: u8 = 0x06;
 const CMD_DETECT: u8 = 0x08;
+const CMD_LEAVE: u8 = 0x0A;
+const CMD_ST_ALOCK: u8 = 0x0B;
+const CMD_LT_ALOCK: u8 = 0x0C;
 const CMD_READY: u8 = 0x0F;
 const CMD_PLATFORM: u8 = 0x48;
 const CMD_MCU: u8 = 0x49;
@@ -47,6 +50,7 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Reason the bridge loop exited.
 pub enum BridgeExit {
     IdleTimeout,
+    Leave,
 }
 
 /// KISS frame decoded from serial input.
@@ -165,7 +169,7 @@ impl<'a, 'b> RNodeBridge<'a, 'b> {
         }
     }
 
-    /// Run the RNode bridge loop. Blocks until serial goes idle.
+    /// Run the RNode bridge loop. Blocks until serial goes idle or host sends LEAVE.
     pub fn run(&mut self) -> BridgeExit {
         log::info!("RNode bridge mode active");
 
@@ -186,7 +190,9 @@ impl<'a, 'b> RNodeBridge<'a, 'b> {
                     last_activity = Instant::now();
                     let frames = decoder.feed(&rx_buf[..n]);
                     for frame in frames {
-                        self.handle_frame(frame);
+                        if self.handle_frame(frame) {
+                            return BridgeExit::Leave;
+                        }
                     }
                 }
                 _ => {}
@@ -211,8 +217,8 @@ impl<'a, 'b> RNodeBridge<'a, 'b> {
         }
     }
 
-    /// Handle a decoded KISS frame from serial.
-    fn handle_frame(&mut self, frame: KissFrame) {
+    /// Handle a decoded KISS frame from serial. Returns true if bridge should exit.
+    fn handle_frame(&mut self, frame: KissFrame) -> bool {
         match frame.command {
             CMD_DETECT => {
                 if frame.data.first() == Some(&DETECT_REQ) {
@@ -220,6 +226,10 @@ impl<'a, 'b> RNodeBridge<'a, 'b> {
                     let resp = kiss_encode(CMD_DETECT, &[DETECT_RESP]);
                     let _ = self.uart.write(&resp);
                 }
+            }
+            CMD_LEAVE => {
+                log::info!("RNode: LEAVE received, exiting bridge mode");
+                return true;
             }
             CMD_FW_VERSION => {
                 let resp = kiss_encode(CMD_FW_VERSION, &[FW_VERSION_MAJOR, FW_VERSION_MINOR]);
@@ -241,7 +251,6 @@ impl<'a, 'b> RNodeBridge<'a, 'b> {
                         | frame.data[3] as u32;
                     log::info!("RNode: set frequency {}Hz", freq);
                     self.pending_freq = Some(freq);
-                    // Echo back confirmation
                     let resp = kiss_encode(CMD_FREQUENCY, &frame.data[..4]);
                     let _ = self.uart.write(&resp);
                 }
@@ -283,11 +292,34 @@ impl<'a, 'b> RNodeBridge<'a, 'b> {
                     let _ = self.uart.write(&resp);
                 }
             }
+            CMD_ST_ALOCK => {
+                if frame.data.len() >= 2 {
+                    log::info!(
+                        "RNode: set ST airtime lock {}",
+                        ((frame.data[0] as u16) << 8 | frame.data[1] as u16) as f32 / 100.0
+                    );
+                    let resp = kiss_encode(CMD_ST_ALOCK, &frame.data[..2]);
+                    let _ = self.uart.write(&resp);
+                }
+            }
+            CMD_LT_ALOCK => {
+                if frame.data.len() >= 2 {
+                    log::info!(
+                        "RNode: set LT airtime lock {}",
+                        ((frame.data[0] as u16) << 8 | frame.data[1] as u16) as f32 / 100.0
+                    );
+                    let resp = kiss_encode(CMD_LT_ALOCK, &frame.data[..2]);
+                    let _ = self.uart.write(&resp);
+                }
+            }
             CMD_RADIO_STATE => {
                 if frame.data.first() == Some(&RADIO_STATE_ON) {
                     self.apply_radio_config();
                     let resp = kiss_encode(CMD_RADIO_STATE, &[RADIO_STATE_ON]);
                     let _ = self.uart.write(&resp);
+                    // Signal ready for data
+                    let ready = kiss_encode(CMD_READY, &[0x01]);
+                    let _ = self.uart.write(&ready);
                 }
             }
             CMD_DATA => {
@@ -304,7 +336,6 @@ impl<'a, 'b> RNodeBridge<'a, 'b> {
                     };
                     match result {
                         Ok(()) => {
-                            // Signal ready for next packet
                             let resp = kiss_encode(CMD_READY, &[0x01]);
                             let _ = self.uart.write(&resp);
                         }
@@ -318,6 +349,7 @@ impl<'a, 'b> RNodeBridge<'a, 'b> {
                 log::debug!("RNode: ignoring command 0x{:02X}", frame.command);
             }
         }
+        false
     }
 
     /// Apply pending radio configuration to the SX1262.

@@ -194,7 +194,7 @@ fn main() {
                     &uart,
                     Some(display_stats.clone()),
                 );
-                let _exit = bridge.run();
+                let bridge_exit = bridge.run();
 
                 // Restore radio to default standalone config
                 rnode::restore_default_radio_config(&radio);
@@ -202,7 +202,14 @@ fn main() {
                 // Drain stale button events accumulated during bridge mode
                 driver_inst.drain_events();
 
-                log::info!("RNode bridge exited, resuming standalone");
+                match bridge_exit {
+                    rnode::BridgeExit::IdleTimeout => {
+                        log::info!("RNode bridge: idle timeout, resuming standalone");
+                    }
+                    rnode::BridgeExit::Leave => {
+                        log::info!("RNode bridge: host sent LEAVE, resuming standalone");
+                    }
+                }
             }
             driver::DriverExit::Shutdown | driver::DriverExit::Disconnected => {
                 log::info!("Driver exited, shutting down");
