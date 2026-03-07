@@ -108,10 +108,11 @@ impl SerialPort {
             termios.c_cflag &= !libc::CSTOPB;
         }
 
-        // Disable flow control
+        // Disable flow control and hangup-on-close (HUPCL drops DTR on
+        // close, which resets devices that wire DTR to RST like Heltec V3).
         termios.c_cflag |= libc::CLOCAL | libc::CREAD;
+        termios.c_cflag &= !(libc::CRTSCTS | libc::HUPCL);
         termios.c_iflag &= !(libc::IXON | libc::IXOFF | libc::IXANY);
-        termios.c_cflag &= !libc::CRTSCTS;
 
         // Baud rate
         let speed = baud_to_speed(config.baud)?;
