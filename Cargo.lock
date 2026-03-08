@@ -1953,7 +1953,7 @@ version = "0.1.0"
 
 [[package]]
 name = "rns-net"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "bzip2",
  "ctrlc",
