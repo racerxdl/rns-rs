@@ -705,28 +705,11 @@ impl LinkManager {
             }
             LinkDataResult::Keepalive { link_id, inbound_actions } => {
                 actions.extend(self.process_link_actions(&link_id, &inbound_actions));
-                // Reply with a keepalive so the other side's last_inbound is updated.
-                // This handles asymmetric keepalive intervals (different RTTs per side).
-                if let Some(link) = self.links.get_mut(&link_id) {
-                    let now = time::now();
-                    let flags = PacketFlags {
-                        header_type: constants::HEADER_1,
-                        context_flag: constants::FLAG_UNSET,
-                        transport_type: constants::TRANSPORT_BROADCAST,
-                        destination_type: constants::DESTINATION_LINK,
-                        packet_type: constants::PACKET_TYPE_DATA,
-                    };
-                    if let Ok(pkt) = RawPacket::pack(
-                        flags, 0, &link_id, None, constants::CONTEXT_KEEPALIVE, &[],
-                    ) {
-                        actions.push(LinkManagerAction::SendPacket {
-                            raw: pkt.raw,
-                            dest_type: constants::DESTINATION_LINK,
-                            attached_interface: None,
-                        });
-                        link.engine.record_outbound(now, true);
-                    }
-                }
+                // record_inbound() already updated last_inbound, so the link
+                // won't go stale.  The regular tick() keepalive mechanism will
+                // send keepalives when needs_keepalive() returns true.
+                // Do NOT reply here — unconditional replies create an infinite
+                // ping-pong loop between the two link endpoints.
             }
             LinkDataResult::LinkClose { link_id, teardown_actions } => {
                 actions.extend(self.process_link_actions(&link_id, &teardown_actions));
