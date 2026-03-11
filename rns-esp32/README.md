@@ -38,6 +38,21 @@ Use the `rnode_lora` example from `rns-net` to connect from a PC:
 RUST_LOG=info cargo run --example rnode_lora -- /dev/ttyUSB0
 ```
 
+## Firmware Versioning
+
+The firmware now embeds two version forms:
+
+- **RNode protocol version**: the `FW_VERSION` response uses the Cargo package `major.minor`
+- **Full build version**: startup logs include `major.minor.commit_count-short_hash[-dirty]`
+
+Example:
+
+```text
+0.1.131-706648c-dirty
+```
+
+The `-dirty` suffix means the repository had uncommitted changes at build time.
+
 ## Prerequisites
 
 1. Install Rust with ESP target support:
@@ -71,6 +86,23 @@ Or manually:
 ```bash
 espflash flash --monitor target/xtensa-esp32s3-espidf/release/rns-esp32
 ```
+
+## Hardware-In-The-Loop Testing
+
+For real RF regression testing, connect two Heltec V3 boards to the same host and run:
+
+```bash
+RUST_LOG=info cargo run -p rns-net --example rnode_hil -- /dev/ttyUSB0 /dev/ttyUSB1 868.0
+```
+
+The runner will:
+
+- detect both boards over USB serial
+- configure matching LoRa settings on both radios
+- verify packet delivery A -> B and B -> A
+- send `LEAVE` and verify both boards can be detected again
+
+This is intended for bench or lab runners, not always-on CI without dedicated hardware.
 
 ## Configuration
 
