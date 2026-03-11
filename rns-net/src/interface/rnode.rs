@@ -55,6 +55,9 @@ pub struct RNodeConfig {
     pub id_interval: Option<u32>,
     pub id_callsign: Option<Vec<u8>>,
     pub base_interface_id: InterfaceId,
+    /// Pre-opened file descriptor (e.g. from a USB bridge socketpair on Android).
+    /// When set, `start()` uses this fd directly instead of opening `port`.
+    pub pre_opened_fd: Option<i32>,
 }
 
 impl Default for RNodeConfig {
@@ -67,6 +70,7 @@ impl Default for RNodeConfig {
             id_interval: None,
             id_callsign: None,
             base_interface_id: InterfaceId(0),
+            pre_opened_fd: None,
         }
     }
 }
@@ -158,18 +162,26 @@ pub fn start(
         ));
     }
 
-    let serial_config = SerialConfig {
-        path: config.port.clone(),
-        baud: config.speed,
-        data_bits: 8,
-        parity: Parity::None,
-        stop_bits: 1,
+    let (reader_file, shared_writer) = if let Some(fd) = config.pre_opened_fd {
+        // Pre-opened fd from USB bridge — dup for independent reader/writer handles
+        let port = SerialPort::from_raw_fd(fd);
+        let r = port.reader()?;
+        let w = port.writer()?;
+        std::mem::forget(port); // don't close the original fd — bridge owns it
+        (r, Arc::new(Mutex::new(w)))
+    } else {
+        let serial_config = SerialConfig {
+            path: config.port.clone(),
+            baud: config.speed,
+            data_bits: 8,
+            parity: Parity::None,
+            stop_bits: 1,
+        };
+        let port = SerialPort::open(&serial_config)?;
+        let r = port.reader()?;
+        let w = port.writer()?;
+        (r, Arc::new(Mutex::new(w)))
     };
-
-    let port = SerialPort::open(&serial_config)?;
-    let reader_file = port.reader()?;
-    let config_writer = port.writer()?;
-    let shared_writer = Arc::new(Mutex::new(config_writer));
 
     // Build per-subinterface writers and IDs
     let num_subs = config.subinterfaces.len();
@@ -494,9 +506,13 @@ impl InterfaceFactory for RNodeFactory {
         id: InterfaceId,
         params: &HashMap<String, String>,
     ) -> Result<Box<dyn InterfaceConfigData>, String> {
+        let pre_opened_fd = params.get("fd")
+            .and_then(|v| v.parse::<i32>().ok());
+
         let port = params.get("port")
             .cloned()
-            .ok_or_else(|| "RNodeInterface requires 'port'".to_string())?;
+            .or_else(|| pre_opened_fd.map(|_| "usb-bridge".to_string()))
+            .ok_or_else(|| "RNodeInterface requires 'port' or 'fd'".to_string())?;
 
         let speed = params.get("speed")
             .and_then(|v| v.parse().ok())
@@ -560,6 +576,7 @@ impl InterfaceFactory for RNodeFactory {
             id_interval,
             id_callsign,
             base_interface_id: id,
+            pre_opened_fd,
         }))
     }
 

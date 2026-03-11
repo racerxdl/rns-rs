@@ -41,6 +41,12 @@ pub struct SerialPort {
 }
 
 impl SerialPort {
+    /// Wrap a pre-opened file descriptor (e.g. from a USB bridge socketpair).
+    /// No termios configuration is applied — the fd is used as-is.
+    pub fn from_raw_fd(fd: RawFd) -> Self {
+        SerialPort { fd }
+    }
+
     /// Open and configure a serial port.
     pub fn open(config: &SerialConfig) -> io::Result<Self> {
         let c_path = std::ffi::CString::new(config.path.as_str())
@@ -316,6 +322,31 @@ mod tests {
             let speed = baud_to_speed(baud);
             assert!(speed.is_ok(), "baud {} should be supported", baud);
         }
+    }
+
+    #[test]
+    fn from_raw_fd_works() {
+        let (master, slave) = open_pty_pair().unwrap();
+
+        let port = SerialPort::from_raw_fd(slave);
+        let mut writer = port.writer().unwrap();
+        let mut reader_file = unsafe { std::fs::File::from_raw_fd(master) };
+
+        let data = b"from_raw_fd test";
+        writer.write_all(data).unwrap();
+        writer.flush().unwrap();
+
+        let mut pfd = libc::pollfd {
+            fd: master,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let ret = unsafe { libc::poll(&mut pfd, 1, 2000) };
+        assert!(ret > 0, "should have data available");
+
+        let mut buf = [0u8; 64];
+        let n = reader_file.read(&mut buf).unwrap();
+        assert_eq!(&buf[..n], data);
     }
 
     #[test]
