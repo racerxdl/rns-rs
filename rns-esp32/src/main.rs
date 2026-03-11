@@ -10,8 +10,8 @@ mod display;
 mod driver;
 mod ifac;
 mod lora;
-mod rnode;
 mod rng;
+mod rnode;
 mod util;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -42,7 +42,7 @@ fn main() {
     let peripherals = Peripherals::take().expect("failed to take peripherals");
 
     // Enable Vext (powers SX1262 + OLED on Heltec V3)
-    let mut vext = PinDriver::output(peripherals.pins.gpio36).expect("Vext pin");
+    let mut vext = PinDriver::output(AnyIOPin::from(peripherals.pins.gpio36)).expect("Vext pin");
     vext.set_low().expect("enable Vext"); // Active low on Heltec V3
 
     // Load or generate identity
@@ -83,8 +83,8 @@ fn main() {
     // Initialize SPI for SX1262
     let spi_driver = SpiDriver::new(
         peripherals.spi2,
-        peripherals.pins.gpio9,   // SCK
-        peripherals.pins.gpio10,  // MOSI
+        peripherals.pins.gpio9,        // SCK
+        peripherals.pins.gpio10,       // MOSI
         Some(peripherals.pins.gpio11), // MISO
         &SpiDriverConfig::default(),
     )
@@ -96,8 +96,7 @@ fn main() {
     let dio1 = PinDriver::input(AnyIOPin::from(peripherals.pins.gpio14)).expect("DIO1 pin");
 
     // Initialize LoRa radio
-    let (radio, writer) = lora::init(spi_driver, cs, rst, busy, dio1)
-        .expect("LoRa radio init");
+    let (radio, writer) = lora::init(spi_driver, cs, rst, busy, dio1).expect("LoRa radio init");
 
     // Initialize UART0 for RNode serial protocol (USB-UART bridge on Heltec V3)
     let uart_config = uart::config::Config::default().baudrate(Hertz(115200));
@@ -117,7 +116,8 @@ fn main() {
     let interface_id = InterfaceId(1);
 
     // Spawn button handler thread (always-on, GPIO0 = PRG button)
-    let button_pin = PinDriver::input(AnyIOPin::from(peripherals.pins.gpio0)).expect("PRG button pin");
+    let button_pin =
+        PinDriver::input(AnyIOPin::from(peripherals.pins.gpio0)).expect("PRG button pin");
     let button_tx = tx.clone();
     let button_stats = display_stats.clone();
     std::thread::Builder::new()
@@ -162,11 +162,8 @@ fn main() {
             .expect("failed to spawn LoRa reader thread");
 
         // Spawn tick thread
-        let tick_handle = driver::spawn_tick_thread(
-            tx.clone(),
-            config::TICK_INTERVAL_MS,
-            shutdown.clone(),
-        );
+        let tick_handle =
+            driver::spawn_tick_thread(tx.clone(), config::TICK_INTERVAL_MS, shutdown.clone());
 
         // Update display mode
         if let Ok(mut s) = display_stats.lock() {
@@ -189,11 +186,8 @@ fn main() {
                 }
 
                 // Run bridge mode (blocks until idle timeout)
-                let mut bridge = rnode::RNodeBridge::new(
-                    radio.clone(),
-                    &uart,
-                    Some(display_stats.clone()),
-                );
+                let mut bridge =
+                    rnode::RNodeBridge::new(radio.clone(), &uart, Some(display_stats.clone()));
                 let bridge_exit = bridge.run();
 
                 // Restore radio to default standalone config
@@ -221,8 +215,8 @@ fn main() {
 
 /// Load identity from NVS, or generate a new one and persist it.
 fn load_or_create_identity(nvs_partition: &EspDefaultNvsPartition) -> Identity {
-    let nvs = EspNvs::<NvsDefault>::new(nvs_partition.clone(), NVS_NAMESPACE, true)
-        .expect("NVS open");
+    let nvs =
+        EspNvs::<NvsDefault>::new(nvs_partition.clone(), NVS_NAMESPACE, true).expect("NVS open");
 
     // Try to load existing private key
     let mut key_buf = [0u8; 64];
@@ -240,7 +234,9 @@ fn load_or_create_identity(nvs_partition: &EspDefaultNvsPartition) -> Identity {
     if let Some(prv) = identity.get_private_key() {
         let mut nvs_mut = EspNvs::<NvsDefault>::new(nvs_partition.clone(), NVS_NAMESPACE, true)
             .expect("NVS open for write");
-        nvs_mut.set_raw(NVS_KEY_IDENTITY, &prv).expect("NVS write identity");
+        nvs_mut
+            .set_raw(NVS_KEY_IDENTITY, &prv)
+            .expect("NVS write identity");
         log::info!("Identity saved to NVS");
     }
 

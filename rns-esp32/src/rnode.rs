@@ -44,6 +44,12 @@ const MCU_ESP32: u8 = 0x01;
 const FW_VERSION_MAJOR: u8 = 0x01;
 const FW_VERSION_MINOR: u8 = 0x01;
 
+const DETECT_POLL_MS: u32 = 5;
+const FREQ_MIN_HZ: u32 = 137_000_000;
+const FREQ_MAX_HZ: u32 = 1_020_000_000;
+const TX_POWER_MIN_DBM: i8 = 0;
+const TX_POWER_MAX_DBM: i8 = 22;
+
 /// Idle timeout before reverting to standalone mode.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -57,6 +63,15 @@ pub enum BridgeExit {
 struct KissFrame {
     command: u8,
     data: Vec<u8>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RadioConfig {
+    frequency: u32,
+    bandwidth: u32,
+    spreading_factor: u8,
+    coding_rate: u8,
+    tx_power: i8,
 }
 
 /// Streaming KISS decoder for serial input.
@@ -204,7 +219,6 @@ impl<'a, 'b> RNodeBridge<'a, 'b> {
                 radio.try_receive()
             };
             if let Some(data) = received {
-                last_activity = Instant::now();
                 log::info!("RNode: LoRa RX {} bytes, forwarding to serial", data.len());
                 if let Some(ref stats) = self.stats {
                     stats.lock().unwrap().bridge_rx_bytes += data.len() as u32;
@@ -314,12 +328,12 @@ impl<'a, 'b> RNodeBridge<'a, 'b> {
             }
             CMD_RADIO_STATE => {
                 if frame.data.first() == Some(&RADIO_STATE_ON) {
-                    self.apply_radio_config();
-                    let resp = kiss_encode(CMD_RADIO_STATE, &[RADIO_STATE_ON]);
-                    let _ = self.uart.write(&resp);
-                    // Signal ready for data
-                    let ready = kiss_encode(CMD_READY, &[0x01]);
-                    let _ = self.uart.write(&ready);
+                    if self.apply_radio_config() {
+                        let resp = kiss_encode(CMD_RADIO_STATE, &[RADIO_STATE_ON]);
+                        let _ = self.uart.write(&resp);
+                        let ready = kiss_encode(CMD_READY, &[0x01]);
+                        let _ = self.uart.write(&ready);
+                    }
                 }
             }
             CMD_DATA => {
@@ -353,39 +367,82 @@ impl<'a, 'b> RNodeBridge<'a, 'b> {
     }
 
     /// Apply pending radio configuration to the SX1262.
-    fn apply_radio_config(&mut self) {
-        let freq = self.pending_freq.unwrap_or(crate::config::LORA_FREQUENCY);
-        let bw = self.pending_bw.unwrap_or(crate::config::LORA_BANDWIDTH);
-        let sf = self.pending_sf.unwrap_or(crate::config::LORA_SPREADING_FACTOR);
-        let cr = self.pending_cr.unwrap_or(crate::config::LORA_CODING_RATE);
-        let power = self.pending_power.unwrap_or(crate::config::LORA_TX_POWER);
+    fn apply_radio_config(&mut self) -> bool {
+        let config = RadioConfig {
+            frequency: self.pending_freq.unwrap_or(crate::config::LORA_FREQUENCY),
+            bandwidth: self.pending_bw.unwrap_or(crate::config::LORA_BANDWIDTH),
+            spreading_factor: self
+                .pending_sf
+                .unwrap_or(crate::config::LORA_SPREADING_FACTOR),
+            coding_rate: self.pending_cr.unwrap_or(crate::config::LORA_CODING_RATE),
+            tx_power: self.pending_power.unwrap_or(crate::config::LORA_TX_POWER),
+        };
+
+        if let Err(err) = validate_radio_config(config) {
+            log::warn!("RNode: rejecting invalid radio config: {}", err);
+            if let Some(ref stats) = self.stats {
+                stats.lock().unwrap().set_status("Invalid radio cfg");
+            }
+            return false;
+        }
 
         let mut radio = self.radio.lock().unwrap();
-        radio.reconfigure(freq, bw, sf, cr, power);
+        radio.reconfigure(
+            config.frequency,
+            config.bandwidth,
+            config.spreading_factor,
+            config.coding_rate,
+            config.tx_power,
+        );
 
         if let Some(ref stats) = self.stats {
             let mut s = stats.lock().unwrap();
-            s.bridge_freq = Some(freq);
-            s.bridge_bw = Some(bw);
-            s.bridge_sf = Some(sf);
-            s.bridge_cr = Some(cr);
-            s.bridge_power = Some(power);
+            s.bridge_freq = Some(config.frequency);
+            s.bridge_bw = Some(config.bandwidth);
+            s.bridge_sf = Some(config.spreading_factor);
+            s.bridge_cr = Some(config.coding_rate);
+            s.bridge_power = Some(config.tx_power);
         }
 
         log::info!("RNode: radio config applied");
+        true
     }
 }
 
-/// Check UART for RNode DETECT handshake (100ms timeout).
+fn validate_radio_config(config: RadioConfig) -> Result<(), &'static str> {
+    if !(FREQ_MIN_HZ..=FREQ_MAX_HZ).contains(&config.frequency) {
+        return Err("frequency out of supported range");
+    }
+
+    match config.bandwidth {
+        7_800 | 10_400 | 15_600 | 20_800 | 31_250 | 41_700 | 62_500 | 125_000 | 250_000
+        | 500_000 => {}
+        _ => return Err("unsupported bandwidth"),
+    }
+
+    if !(5..=12).contains(&config.spreading_factor) {
+        return Err("spreading factor out of range");
+    }
+
+    if !(5..=8).contains(&config.coding_rate) {
+        return Err("coding rate out of range");
+    }
+
+    if !(TX_POWER_MIN_DBM..=TX_POWER_MAX_DBM).contains(&config.tx_power) {
+        return Err("TX power out of range");
+    }
+
+    Ok(())
+}
+
+/// Check UART for RNode DETECT handshake with a short polling timeout.
 /// Called from the driver's idle path after `recv_timeout` expires.
-/// The 100ms is just enough to capture the full DETECT batch from the PC;
-/// the actual poll rate is controlled by the driver's `recv_timeout`.
 /// Returns `true` if DETECT was received and responded to.
 pub fn wait_for_detect_quick(uart: &UartDriver<'_>) -> bool {
     let mut decoder = KissDecoder::new();
     let mut rx_buf = [0u8; 256];
 
-    match uart.read(&mut rx_buf, 100) {
+    match uart.read(&mut rx_buf, DETECT_POLL_MS) {
         Ok(n) if n > 0 => {
             let frames = decoder.feed(&rx_buf[..n]);
             let mut detected = false;
@@ -407,7 +464,8 @@ pub fn wait_for_detect_quick(uart: &UartDriver<'_>) -> bool {
                             }
                         }
                         CMD_FW_VERSION => {
-                            let resp = kiss_encode(CMD_FW_VERSION, &[FW_VERSION_MAJOR, FW_VERSION_MINOR]);
+                            let resp =
+                                kiss_encode(CMD_FW_VERSION, &[FW_VERSION_MAJOR, FW_VERSION_MINOR]);
                             let _ = uart.write(&resp);
                         }
                         CMD_PLATFORM => {
@@ -428,6 +486,50 @@ pub fn wait_for_detect_quick(uart: &UartDriver<'_>) -> bool {
     }
 
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{validate_radio_config, RadioConfig};
+
+    #[test]
+    fn accepts_default_config() {
+        let cfg = RadioConfig {
+            frequency: crate::config::LORA_FREQUENCY,
+            bandwidth: crate::config::LORA_BANDWIDTH,
+            spreading_factor: crate::config::LORA_SPREADING_FACTOR,
+            coding_rate: crate::config::LORA_CODING_RATE,
+            tx_power: crate::config::LORA_TX_POWER,
+        };
+
+        assert!(validate_radio_config(cfg).is_ok());
+    }
+
+    #[test]
+    fn rejects_invalid_spreading_factor() {
+        let cfg = RadioConfig {
+            frequency: crate::config::LORA_FREQUENCY,
+            bandwidth: crate::config::LORA_BANDWIDTH,
+            spreading_factor: 13,
+            coding_rate: crate::config::LORA_CODING_RATE,
+            tx_power: crate::config::LORA_TX_POWER,
+        };
+
+        assert!(validate_radio_config(cfg).is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_bandwidth() {
+        let cfg = RadioConfig {
+            frequency: crate::config::LORA_FREQUENCY,
+            bandwidth: 123_456,
+            spreading_factor: crate::config::LORA_SPREADING_FACTOR,
+            coding_rate: crate::config::LORA_CODING_RATE,
+            tx_power: crate::config::LORA_TX_POWER,
+        };
+
+        assert!(validate_radio_config(cfg).is_err());
+    }
 }
 
 /// Restore the radio to default standalone configuration from config.rs.

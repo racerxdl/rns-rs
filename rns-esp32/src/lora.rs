@@ -4,13 +4,13 @@
 //! switches to TX, sends, then returns to RX. Each LoRa packet = one
 //! Reticulum frame (no HDLC/KISS framing).
 
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
 use esp_idf_hal::gpio::{AnyIOPin, Input, Output, PinDriver};
-use esp_idf_hal::spi::{self, SpiDeviceDriver, SpiDriver, SpiDriverConfig};
+use esp_idf_hal::spi::{self, SpiDeviceDriver, SpiDriver};
 use esp_idf_hal::units::Hertz;
 
 use crate::config;
@@ -139,12 +139,15 @@ impl Radio {
 
         // Set RF frequency
         let frf = ((config::LORA_FREQUENCY as u64) << 25) / 32_000_000;
-        self.cmd(OPCODE_SET_RF_FREQUENCY, &[
-            (frf >> 24) as u8,
-            (frf >> 16) as u8,
-            (frf >> 8) as u8,
-            frf as u8,
-        ]);
+        self.cmd(
+            OPCODE_SET_RF_FREQUENCY,
+            &[
+                (frf >> 24) as u8,
+                (frf >> 16) as u8,
+                (frf >> 8) as u8,
+                frf as u8,
+            ],
+        );
 
         // PA config for SX1262: paDutyCycle=0x04, hpMax=0x07, deviceSel=0x00 (SX1262), paLut=0x01
         self.cmd(OPCODE_SET_PA_CONFIG, &[0x04, 0x07, 0x00, 0x01]);
@@ -171,37 +174,50 @@ impl Radio {
         } else {
             0x00
         };
-        self.cmd(OPCODE_SET_MODULATION_PARAMS, &[
-            config::LORA_SPREADING_FACTOR,
-            bw_param,
-            config::LORA_CODING_RATE - 4, // CR encoding: 1=4/5, 2=4/6, etc.
-            ldro,
-        ]);
+        self.cmd(
+            OPCODE_SET_MODULATION_PARAMS,
+            &[
+                config::LORA_SPREADING_FACTOR,
+                bw_param,
+                config::LORA_CODING_RATE - 4, // CR encoding: 1=4/5, 2=4/6, etc.
+                ldro,
+            ],
+        );
 
         // Buffer base addresses: TX=0, RX=128
         self.cmd(OPCODE_SET_BUFFER_BASE_ADDRESS, &[0x00, 0x80]);
 
         // DIO1 IRQ: map TxDone + RxDone + CrcErr + Timeout to DIO1
         let irq_mask = IRQ_TX_DONE | IRQ_RX_DONE | IRQ_CRC_ERR | IRQ_TIMEOUT;
-        self.cmd(OPCODE_SET_DIO_IRQ_PARAMS, &[
-            (irq_mask >> 8) as u8, irq_mask as u8,   // IRQ mask
-            (irq_mask >> 8) as u8, irq_mask as u8,   // DIO1 mask
-            0x00, 0x00,                                // DIO2 mask
-            0x00, 0x00,                                // DIO3 mask
-        ]);
+        self.cmd(
+            OPCODE_SET_DIO_IRQ_PARAMS,
+            &[
+                (irq_mask >> 8) as u8,
+                irq_mask as u8, // IRQ mask
+                (irq_mask >> 8) as u8,
+                irq_mask as u8, // DIO1 mask
+                0x00,
+                0x00, // DIO2 mask
+                0x00,
+                0x00, // DIO3 mask
+            ],
+        );
     }
 
     /// Set packet params for RX mode (max payload length, explicit header, CRC).
     fn set_rx_packet_params(&mut self) {
         let crc = if config::LORA_CRC_ON { 0x01 } else { 0x00 };
-        self.cmd(OPCODE_SET_PACKET_PARAMS, &[
-            (config::LORA_PREAMBLE_LENGTH >> 8) as u8,
-            config::LORA_PREAMBLE_LENGTH as u8,
-            0x00, // explicit header
-            config::LORA_MTU as u8, // max payload length for RX
-            crc,
-            0x00, // standard IQ
-        ]);
+        self.cmd(
+            OPCODE_SET_PACKET_PARAMS,
+            &[
+                (config::LORA_PREAMBLE_LENGTH >> 8) as u8,
+                config::LORA_PREAMBLE_LENGTH as u8,
+                0x00,                   // explicit header
+                config::LORA_MTU as u8, // max payload length for RX
+                crc,
+                0x00, // standard IQ
+            ],
+        );
     }
 
     /// Enter continuous RX mode with proper packet params.
@@ -235,14 +251,17 @@ impl Radio {
 
         // Packet params: preamble(2), header=explicit(0), payloadLen, CRC, invertIQ=standard(0)
         let crc = if config::LORA_CRC_ON { 0x01 } else { 0x00 };
-        self.cmd(OPCODE_SET_PACKET_PARAMS, &[
-            (config::LORA_PREAMBLE_LENGTH >> 8) as u8,
-            config::LORA_PREAMBLE_LENGTH as u8,
-            0x00, // explicit header
-            data.len() as u8,
-            crc,
-            0x00, // standard IQ
-        ]);
+        self.cmd(
+            OPCODE_SET_PACKET_PARAMS,
+            &[
+                (config::LORA_PREAMBLE_LENGTH >> 8) as u8,
+                config::LORA_PREAMBLE_LENGTH as u8,
+                0x00, // explicit header
+                data.len() as u8,
+                crc,
+                0x00, // standard IQ
+            ],
+        );
 
         // Write data to TX buffer at offset 0
         let mut buf = Vec::with_capacity(1 + data.len());
@@ -290,12 +309,15 @@ impl Radio {
 
         // Set RF frequency
         let frf = ((frequency as u64) << 25) / 32_000_000;
-        self.cmd(OPCODE_SET_RF_FREQUENCY, &[
-            (frf >> 24) as u8,
-            (frf >> 16) as u8,
-            (frf >> 8) as u8,
-            frf as u8,
-        ]);
+        self.cmd(
+            OPCODE_SET_RF_FREQUENCY,
+            &[
+                (frf >> 24) as u8,
+                (frf >> 16) as u8,
+                (frf >> 8) as u8,
+                frf as u8,
+            ],
+        );
 
         // PA config for SX1262
         self.cmd(OPCODE_SET_PA_CONFIG, &[0x04, 0x07, 0x00, 0x01]);
@@ -322,18 +344,20 @@ impl Radio {
         } else {
             0x00
         };
-        self.cmd(OPCODE_SET_MODULATION_PARAMS, &[
-            spreading_factor,
-            bw_param,
-            coding_rate - 4,
-            ldro,
-        ]);
+        self.cmd(
+            OPCODE_SET_MODULATION_PARAMS,
+            &[spreading_factor, bw_param, coding_rate - 4, ldro],
+        );
 
         self.set_rx_continuous();
 
         log::info!(
             "Radio reconfigured: freq={}Hz, SF={}, BW={}Hz, CR=4/{}, TX={}dBm",
-            frequency, spreading_factor, bandwidth, coding_rate, tx_power
+            frequency,
+            spreading_factor,
+            bandwidth,
+            coding_rate,
+            tx_power
         );
     }
 
@@ -423,12 +447,18 @@ pub fn init(
     radio.configure();
     radio.set_rx_continuous();
 
-    log::info!("SX1262 initialized: freq={}Hz, SF={}, BW={}Hz, TX={}dBm",
-        config::LORA_FREQUENCY, config::LORA_SPREADING_FACTOR,
-        config::LORA_BANDWIDTH, config::LORA_TX_POWER);
+    log::info!(
+        "SX1262 initialized: freq={}Hz, SF={}, BW={}Hz, TX={}dBm",
+        config::LORA_FREQUENCY,
+        config::LORA_SPREADING_FACTOR,
+        config::LORA_BANDWIDTH,
+        config::LORA_TX_POWER
+    );
 
     let shared = Arc::new(Mutex::new(radio));
-    let writer = LoRaWriter { radio: shared.clone() };
+    let writer = LoRaWriter {
+        radio: shared.clone(),
+    };
 
     Ok((shared, writer))
 }
@@ -455,10 +485,10 @@ pub fn reader_loop(
 
         if let Some(data) = frame {
             log::info!("LoRa RX: {} bytes", data.len());
-            if tx.send(crate::driver::Event::Frame {
-                interface_id,
-                data,
-            }).is_err() {
+            if tx
+                .send(crate::driver::Event::Frame { interface_id, data })
+                .is_err()
+            {
                 log::warn!("LoRa reader: event channel closed, exiting");
                 break;
             }

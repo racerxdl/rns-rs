@@ -15,13 +15,13 @@ Reticulum LoRa transport node firmware for **Heltec WiFi LoRa 32 (V3)** with SX1
   - **Standalone**: Runs a full Reticulum transport node over LoRa
   - **RNode Bridge**: Acts as a KISS interface over USB serial for a PC running `rns-net`
 - LoRa packet transport for Reticulum network
-- OLED display with multiple info pages (cycled via long-press PRG button)
+- OLED display with multiple info pages (cycled via short-press PRG button)
 - Identity persistence via NVS (Non-Volatile Storage)
-- IFAC (Interface Access Code) support for authenticated networks
+- IFAC cryptographic helpers are implemented, but runtime IFAC configuration is not wired up yet
 - Button gestures:
-  - **Short press**: Send ping broadcast
-  - **Double press**: Trigger Reticulum announce
-  - **Long press (>800ms)**: Cycle display page
+  - **Short press**: Cycle display page
+  - **Double press**: Send ping broadcast
+  - **Long press (>800ms)**: Trigger Reticulum announce
 
 ## RNode Bridge Mode
 
@@ -30,7 +30,7 @@ When a PC connects via USB serial and sends an RNode DETECT handshake, the devic
 - Responds to the RNode KISS protocol (DETECT, FW_VERSION, PLATFORM, MCU)
 - Accepts radio configuration commands (frequency, bandwidth, SF, CR, TX power)
 - Bridges KISS data frames between USB serial and the SX1262 LoRa radio
-- Reverts to standalone mode after 30 seconds of serial inactivity
+- Reverts to standalone mode after 30 seconds without host serial activity
 
 Use the `rnode_lora` example from `rns-net` to connect from a PC:
 
@@ -80,6 +80,8 @@ Edit `src/config.rs` to modify LoRa parameters:
 - Spreading factor
 - TX power
 - Coding rate
+
+The board pinout and partition table are also part of the firmware configuration.
 
 ## Display Pages
 

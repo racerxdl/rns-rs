@@ -12,12 +12,10 @@ use std::time::Duration;
 use esp_idf_hal::uart::UartDriver;
 
 use rns_core::constants;
+use rns_core::transport::types::{InterfaceId, InterfaceInfo, TransportAction, TransportConfig};
 use rns_core::transport::TransportEngine;
-use rns_core::transport::types::{
-    InterfaceId, InterfaceInfo, TransportAction, TransportConfig,
-};
-use rns_crypto::Rng as _;
 use rns_crypto::identity::Identity;
+use rns_crypto::Rng as _;
 
 use crate::display::SharedStats;
 use crate::ifac::{self, IfacState};
@@ -28,7 +26,10 @@ use crate::util::hex;
 /// Events processed by the driver loop.
 pub enum Event {
     /// Inbound frame from an interface.
-    Frame { interface_id: InterfaceId, data: Vec<u8> },
+    Frame {
+        interface_id: InterfaceId,
+        data: Vec<u8>,
+    },
     /// Interface came online.
     InterfaceUp(InterfaceId),
     /// Interface went offline.
@@ -73,10 +74,7 @@ pub struct Driver {
 
 impl Driver {
     /// Create a new driver with the given transport config and event receiver.
-    pub fn new(
-        config: TransportConfig,
-        rx: mpsc::Receiver<Event>,
-    ) -> Self {
+    pub fn new(config: TransportConfig, rx: mpsc::Receiver<Event>) -> Self {
         Driver {
             engine: TransportEngine::new(config),
             interfaces: Vec::new(),
@@ -98,12 +96,7 @@ impl Driver {
     }
 
     /// Register a LoRa interface with the transport engine.
-    pub fn add_interface(
-        &mut self,
-        id: InterfaceId,
-        writer: LoRaWriter,
-        ifac: Option<IfacState>,
-    ) {
+    pub fn add_interface(&mut self, id: InterfaceId, writer: LoRaWriter, ifac: Option<IfacState>) {
         let info = InterfaceInfo {
             id,
             name: String::from("LoRa"),
@@ -145,7 +138,7 @@ impl Driver {
         log::info!("Driver event loop started");
 
         let exit = loop {
-            let event = match self.rx.recv_timeout(Duration::from_secs(3)) {
+            let event = match self.rx.recv_timeout(Duration::from_millis(250)) {
                 Ok(e) => e,
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     if crate::rnode::wait_for_detect_quick(uart) {
@@ -208,7 +201,9 @@ impl Driver {
     /// Process an inbound frame: IFAC unmask → engine.handle_inbound → dispatch.
     fn handle_frame(&mut self, interface_id: InterfaceId, data: Vec<u8>) {
         // Find the interface entry for IFAC processing
-        let ifac_state = self.interfaces.iter()
+        let ifac_state = self
+            .interfaces
+            .iter()
             .find(|e| e.id == interface_id)
             .and_then(|e| e.ifac.as_ref());
 
@@ -225,7 +220,9 @@ impl Driver {
             data
         };
 
-        let actions = self.engine.handle_inbound(&raw, interface_id, now(), &mut self.rng);
+        let actions = self
+            .engine
+            .handle_inbound(&raw, interface_id, now(), &mut self.rng);
         self.dispatch_all(actions);
     }
 
@@ -237,7 +234,9 @@ impl Driver {
                     self.send_on_interface(interface, &raw);
                 }
                 TransportAction::BroadcastOnAllInterfaces { raw, exclude } => {
-                    let ids: Vec<_> = self.interfaces.iter()
+                    let ids: Vec<_> = self
+                        .interfaces
+                        .iter()
                         .filter(|e| e.online && Some(e.id) != exclude)
                         .map(|e| e.id)
                         .collect();
@@ -245,21 +244,41 @@ impl Driver {
                         self.send_on_interface(id, &raw);
                     }
                 }
-                TransportAction::DeliverLocal { destination_hash, packet_hash, .. } => {
-                    log::info!("Local delivery: dest={} pkt={}",
+                TransportAction::DeliverLocal {
+                    destination_hash,
+                    packet_hash,
+                    ..
+                } => {
+                    log::info!(
+                        "Local delivery: dest={} pkt={}",
                         hex(&destination_hash[..4]),
-                        hex(&packet_hash[..4]));
+                        hex(&packet_hash[..4])
+                    );
                 }
-                TransportAction::AnnounceReceived { destination_hash, hops, .. } => {
-                    log::info!("Announce received: dest={} hops={}",
-                        hex(&destination_hash[..4]), hops);
+                TransportAction::AnnounceReceived {
+                    destination_hash,
+                    hops,
+                    ..
+                } => {
+                    log::info!(
+                        "Announce received: dest={} hops={}",
+                        hex(&destination_hash[..4]),
+                        hops
+                    );
                     if let Some(ref stats) = self.stats {
                         stats.lock().unwrap().announces += 1;
                     }
                 }
-                TransportAction::PathUpdated { destination_hash, hops, .. } => {
-                    log::info!("Path updated: dest={} hops={}",
-                        hex(&destination_hash[..4]), hops);
+                TransportAction::PathUpdated {
+                    destination_hash,
+                    hops,
+                    ..
+                } => {
+                    log::info!(
+                        "Path updated: dest={} hops={}",
+                        hex(&destination_hash[..4]),
+                        hops
+                    );
                 }
                 // Ignore actions not relevant to minimal LoRa node
                 _ => {}
@@ -285,11 +304,17 @@ impl Driver {
         let ping_data = b"PING";
 
         match rns_core::packet::RawPacket::pack(
-            flags, 0, &dest_hash, None,
-            constants::CONTEXT_NONE, ping_data,
+            flags,
+            0,
+            &dest_hash,
+            None,
+            constants::CONTEXT_NONE,
+            ping_data,
         ) {
             Ok(packet) => {
-                let ids: Vec<_> = self.interfaces.iter()
+                let ids: Vec<_> = self
+                    .interfaces
+                    .iter()
                     .filter(|e| e.online)
                     .map(|e| e.id)
                     .collect();
@@ -320,9 +345,8 @@ impl Driver {
         let app_name = "rns_esp32";
         let aspects: &[&str] = &["transport"];
         let name_hash = rns_core::destination::name_hash(app_name, aspects);
-        let dest_hash = rns_core::destination::destination_hash(
-            app_name, aspects, Some(&identity_hash),
-        );
+        let dest_hash =
+            rns_core::destination::destination_hash(app_name, aspects, Some(&identity_hash));
 
         // Build random_hash with timestamp in bytes [5:10]
         // ESP32 has no RTC/NTP, so use uptime — other Reticulum nodes may see
@@ -336,7 +360,12 @@ impl Driver {
         random_hash[5..10].copy_from_slice(&now_secs.to_be_bytes()[3..8]);
 
         match rns_core::announce::AnnounceData::pack(
-            identity, &dest_hash, &name_hash, &random_hash, None, None,
+            identity,
+            &dest_hash,
+            &name_hash,
+            &random_hash,
+            None,
+            None,
         ) {
             Ok((announce_data, _)) => {
                 let flags = rns_core::packet::PacketFlags {
@@ -348,12 +377,19 @@ impl Driver {
                 };
 
                 match rns_core::packet::RawPacket::pack(
-                    flags, 0, &dest_hash, None,
-                    constants::CONTEXT_NONE, &announce_data,
+                    flags,
+                    0,
+                    &dest_hash,
+                    None,
+                    constants::CONTEXT_NONE,
+                    &announce_data,
                 ) {
                     Ok(packet) => {
                         let actions = self.engine.handle_outbound(
-                            &packet, constants::DESTINATION_SINGLE, None, now(),
+                            &packet,
+                            constants::DESTINATION_SINGLE,
+                            None,
+                            now(),
                         );
                         self.dispatch_all(actions);
                         if let Some(ref stats) = self.stats {
@@ -414,15 +450,13 @@ pub fn spawn_tick_thread(
     std::thread::Builder::new()
         .name("tick".into())
         .stack_size(2048)
-        .spawn(move || {
-            loop {
-                std::thread::sleep(Duration::from_millis(interval_ms));
-                if shutdown.load(Ordering::SeqCst) {
-                    break;
-                }
-                if tx.send(Event::Tick).is_err() {
-                    break;
-                }
+        .spawn(move || loop {
+            std::thread::sleep(Duration::from_millis(interval_ms));
+            if shutdown.load(Ordering::SeqCst) {
+                break;
+            }
+            if tx.send(Event::Tick).is_err() {
+                break;
             }
         })
         .expect("failed to spawn tick thread")

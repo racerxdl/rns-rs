@@ -270,7 +270,10 @@ fn render_bridge_status(display: &mut Display, stats: &DisplayStats) {
 
     let _ = Text::new("RNode Bridge", Point::new(0, 10), style).draw(display);
 
-    let counter_line = format!("TX:{}B RX:{}B", stats.bridge_tx_bytes, stats.bridge_rx_bytes);
+    let counter_line = format!(
+        "TX:{}B RX:{}B",
+        stats.bridge_tx_bytes, stats.bridge_rx_bytes
+    );
     let _ = Text::new(&counter_line, Point::new(0, 24), style).draw(display);
 
     if let Some(ref msg) = stats.status {
@@ -302,7 +305,9 @@ fn render_bridge_radio(display: &mut Display, stats: &DisplayStats) {
     )
     .draw(display);
 
-    let sf = stats.bridge_sf.unwrap_or(crate::config::LORA_SPREADING_FACTOR);
+    let sf = stats
+        .bridge_sf
+        .unwrap_or(crate::config::LORA_SPREADING_FACTOR);
     let bw = stats.bridge_bw.unwrap_or(crate::config::LORA_BANDWIDTH);
     let cr = stats.bridge_cr.unwrap_or(crate::config::LORA_CODING_RATE);
     let _ = Text::new(
