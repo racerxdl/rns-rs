@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 /// Hardcoded LoRa radio parameters for Heltec V3 + SX1262.
 
 /// LoRa frequency in Hz (868 MHz EU band).

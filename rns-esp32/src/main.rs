@@ -218,7 +218,7 @@ fn main() {
                     }
                 }
             }
-            driver::DriverExit::Shutdown | driver::DriverExit::Disconnected => {
+            driver::DriverExit::Disconnected => {
                 log::info!("Driver exited, shutting down");
                 break;
             }

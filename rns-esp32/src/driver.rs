@@ -30,26 +30,18 @@ pub enum Event {
         interface_id: InterfaceId,
         data: Vec<u8>,
     },
-    /// Interface came online.
-    InterfaceUp(InterfaceId),
-    /// Interface went offline.
-    InterfaceDown(InterfaceId),
     /// Periodic tick for transport engine maintenance.
     Tick,
     /// Send a ping broadcast over LoRa (button: double press).
     SendPing,
     /// Trigger a Reticulum announce (button: long press, node mode only).
     SendAnnounce,
-    /// Shutdown the driver.
-    Shutdown,
 }
 
 /// Reason the driver event loop exited.
 pub enum DriverExit {
     /// UART detected an RNode DETECT handshake; switch to bridge mode.
     BridgeRequested,
-    /// Shutdown event received.
-    Shutdown,
     /// Event channel disconnected.
     Disconnected,
 }
@@ -165,18 +157,6 @@ impl Driver {
                     }
                     self.handle_frame(interface_id, data);
                 }
-                Event::InterfaceUp(id) => {
-                    if let Some(entry) = self.interfaces.iter_mut().find(|e| e.id == id) {
-                        entry.online = true;
-                        log::info!("Interface {:?} up", id);
-                    }
-                }
-                Event::InterfaceDown(id) => {
-                    if let Some(entry) = self.interfaces.iter_mut().find(|e| e.id == id) {
-                        entry.online = false;
-                        log::info!("Interface {:?} down", id);
-                    }
-                }
                 Event::Tick => {
                     let actions = self.engine.tick(now(), &mut self.rng);
                     self.dispatch_all(actions);
@@ -186,10 +166,6 @@ impl Driver {
                 }
                 Event::SendAnnounce => {
                     self.handle_send_announce();
-                }
-                Event::Shutdown => {
-                    log::info!("Driver shutdown requested");
-                    break DriverExit::Shutdown;
                 }
             }
         };

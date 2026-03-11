@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! IFAC (Interface Access Codes) — per-interface cryptographic authentication.
 //!
 //! Matches `Transport.py:894-933` (outbound masking) and `Transport.py:1241-1303`

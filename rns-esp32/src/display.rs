@@ -147,7 +147,7 @@ pub fn init(
     std::mem::forget(rst);
 
     // Scan I2C bus to verify display is present
-    for addr in [0x3Cu8, 0x3D] {
+    for addr in [crate::config::OLED_ADDR, 0x3D] {
         let probe: Result<(), _> = i2c.write(addr, &[0x00], 100);
         match probe {
             Ok(()) => log::info!("I2C device found at 0x{:02X}", addr),

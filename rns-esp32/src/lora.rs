@@ -46,6 +46,8 @@ const IRQ_RX_DONE: u16 = 0x0002;
 const IRQ_CRC_ERR: u16 = 0x0040;
 const IRQ_TIMEOUT: u16 = 0x0200;
 const IRQ_ALL: u16 = IRQ_TX_DONE | IRQ_RX_DONE | IRQ_CRC_ERR | IRQ_TIMEOUT;
+const MAX_SPI_FRAME: usize = 258;
+const MAX_TX_WRITE_BUFFER: usize = 256;
 
 // Standby modes
 const STANDBY_RC: u8 = 0x00;
@@ -72,32 +74,34 @@ impl Radio {
     /// Execute an SPI command (opcode + params), no response read.
     fn cmd(&mut self, opcode: u8, params: &[u8]) {
         self.wait_busy();
-        let mut buf = Vec::with_capacity(1 + params.len());
-        buf.push(opcode);
-        buf.extend_from_slice(params);
+        let len = 1 + params.len();
+        let mut buf = [0u8; MAX_SPI_FRAME];
+        debug_assert!(len <= buf.len());
+        buf[0] = opcode;
+        buf[1..len].copy_from_slice(params);
 
         self.cs.set_low().ok();
-        let _ = self.spi.write(&buf);
+        let _ = self.spi.write(&buf[..len]);
         self.cs.set_high().ok();
     }
 
     /// Execute an SPI command and read `resp_len` response bytes.
     fn cmd_read(&mut self, opcode: u8, params: &[u8], resp_len: usize) -> Vec<u8> {
         self.wait_busy();
-        // TX: opcode + params + NOP byte (status) + NOP bytes for response
         let tx_len = 1 + params.len() + 1 + resp_len;
-        let mut tx = vec![0u8; tx_len];
+        debug_assert!(tx_len <= MAX_SPI_FRAME);
+
+        let mut tx = [0u8; MAX_SPI_FRAME];
         tx[0] = opcode;
         tx[1..1 + params.len()].copy_from_slice(params);
-        let mut rx = vec![0u8; tx_len];
+        let mut rx = [0u8; MAX_SPI_FRAME];
 
         self.cs.set_low().ok();
-        let _ = self.spi.transfer(&mut rx, &tx);
+        let _ = self.spi.transfer(&mut rx[..tx_len], &tx[..tx_len]);
         self.cs.set_high().ok();
 
-        // Response starts after opcode + params + status byte
         let start = 1 + params.len() + 1;
-        rx[start..].to_vec()
+        rx[start..tx_len].to_vec()
     }
 
     /// Hardware reset the radio.
@@ -268,10 +272,11 @@ impl Radio {
         );
 
         // Write data to TX buffer at offset 0
-        let mut buf = Vec::with_capacity(1 + data.len());
-        buf.push(0x00); // offset
-        buf.extend_from_slice(data);
-        self.cmd(OPCODE_WRITE_BUFFER, &buf);
+        let mut buf = [0u8; MAX_TX_WRITE_BUFFER];
+        let write_len = data.len() + 1;
+        buf[0] = 0x00; // offset
+        buf[1..write_len].copy_from_slice(data);
+        self.cmd(OPCODE_WRITE_BUFFER, &buf[..write_len]);
 
         // Clear all IRQs and start TX (no timeout)
         self.clear_irq(IRQ_ALL);
