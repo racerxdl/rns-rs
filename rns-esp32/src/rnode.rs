@@ -15,6 +15,7 @@ use esp_idf_hal::uart::UartDriver;
 
 use crate::display::SharedStats;
 use crate::lora::SharedRadio;
+use crate::version;
 
 // KISS framing constants
 const FEND: u8 = 0xC0;
@@ -46,8 +47,6 @@ const RADIO_STATE_ON: u8 = 0x01;
 // Device identity
 const PLATFORM_ESP32: u8 = 0x80;
 const MCU_ESP32: u8 = 0x01;
-const FW_VERSION_MAJOR: u8 = 0x01;
-const FW_VERSION_MINOR: u8 = 0x01;
 
 const DETECT_POLL_MS: u32 = 5;
 const FREQ_MIN_HZ: u32 = 137_000_000;
@@ -266,6 +265,7 @@ impl<'a, 'b> RNodeBridge<'a, 'b> {
                     log::info!("RNode: DETECT handshake received");
                     let resp = kiss_encode(CMD_DETECT, &[DETECT_RESP]);
                     let _ = self.uart.write(&resp);
+                    log::info!("RNode: firmware {}", version::FULL_VERSION);
                 }
             }
             CMD_LEAVE => {
@@ -273,7 +273,10 @@ impl<'a, 'b> RNodeBridge<'a, 'b> {
                 return true;
             }
             CMD_FW_VERSION => {
-                let resp = kiss_encode(CMD_FW_VERSION, &[FW_VERSION_MAJOR, FW_VERSION_MINOR]);
+                let resp = kiss_encode(
+                    CMD_FW_VERSION,
+                    &[version::RNODE_PROTOCOL_MAJOR, version::RNODE_PROTOCOL_MINOR],
+                );
                 let _ = self.uart.write(&resp);
             }
             CMD_PLATFORM => {
@@ -491,8 +494,10 @@ pub fn wait_for_detect_quick(uart: &UartDriver<'_>) -> bool {
                             }
                         }
                         CMD_FW_VERSION => {
-                            let resp =
-                                kiss_encode(CMD_FW_VERSION, &[FW_VERSION_MAJOR, FW_VERSION_MINOR]);
+                            let resp = kiss_encode(
+                                CMD_FW_VERSION,
+                                &[version::RNODE_PROTOCOL_MAJOR, version::RNODE_PROTOCOL_MINOR],
+                            );
                             let _ = uart.write(&resp);
                         }
                         CMD_PLATFORM => {

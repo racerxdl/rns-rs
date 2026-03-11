@@ -13,6 +13,7 @@ mod lora;
 mod rng;
 mod rnode;
 mod util;
+mod version;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
@@ -37,7 +38,7 @@ fn main() {
     // Initialize ESP-IDF logging and system
     esp_idf_svc::sys::link_patches();
     esp_idf_svc::log::EspLogger::initialize_default();
-    log::info!("rns-esp32 starting");
+    log::info!("rns-esp32 starting ({})", version::FULL_VERSION);
 
     let peripherals = Peripherals::take().expect("failed to take peripherals");
 
