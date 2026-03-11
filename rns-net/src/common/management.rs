@@ -51,14 +51,22 @@ pub fn is_management_path(path_hash: &[u8; 16]) -> bool {
 ///
 /// Destination: `rnstransport.remote.management` with transport identity.
 pub fn management_dest_hash(transport_identity_hash: &[u8; 16]) -> [u8; 16] {
-    destination_hash("rnstransport", &["remote", "management"], Some(transport_identity_hash))
+    destination_hash(
+        "rnstransport",
+        &["remote", "management"],
+        Some(transport_identity_hash),
+    )
 }
 
 /// Compute the blackhole info destination hash.
 ///
 /// Destination: `rnstransport.info.blackhole` with transport identity.
 pub fn blackhole_dest_hash(transport_identity_hash: &[u8; 16]) -> [u8; 16] {
-    destination_hash("rnstransport", &["info", "blackhole"], Some(transport_identity_hash))
+    destination_hash(
+        "rnstransport",
+        &["info", "blackhole"],
+        Some(transport_identity_hash),
+    )
 }
 
 /// Compute the probe responder destination hash.
@@ -100,7 +108,12 @@ pub fn build_probe_announce(
     };
 
     let packet = rns_core::packet::RawPacket::pack(
-        flags, 0, &dest_hash, None, constants::CONTEXT_NONE, &announce_data,
+        flags,
+        0,
+        &dest_hash,
+        None,
+        constants::CONTEXT_NONE,
+        &announce_data,
     )
     .ok()?;
 
@@ -141,9 +154,7 @@ pub fn handle_status_request(
 ) -> Option<Vec<u8>> {
     // Decode request data
     let include_lstats = match msgpack::unpack_exact(data) {
-        Ok(Value::Array(arr)) if !arr.is_empty() => {
-            arr[0].as_bool().unwrap_or(false)
-        }
+        Ok(Value::Array(arr)) if !arr.is_empty() => arr[0].as_bool().unwrap_or(false),
         _ => false,
     };
 
@@ -172,17 +183,29 @@ pub fn handle_status_request(
         } else {
             ifstats.push(("bitrate", Value::Nil));
         }
-        ifstats.push(("incoming_announce_freq", Value::Float(stats.incoming_announce_freq())));
-        ifstats.push(("outgoing_announce_freq", Value::Float(stats.outgoing_announce_freq())));
-        ifstats.push(("held_announces", Value::UInt(engine.held_announce_count(&id) as u64)));
+        ifstats.push((
+            "incoming_announce_freq",
+            Value::Float(stats.incoming_announce_freq()),
+        ));
+        ifstats.push((
+            "outgoing_announce_freq",
+            Value::Float(stats.outgoing_announce_freq()),
+        ));
+        ifstats.push((
+            "held_announces",
+            Value::UInt(engine.held_announce_count(&id) as u64),
+        ));
 
         // IFAC info
         ifstats.push(("ifac_signature", Value::Nil));
-        ifstats.push(("ifac_size", if info.bitrate.is_some() {
-            Value::UInt(0)
-        } else {
-            Value::Nil
-        }));
+        ifstats.push((
+            "ifac_size",
+            if info.bitrate.is_some() {
+                Value::UInt(0)
+            } else {
+                Value::Nil
+            },
+        ));
         ifstats.push(("ifac_netname", Value::Nil));
 
         // Unused by Rust but expected by Python clients
@@ -192,7 +215,8 @@ pub fn handle_status_request(
         ifstats.push(("txs", Value::UInt(0)));
 
         // Build as map
-        let map = ifstats.into_iter()
+        let map = ifstats
+            .into_iter()
             .map(|(k, v)| (Value::Str(k.into()), v))
             .collect();
         iface_list.push(Value::Map(map));
@@ -210,13 +234,17 @@ pub fn handle_status_request(
         stats.push(("transport_id", Value::Bin(identity_hash.to_vec())));
         stats.push(("transport_uptime", Value::Float(time::now() - started)));
     }
-    stats.push(("probe_responder", match probe_responder_hash {
-        Some(hash) => Value::Bin(hash.to_vec()),
-        None => Value::Nil,
-    }));
+    stats.push((
+        "probe_responder",
+        match probe_responder_hash {
+            Some(hash) => Value::Bin(hash.to_vec()),
+            None => Value::Nil,
+        },
+    ));
     stats.push(("rss", Value::Nil));
 
-    let stats_map = stats.into_iter()
+    let stats_map = stats
+        .into_iter()
         .map(|(k, v)| (Value::Str(k.into()), v))
         .collect();
 
@@ -235,10 +263,7 @@ pub fn handle_status_request(
 /// Request data: msgpack([command, destination_hash?, max_hops?])
 /// - command = "table" → returns path table entries
 /// - command = "rates" → returns rate table entries
-pub fn handle_path_request(
-    data: &[u8],
-    engine: &TransportEngine,
-) -> Option<Vec<u8>> {
+pub fn handle_path_request(data: &[u8], engine: &TransportEngine) -> Option<Vec<u8>> {
     let arr = match msgpack::unpack_exact(data) {
         Ok(Value::Array(arr)) if !arr.is_empty() => arr,
         _ => return None,
@@ -305,7 +330,10 @@ pub fn handle_path_request(
                 let entry = vec![
                     (Value::Str("hash".into()), Value::Bin(r.0.to_vec())),
                     (Value::Str("last".into()), Value::Float(r.1)),
-                    (Value::Str("rate_violations".into()), Value::UInt(r.2 as u64)),
+                    (
+                        Value::Str("rate_violations".into()),
+                        Value::UInt(r.2 as u64),
+                    ),
                     (Value::Str("blocked_until".into()), Value::Float(r.3)),
                     (Value::Str("timestamps".into()), Value::Array(timestamps)),
                 ];
@@ -320,9 +348,7 @@ pub fn handle_path_request(
 /// Handle a `/list` (blackhole list) request.
 ///
 /// Returns the blackholed_identities dict as msgpack.
-pub fn handle_blackhole_list_request(
-    engine: &TransportEngine,
-) -> Option<Vec<u8>> {
+pub fn handle_blackhole_list_request(engine: &TransportEngine) -> Option<Vec<u8>> {
     let blackholed = engine.get_blackholed();
     let mut map_entries = Vec::new();
     for (hash, created, expires, reason) in &blackholed {
@@ -370,7 +396,12 @@ pub fn build_management_announce(
     };
 
     let packet = rns_core::packet::RawPacket::pack(
-        flags, 0, &dest_hash, None, constants::CONTEXT_NONE, &announce_data,
+        flags,
+        0,
+        &dest_hash,
+        None,
+        constants::CONTEXT_NONE,
+        &announce_data,
     )
     .ok()?;
 
@@ -409,7 +440,12 @@ pub fn build_blackhole_announce(
     };
 
     let packet = rns_core::packet::RawPacket::pack(
-        flags, 0, &dest_hash, None, constants::CONTEXT_NONE, &announce_data,
+        flags,
+        0,
+        &dest_hash,
+        None,
+        constants::CONTEXT_NONE,
+        &announce_data,
     )
     .ok()?;
 

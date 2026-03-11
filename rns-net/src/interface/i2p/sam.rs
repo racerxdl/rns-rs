@@ -286,10 +286,7 @@ fn parse_sam_response(line: &str) -> Result<SamResponse, SamError> {
         .next()
         .ok_or_else(|| SamError::InvalidResponse("empty response".into()))?
         .to_string();
-    let subcommand = parts
-        .next()
-        .unwrap_or("")
-        .to_string();
+    let subcommand = parts.next().unwrap_or("").to_string();
     let rest = parts.next().unwrap_or("");
 
     let mut params = Vec::new();
@@ -343,12 +340,12 @@ pub fn dest_generate(sam_addr: &SocketAddr) -> Result<KeyPair, SamError> {
         )));
     }
 
-    let pub_b64 = resp.get("PUB").ok_or_else(|| {
-        SamError::InvalidResponse("DEST REPLY missing PUB".into())
-    })?;
-    let priv_b64 = resp.get("PRIV").ok_or_else(|| {
-        SamError::InvalidResponse("DEST REPLY missing PRIV".into())
-    })?;
+    let pub_b64 = resp
+        .get("PUB")
+        .ok_or_else(|| SamError::InvalidResponse("DEST REPLY missing PUB".into()))?;
+    let priv_b64 = resp
+        .get("PRIV")
+        .ok_or_else(|| SamError::InvalidResponse("DEST REPLY missing PRIV".into()))?;
 
     let dest_data = i2p_base64_decode(pub_b64)?;
     let priv_data = i2p_base64_decode(priv_b64)?;
@@ -433,11 +430,7 @@ pub fn stream_accept(
 ) -> Result<(TcpStream, Destination), SamError> {
     let mut stream = hello_connect(sam_addr)?;
 
-    write!(
-        stream,
-        "STREAM ACCEPT ID={} SILENT=false\n",
-        session_id,
-    )?;
+    write!(stream, "STREAM ACCEPT ID={} SILENT=false\n", session_id,)?;
     stream.flush()?;
 
     let line = read_line(&mut stream)?;
@@ -465,10 +458,7 @@ pub fn stream_accept(
 
 /// Look up a .b32.i2p name (or other I2P name) to a full destination.
 /// Opens a fresh SAM connection for the lookup.
-pub fn naming_lookup(
-    sam_addr: &SocketAddr,
-    name: &str,
-) -> Result<Destination, SamError> {
+pub fn naming_lookup(sam_addr: &SocketAddr, name: &str) -> Result<Destination, SamError> {
     let mut stream = hello_connect(sam_addr)?;
     naming_lookup_on(&mut stream, name)
 }
@@ -476,10 +466,7 @@ pub fn naming_lookup(
 /// Perform a NAMING LOOKUP on an existing SAM socket.
 /// Use this for `NAME=ME` on a session control socket, since the `ME`
 /// name requires a session context on the same connection.
-pub fn naming_lookup_on(
-    stream: &mut TcpStream,
-    name: &str,
-) -> Result<Destination, SamError> {
+pub fn naming_lookup_on(stream: &mut TcpStream, name: &str) -> Result<Destination, SamError> {
     write!(stream, "NAMING LOOKUP NAME={}\n", name)?;
     stream.flush()?;
 
@@ -494,9 +481,9 @@ pub fn naming_lookup_on(
     }
     check_result(&resp)?;
 
-    let value = resp.get("VALUE").ok_or_else(|| {
-        SamError::InvalidResponse("NAMING REPLY missing VALUE".into())
-    })?;
+    let value = resp
+        .get("VALUE")
+        .ok_or_else(|| SamError::InvalidResponse("NAMING REPLY missing VALUE".into()))?;
 
     Destination::from_i2p_base64(value)
 }
@@ -615,7 +602,9 @@ mod tests {
         // 32 bytes * 8 bits / 5 bits = 51.2 -> 52 chars
         assert_eq!(encoded.len(), 52);
         // All lowercase letters and digits 2-7
-        assert!(encoded.chars().all(|c| c.is_ascii_lowercase() || ('2'..='7').contains(&c)));
+        assert!(encoded
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || ('2'..='7').contains(&c)));
     }
 
     // --- Destination tests ---

@@ -1,8 +1,8 @@
-pub mod types;
-pub mod handshake;
 pub mod crypto;
-pub mod keepalive;
+pub mod handshake;
 pub mod identify;
+pub mod keepalive;
+pub mod types;
 
 use alloc::vec::Vec;
 
@@ -12,20 +12,19 @@ use rns_crypto::x25519::X25519PrivateKey;
 use rns_crypto::Rng;
 
 use crate::constants::{
-    LINK_ECPUBSIZE, LINK_KEEPALIVE_MAX, MTU,
-    LINK_ESTABLISHMENT_TIMEOUT_PER_HOP,
+    LINK_ECPUBSIZE, LINK_ESTABLISHMENT_TIMEOUT_PER_HOP, LINK_KEEPALIVE_MAX, MTU,
 };
 
 pub use types::{LinkAction, LinkError, LinkId, LinkMode, LinkState, TeardownReason};
 
+use crypto::{create_session_token, link_decrypt, link_encrypt};
 use handshake::{
     build_linkrequest_data, compute_link_id, pack_rtt, parse_linkrequest_data,
     perform_key_exchange, unpack_rtt, validate_lrproof,
 };
-use crypto::{create_session_token, link_decrypt, link_encrypt};
 use keepalive::{
-    compute_establishment_timeout, compute_keepalive, compute_stale_time,
-    is_establishment_timeout, should_go_stale, should_send_keepalive,
+    compute_establishment_timeout, compute_keepalive, compute_stale_time, is_establishment_timeout,
+    should_go_stale, should_send_keepalive,
 };
 
 /// The Link Engine manages a single link's lifecycle.
@@ -296,7 +295,11 @@ impl LinkEngine {
         let initiator_rtt = unpack_rtt(&plaintext).ok_or(LinkError::InvalidData)?;
 
         let measured_rtt = now - self.request_time;
-        let rtt = if measured_rtt > initiator_rtt { measured_rtt } else { initiator_rtt };
+        let rtt = if measured_rtt > initiator_rtt {
+            measured_rtt
+        } else {
+            initiator_rtt
+        };
 
         self.rtt = Some(rtt);
         self.state = LinkState::Active;
@@ -353,7 +356,8 @@ impl LinkEngine {
         }
 
         let plaintext = self.decrypt(encrypted_data)?;
-        let (identity_hash, public_key) = identify::validate_identify_data(&plaintext, &self.link_id)?;
+        let (identity_hash, public_key) =
+            identify::validate_identify_data(&plaintext, &self.link_id)?;
         self.remote_identity = Some((identity_hash, public_key));
 
         Ok(alloc::vec![LinkAction::RemoteIdentified {
@@ -590,9 +594,8 @@ mod tests {
 
         // Step 1: Initiator creates link request
         let mut rng_init = make_rng(0x10);
-        let (mut initiator, request_data) = LinkEngine::new_initiator(
-            &dest_hash, 1, mode, Some(500), 100.0, &mut rng_init,
-        );
+        let (mut initiator, request_data) =
+            LinkEngine::new_initiator(&dest_hash, 1, mode, Some(500), 100.0, &mut rng_init);
         assert_eq!(initiator.state(), LinkState::Pending);
 
         // Simulate packet packing: build a fake hashable part
@@ -618,18 +621,16 @@ mod tests {
             1,
             100.5,
             &mut rng_resp,
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(responder.state(), LinkState::Handshake);
         assert_eq!(responder.link_id(), initiator.link_id());
 
         // Step 3: Initiator validates LRPROOF
         let mut rng_lrrtt = make_rng(0x30);
-        let (lrrtt_encrypted, actions) = initiator.handle_lrproof(
-            &lrproof_data,
-            &dest_sig_pub_bytes,
-            100.8,
-            &mut rng_lrrtt,
-        ).unwrap();
+        let (lrrtt_encrypted, actions) = initiator
+            .handle_lrproof(&lrproof_data, &dest_sig_pub_bytes, 100.8, &mut rng_lrrtt)
+            .unwrap();
         assert_eq!(initiator.state(), LinkState::Active);
         assert!(initiator.rtt().is_some());
         assert_eq!(actions.len(), 2); // StateChanged + LinkEstablished
@@ -650,7 +651,12 @@ mod tests {
 
         let mut rng_init = make_rng(0x10);
         let (mut initiator, request_data) = LinkEngine::new_initiator(
-            &dest_hash, 1, LinkMode::Aes256Cbc, Some(500), 100.0, &mut rng_init,
+            &dest_hash,
+            1,
+            LinkMode::Aes256Cbc,
+            Some(500),
+            100.0,
+            &mut rng_init,
         );
         let mut hashable = Vec::new();
         hashable.push(0x00);
@@ -662,14 +668,21 @@ mod tests {
 
         let mut rng_resp = make_rng(0x20);
         let (mut responder, lrproof_data) = LinkEngine::new_responder(
-            &dest_sig_prv, &dest_sig_pub_bytes, &request_data, &hashable,
-            &dest_hash, 1, 100.5, &mut rng_resp,
-        ).unwrap();
+            &dest_sig_prv,
+            &dest_sig_pub_bytes,
+            &request_data,
+            &hashable,
+            &dest_hash,
+            1,
+            100.5,
+            &mut rng_resp,
+        )
+        .unwrap();
 
         let mut rng_lrrtt = make_rng(0x30);
-        let (lrrtt_encrypted, _) = initiator.handle_lrproof(
-            &lrproof_data, &dest_sig_pub_bytes, 100.8, &mut rng_lrrtt,
-        ).unwrap();
+        let (lrrtt_encrypted, _) = initiator
+            .handle_lrproof(&lrproof_data, &dest_sig_pub_bytes, 100.8, &mut rng_lrrtt)
+            .unwrap();
         responder.handle_lrrtt(&lrrtt_encrypted, 101.0).unwrap();
 
         // Now both sides are ACTIVE — test encrypt/decrypt
@@ -690,9 +703,8 @@ mod tests {
     fn test_tick_establishment_timeout() {
         let mut rng = make_rng(0x10);
         let dest_hash = [0xDD; 16];
-        let (mut engine, _) = LinkEngine::new_initiator(
-            &dest_hash, 1, LinkMode::Aes256Cbc, None, 100.0, &mut rng,
-        );
+        let (mut engine, _) =
+            LinkEngine::new_initiator(&dest_hash, 1, LinkMode::Aes256Cbc, None, 100.0, &mut rng);
         // Timeout = 6.0 + 6.0 * 1 = 12.0s → expires at 112.0
 
         // Before timeout — no state change
@@ -714,7 +726,12 @@ mod tests {
 
         let mut rng_init = make_rng(0x10);
         let (mut initiator, request_data) = LinkEngine::new_initiator(
-            &dest_hash, 1, LinkMode::Aes256Cbc, Some(500), 100.0, &mut rng_init,
+            &dest_hash,
+            1,
+            LinkMode::Aes256Cbc,
+            Some(500),
+            100.0,
+            &mut rng_init,
         );
         let mut hashable = Vec::new();
         hashable.push(0x00);
@@ -726,12 +743,21 @@ mod tests {
 
         let mut rng_resp = make_rng(0x20);
         let (_, lrproof_data) = LinkEngine::new_responder(
-            &dest_sig_prv, &dest_sig_pub_bytes, &request_data, &hashable,
-            &dest_hash, 1, 100.5, &mut rng_resp,
-        ).unwrap();
+            &dest_sig_prv,
+            &dest_sig_pub_bytes,
+            &request_data,
+            &hashable,
+            &dest_hash,
+            1,
+            100.5,
+            &mut rng_resp,
+        )
+        .unwrap();
 
         let mut rng_lrrtt = make_rng(0x30);
-        initiator.handle_lrproof(&lrproof_data, &dest_sig_pub_bytes, 100.8, &mut rng_lrrtt).unwrap();
+        initiator
+            .handle_lrproof(&lrproof_data, &dest_sig_pub_bytes, 100.8, &mut rng_lrrtt)
+            .unwrap();
         assert_eq!(initiator.state(), LinkState::Active);
 
         // Advance time past stale_time
@@ -755,7 +781,12 @@ mod tests {
 
         let mut rng_init = make_rng(0x10);
         let (mut initiator, request_data) = LinkEngine::new_initiator(
-            &dest_hash, 1, LinkMode::Aes256Cbc, Some(500), 100.0, &mut rng_init,
+            &dest_hash,
+            1,
+            LinkMode::Aes256Cbc,
+            Some(500),
+            100.0,
+            &mut rng_init,
         );
         let mut hashable = Vec::new();
         hashable.push(0x00);
@@ -767,12 +798,21 @@ mod tests {
 
         let mut rng_resp = make_rng(0x20);
         let (_, lrproof_data) = LinkEngine::new_responder(
-            &dest_sig_prv, &dest_sig_pub_bytes, &request_data, &hashable,
-            &dest_hash, 1, 100.5, &mut rng_resp,
-        ).unwrap();
+            &dest_sig_prv,
+            &dest_sig_pub_bytes,
+            &request_data,
+            &hashable,
+            &dest_hash,
+            1,
+            100.5,
+            &mut rng_resp,
+        )
+        .unwrap();
 
         let mut rng_lrrtt = make_rng(0x30);
-        initiator.handle_lrproof(&lrproof_data, &dest_sig_pub_bytes, 100.8, &mut rng_lrrtt).unwrap();
+        initiator
+            .handle_lrproof(&lrproof_data, &dest_sig_pub_bytes, 100.8, &mut rng_lrrtt)
+            .unwrap();
 
         let ka = initiator.keepalive_interval();
         // Not yet
@@ -790,7 +830,12 @@ mod tests {
 
         let mut rng_init = make_rng(0x10);
         let (mut initiator, request_data) = LinkEngine::new_initiator(
-            &dest_hash, 1, LinkMode::Aes256Cbc, Some(500), 100.0, &mut rng_init,
+            &dest_hash,
+            1,
+            LinkMode::Aes256Cbc,
+            Some(500),
+            100.0,
+            &mut rng_init,
         );
         let mut hashable = Vec::new();
         hashable.push(0x00);
@@ -802,14 +847,21 @@ mod tests {
 
         let mut rng_resp = make_rng(0x20);
         let (mut responder, lrproof_data) = LinkEngine::new_responder(
-            &dest_sig_prv, &dest_sig_pub_bytes, &request_data, &hashable,
-            &dest_hash, 1, 100.5, &mut rng_resp,
-        ).unwrap();
+            &dest_sig_prv,
+            &dest_sig_pub_bytes,
+            &request_data,
+            &hashable,
+            &dest_hash,
+            1,
+            100.5,
+            &mut rng_resp,
+        )
+        .unwrap();
 
         let mut rng_lrrtt = make_rng(0x30);
-        let (lrrtt_encrypted, _) = initiator.handle_lrproof(
-            &lrproof_data, &dest_sig_pub_bytes, 100.8, &mut rng_lrrtt,
-        ).unwrap();
+        let (lrrtt_encrypted, _) = initiator
+            .handle_lrproof(&lrproof_data, &dest_sig_pub_bytes, 100.8, &mut rng_lrrtt)
+            .unwrap();
         responder.handle_lrrtt(&lrrtt_encrypted, 101.0).unwrap();
 
         let ka = responder.keepalive_interval();
@@ -821,9 +873,8 @@ mod tests {
     #[test]
     fn test_teardown() {
         let mut rng = make_rng(0x10);
-        let (mut engine, _) = LinkEngine::new_initiator(
-            &[0xDD; 16], 1, LinkMode::Aes256Cbc, None, 100.0, &mut rng,
-        );
+        let (mut engine, _) =
+            LinkEngine::new_initiator(&[0xDD; 16], 1, LinkMode::Aes256Cbc, None, 100.0, &mut rng);
         let actions = engine.teardown();
         assert_eq!(engine.state(), LinkState::Closed);
         assert_eq!(actions.len(), 1);
@@ -836,9 +887,8 @@ mod tests {
     #[test]
     fn test_handle_teardown() {
         let mut rng = make_rng(0x10);
-        let (mut engine, _) = LinkEngine::new_initiator(
-            &[0xDD; 16], 1, LinkMode::Aes256Cbc, None, 100.0, &mut rng,
-        );
+        let (mut engine, _) =
+            LinkEngine::new_initiator(&[0xDD; 16], 1, LinkMode::Aes256Cbc, None, 100.0, &mut rng);
         let actions = engine.handle_teardown();
         assert_eq!(engine.state(), LinkState::Closed);
         assert_eq!(actions.len(), 1);
@@ -859,7 +909,12 @@ mod tests {
 
         let mut rng_init = make_rng(0x10);
         let (mut initiator, request_data) = LinkEngine::new_initiator(
-            &dest_hash, 1, LinkMode::Aes256Cbc, Some(500), 100.0, &mut rng_init,
+            &dest_hash,
+            1,
+            LinkMode::Aes256Cbc,
+            Some(500),
+            100.0,
+            &mut rng_init,
         );
         let mut hashable = Vec::new();
         hashable.push(0x00);
@@ -871,14 +926,21 @@ mod tests {
 
         let mut rng_resp = make_rng(0x20);
         let (mut responder, lrproof_data) = LinkEngine::new_responder(
-            &dest_sig_prv, &dest_sig_pub_bytes, &request_data, &hashable,
-            &dest_hash, 1, 100.5, &mut rng_resp,
-        ).unwrap();
+            &dest_sig_prv,
+            &dest_sig_pub_bytes,
+            &request_data,
+            &hashable,
+            &dest_hash,
+            1,
+            100.5,
+            &mut rng_resp,
+        )
+        .unwrap();
 
         let mut rng_lrrtt = make_rng(0x30);
-        let (lrrtt_encrypted, _) = initiator.handle_lrproof(
-            &lrproof_data, &dest_sig_pub_bytes, 100.8, &mut rng_lrrtt,
-        ).unwrap();
+        let (lrrtt_encrypted, _) = initiator
+            .handle_lrproof(&lrproof_data, &dest_sig_pub_bytes, 100.8, &mut rng_lrrtt)
+            .unwrap();
         responder.handle_lrrtt(&lrrtt_encrypted, 101.0).unwrap();
 
         // Create identity to identify with
@@ -887,12 +949,18 @@ mod tests {
 
         // Initiator identifies itself to responder
         let mut rng_enc = make_rng(0x50);
-        let identify_encrypted = initiator.build_identify(&my_identity, &mut rng_enc).unwrap();
+        let identify_encrypted = initiator
+            .build_identify(&my_identity, &mut rng_enc)
+            .unwrap();
 
         let actions = responder.handle_identify(&identify_encrypted).unwrap();
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            LinkAction::RemoteIdentified { identity_hash, public_key, .. } => {
+            LinkAction::RemoteIdentified {
+                identity_hash,
+                public_key,
+                ..
+            } => {
                 assert_eq!(identity_hash, my_identity.hash());
                 assert_eq!(public_key, &my_identity.get_public_key().unwrap());
             }
@@ -909,7 +977,12 @@ mod tests {
 
         let mut rng_init = make_rng(0x10);
         let (mut initiator, request_data) = LinkEngine::new_initiator(
-            &dest_hash, 1, LinkMode::Aes128Cbc, Some(500), 100.0, &mut rng_init,
+            &dest_hash,
+            1,
+            LinkMode::Aes128Cbc,
+            Some(500),
+            100.0,
+            &mut rng_init,
         );
         let mut hashable = Vec::new();
         hashable.push(0x00);
@@ -921,14 +994,21 @@ mod tests {
 
         let mut rng_resp = make_rng(0x20);
         let (mut responder, lrproof_data) = LinkEngine::new_responder(
-            &dest_sig_prv, &dest_sig_pub_bytes, &request_data, &hashable,
-            &dest_hash, 1, 100.5, &mut rng_resp,
-        ).unwrap();
+            &dest_sig_prv,
+            &dest_sig_pub_bytes,
+            &request_data,
+            &hashable,
+            &dest_hash,
+            1,
+            100.5,
+            &mut rng_resp,
+        )
+        .unwrap();
 
         let mut rng_lrrtt = make_rng(0x30);
-        let (lrrtt_encrypted, _) = initiator.handle_lrproof(
-            &lrproof_data, &dest_sig_pub_bytes, 100.8, &mut rng_lrrtt,
-        ).unwrap();
+        let (lrrtt_encrypted, _) = initiator
+            .handle_lrproof(&lrproof_data, &dest_sig_pub_bytes, 100.8, &mut rng_lrrtt)
+            .unwrap();
         responder.handle_lrrtt(&lrrtt_encrypted, 101.0).unwrap();
 
         assert_eq!(initiator.state(), LinkState::Active);

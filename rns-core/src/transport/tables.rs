@@ -161,9 +161,8 @@ impl PathSet {
     /// `interface_exists` is a predicate that checks whether an interface is
     /// still registered.
     pub fn cull(&mut self, now: f64, interface_exists: impl Fn(&InterfaceId) -> bool) {
-        self.paths.retain(|p| {
-            now <= p.expires && interface_exists(&p.receiving_interface)
-        });
+        self.paths
+            .retain(|p| now <= p.expires && interface_exists(&p.receiving_interface));
     }
 
     /// Filter paths by a predicate, keeping only those that match.
@@ -196,8 +195,11 @@ impl PathSet {
     /// Sort: lowest hops first, then most-recent timestamp first.
     fn sort(&mut self) {
         self.paths.sort_by(|a, b| {
-            a.hops.cmp(&b.hops)
-                .then_with(|| b.timestamp.partial_cmp(&a.timestamp).unwrap_or(core::cmp::Ordering::Equal))
+            a.hops.cmp(&b.hops).then_with(|| {
+                b.timestamp
+                    .partial_cmp(&a.timestamp)
+                    .unwrap_or(core::cmp::Ordering::Equal)
+            })
         });
     }
 }

@@ -71,7 +71,8 @@ struct RequestHandlerEntry {
     /// Access control: None means allow all, Some(list) means allow only listed identities.
     allowed_list: Option<Vec<[u8; 16]>>,
     /// Handler function: (link_id, path, request_id, data, remote_identity) -> Option<response_data>.
-    handler: Box<dyn Fn(LinkId, &str, &[u8], Option<&([u8; 16], [u8; 64])>) -> Option<Vec<u8>> + Send>,
+    handler:
+        Box<dyn Fn(LinkId, &str, &[u8], Option<&([u8; 16], [u8; 64])>) -> Option<Vec<u8>> + Send>,
 }
 
 /// Actions produced by LinkManager for the driver to dispatch.
@@ -102,13 +103,9 @@ pub enum LinkManagerAction {
         public_key: [u8; 64],
     },
     /// Register a link_id as local destination in transport (for receiving link data).
-    RegisterLinkDest {
-        link_id: LinkId,
-    },
+    RegisterLinkDest { link_id: LinkId },
     /// Deregister a link_id from transport local destinations.
-    DeregisterLinkDest {
-        link_id: LinkId,
-    },
+    DeregisterLinkDest { link_id: LinkId },
     /// A management request that needs to be handled by the driver.
     /// The driver has access to engine state needed to build the response.
     ManagementRequest {
@@ -127,14 +124,9 @@ pub enum LinkManagerAction {
         metadata: Option<Vec<u8>>,
     },
     /// Resource transfer completed (proof validated on sender side).
-    ResourceCompleted {
-        link_id: LinkId,
-    },
+    ResourceCompleted { link_id: LinkId },
     /// Resource transfer failed.
-    ResourceFailed {
-        link_id: LinkId,
-        error: String,
-    },
+    ResourceFailed { link_id: LinkId, error: String },
     /// Resource transfer progress update.
     ResourceProgress {
         link_id: LinkId,
@@ -205,7 +197,8 @@ impl LinkManager {
 
     /// Get the derived session key for a link (needed for hole-punch token derivation).
     pub fn get_derived_key(&self, link_id: &LinkId) -> Option<Vec<u8>> {
-        self.links.get(link_id)
+        self.links
+            .get(link_id)
             .and_then(|link| link.engine.derived_key().map(|dk| dk.to_vec()))
     }
 
@@ -217,11 +210,14 @@ impl LinkManager {
         sig_pub_bytes: [u8; 32],
         resource_strategy: ResourceStrategy,
     ) {
-        self.link_destinations.insert(dest_hash, LinkDestination {
-            sig_prv,
-            sig_pub_bytes,
-            resource_strategy,
-        });
+        self.link_destinations.insert(
+            dest_hash,
+            LinkDestination {
+                sig_prv,
+                sig_pub_bytes,
+                resource_strategy,
+            },
+        );
     }
 
     /// Deregister a link destination.
@@ -240,7 +236,9 @@ impl LinkManager {
         allowed_list: Option<Vec<[u8; 16]>>,
         handler: F,
     ) where
-        F: Fn(LinkId, &str, &[u8], Option<&([u8; 16], [u8; 64])>) -> Option<Vec<u8>> + Send + 'static,
+        F: Fn(LinkId, &str, &[u8], Option<&([u8; 16], [u8; 64])>) -> Option<Vec<u8>>
+            + Send
+            + 'static,
     {
         let path_hash = compute_path_hash(path);
         self.request_handlers.push(RequestHandlerEntry {
@@ -280,7 +278,12 @@ impl LinkManager {
         };
 
         let packet = match RawPacket::pack(
-            flags, 0, dest_hash, None, constants::CONTEXT_NONE, &request_data,
+            flags,
+            0,
+            dest_hash,
+            None,
+            constants::CONTEXT_NONE,
+            &request_data,
         ) {
             Ok(p) => p,
             Err(_) => {
@@ -414,7 +417,12 @@ impl LinkManager {
         actions.push(LinkManagerAction::RegisterLinkDest { link_id });
 
         if let Ok(pkt) = RawPacket::pack(
-            flags, 0, &link_id, None, constants::CONTEXT_LRPROOF, &lrproof_data,
+            flags,
+            0,
+            &link_id,
+            None,
+            constants::CONTEXT_LRPROOF,
+            &lrproof_data,
         ) {
             actions.push(LinkManagerAction::SendPacket {
                 raw: pkt.raw,
@@ -424,7 +432,10 @@ impl LinkManager {
         }
 
         // Notify hook system about the incoming link request
-        actions.push(LinkManagerAction::LinkRequestReceived { link_id, receiving_interface });
+        actions.push(LinkManagerAction::LinkRequestReceived {
+            link_id,
+            receiving_interface,
+        });
 
         actions
     }
@@ -455,18 +466,17 @@ impl LinkManager {
         };
 
         let now = time::now();
-        let (lrrtt_encrypted, link_actions) = match link.engine.handle_lrproof(
-            &packet.data,
-            &dest_sig_pub_bytes,
-            now,
-            rng,
-        ) {
-            Ok(r) => r,
-            Err(e) => {
-                log::debug!("LRPROOF validation failed: {}", e);
-                return Vec::new();
-            }
-        };
+        let (lrrtt_encrypted, link_actions) =
+            match link
+                .engine
+                .handle_lrproof(&packet.data, &dest_sig_pub_bytes, now, rng)
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    log::debug!("LRPROOF validation failed: {}", e);
+                    return Vec::new();
+                }
+            };
 
         let link_id = *link.engine.link_id();
         let mut actions = Vec::new();
@@ -484,7 +494,12 @@ impl LinkManager {
         };
 
         if let Ok(pkt) = RawPacket::pack(
-            flags, 0, &link_id, None, constants::CONTEXT_LRRTT, &lrrtt_encrypted,
+            flags,
+            0,
+            &link_id,
+            None,
+            constants::CONTEXT_LRRTT,
+            &lrrtt_encrypted,
         ) {
             actions.push(LinkManagerAction::SendPacket {
                 raw: pkt.raw,
@@ -518,28 +533,84 @@ impl LinkManager {
     ) -> Vec<LinkManagerAction> {
         // First pass: perform engine operations, collect results
         enum LinkDataResult {
-            Lrrtt { link_id: LinkId, link_actions: Vec<LinkAction> },
-            Identify { link_id: LinkId, link_actions: Vec<LinkAction> },
-            Keepalive { link_id: LinkId, inbound_actions: Vec<LinkAction> },
-            LinkClose { link_id: LinkId, teardown_actions: Vec<LinkAction> },
-            Channel { link_id: LinkId, inbound_actions: Vec<LinkAction>, plaintext: Vec<u8> },
-            Request { link_id: LinkId, inbound_actions: Vec<LinkAction>, plaintext: Vec<u8> },
-            Response { link_id: LinkId, inbound_actions: Vec<LinkAction>, plaintext: Vec<u8> },
-            Generic { link_id: LinkId, inbound_actions: Vec<LinkAction>, plaintext: Vec<u8>, context: u8, packet_hash: [u8; 32] },
+            Lrrtt {
+                link_id: LinkId,
+                link_actions: Vec<LinkAction>,
+            },
+            Identify {
+                link_id: LinkId,
+                link_actions: Vec<LinkAction>,
+            },
+            Keepalive {
+                link_id: LinkId,
+                inbound_actions: Vec<LinkAction>,
+            },
+            LinkClose {
+                link_id: LinkId,
+                teardown_actions: Vec<LinkAction>,
+            },
+            Channel {
+                link_id: LinkId,
+                inbound_actions: Vec<LinkAction>,
+                plaintext: Vec<u8>,
+            },
+            Request {
+                link_id: LinkId,
+                inbound_actions: Vec<LinkAction>,
+                plaintext: Vec<u8>,
+            },
+            Response {
+                link_id: LinkId,
+                inbound_actions: Vec<LinkAction>,
+                plaintext: Vec<u8>,
+            },
+            Generic {
+                link_id: LinkId,
+                inbound_actions: Vec<LinkAction>,
+                plaintext: Vec<u8>,
+                context: u8,
+                packet_hash: [u8; 32],
+            },
             /// Resource advertisement (link-decrypted).
-            ResourceAdv { link_id: LinkId, inbound_actions: Vec<LinkAction>, plaintext: Vec<u8> },
+            ResourceAdv {
+                link_id: LinkId,
+                inbound_actions: Vec<LinkAction>,
+                plaintext: Vec<u8>,
+            },
             /// Resource part request (link-decrypted).
-            ResourceReq { link_id: LinkId, inbound_actions: Vec<LinkAction>, plaintext: Vec<u8> },
+            ResourceReq {
+                link_id: LinkId,
+                inbound_actions: Vec<LinkAction>,
+                plaintext: Vec<u8>,
+            },
             /// Resource hashmap update (link-decrypted).
-            ResourceHmu { link_id: LinkId, inbound_actions: Vec<LinkAction>, plaintext: Vec<u8> },
+            ResourceHmu {
+                link_id: LinkId,
+                inbound_actions: Vec<LinkAction>,
+                plaintext: Vec<u8>,
+            },
             /// Resource part data (NOT link-decrypted; parts are pre-encrypted by ResourceSender).
-            ResourcePart { link_id: LinkId, inbound_actions: Vec<LinkAction>, raw_data: Vec<u8> },
+            ResourcePart {
+                link_id: LinkId,
+                inbound_actions: Vec<LinkAction>,
+                raw_data: Vec<u8>,
+            },
             /// Resource proof (feed to sender).
-            ResourcePrf { link_id: LinkId, inbound_actions: Vec<LinkAction>, plaintext: Vec<u8> },
+            ResourcePrf {
+                link_id: LinkId,
+                inbound_actions: Vec<LinkAction>,
+                plaintext: Vec<u8>,
+            },
             /// Resource cancel from initiator (link-decrypted).
-            ResourceIcl { link_id: LinkId, inbound_actions: Vec<LinkAction> },
+            ResourceIcl {
+                link_id: LinkId,
+                inbound_actions: Vec<LinkAction>,
+            },
             /// Resource cancel from receiver (link-decrypted).
-            ResourceRcl { link_id: LinkId, inbound_actions: Vec<LinkAction> },
+            ResourceRcl {
+                link_id: LinkId,
+                inbound_actions: Vec<LinkAction>,
+            },
             Error,
         }
 
@@ -554,7 +625,10 @@ impl LinkManager {
                     match link.engine.handle_lrrtt(&packet.data, time::now()) {
                         Ok(link_actions) => {
                             let link_id = *link.engine.link_id();
-                            LinkDataResult::Lrrtt { link_id, link_actions }
+                            LinkDataResult::Lrrtt {
+                                link_id,
+                                link_actions,
+                            }
                         }
                         Err(e) => {
                             log::debug!("LRRTT handling failed: {}", e);
@@ -567,7 +641,10 @@ impl LinkManager {
                         Ok(link_actions) => {
                             let link_id = *link.engine.link_id();
                             link.remote_identity = link.engine.remote_identity().cloned();
-                            LinkDataResult::Identify { link_id, link_actions }
+                            LinkDataResult::Identify {
+                                link_id,
+                                link_actions,
+                            }
                         }
                         Err(e) => {
                             log::debug!("LINKIDENTIFY failed: {}", e);
@@ -578,119 +655,156 @@ impl LinkManager {
                 constants::CONTEXT_KEEPALIVE => {
                     let inbound_actions = link.engine.record_inbound(time::now());
                     let link_id = *link.engine.link_id();
-                    LinkDataResult::Keepalive { link_id, inbound_actions }
+                    LinkDataResult::Keepalive {
+                        link_id,
+                        inbound_actions,
+                    }
                 }
                 constants::CONTEXT_LINKCLOSE => {
                     let teardown_actions = link.engine.handle_teardown();
                     let link_id = *link.engine.link_id();
-                    LinkDataResult::LinkClose { link_id, teardown_actions }
-                }
-                constants::CONTEXT_CHANNEL => {
-                    match link.engine.decrypt(&packet.data) {
-                        Ok(plaintext) => {
-                            let inbound_actions = link.engine.record_inbound(time::now());
-                            let link_id = *link.engine.link_id();
-                            LinkDataResult::Channel { link_id, inbound_actions, plaintext }
-                        }
-                        Err(_) => LinkDataResult::Error,
+                    LinkDataResult::LinkClose {
+                        link_id,
+                        teardown_actions,
                     }
                 }
-                constants::CONTEXT_REQUEST => {
-                    match link.engine.decrypt(&packet.data) {
-                        Ok(plaintext) => {
-                            let inbound_actions = link.engine.record_inbound(time::now());
-                            let link_id = *link.engine.link_id();
-                            LinkDataResult::Request { link_id, inbound_actions, plaintext }
+                constants::CONTEXT_CHANNEL => match link.engine.decrypt(&packet.data) {
+                    Ok(plaintext) => {
+                        let inbound_actions = link.engine.record_inbound(time::now());
+                        let link_id = *link.engine.link_id();
+                        LinkDataResult::Channel {
+                            link_id,
+                            inbound_actions,
+                            plaintext,
                         }
-                        Err(_) => LinkDataResult::Error,
                     }
-                }
-                constants::CONTEXT_RESPONSE => {
-                    match link.engine.decrypt(&packet.data) {
-                        Ok(plaintext) => {
-                            let inbound_actions = link.engine.record_inbound(time::now());
-                            let link_id = *link.engine.link_id();
-                            LinkDataResult::Response { link_id, inbound_actions, plaintext }
+                    Err(_) => LinkDataResult::Error,
+                },
+                constants::CONTEXT_REQUEST => match link.engine.decrypt(&packet.data) {
+                    Ok(plaintext) => {
+                        let inbound_actions = link.engine.record_inbound(time::now());
+                        let link_id = *link.engine.link_id();
+                        LinkDataResult::Request {
+                            link_id,
+                            inbound_actions,
+                            plaintext,
                         }
-                        Err(_) => LinkDataResult::Error,
                     }
-                }
+                    Err(_) => LinkDataResult::Error,
+                },
+                constants::CONTEXT_RESPONSE => match link.engine.decrypt(&packet.data) {
+                    Ok(plaintext) => {
+                        let inbound_actions = link.engine.record_inbound(time::now());
+                        let link_id = *link.engine.link_id();
+                        LinkDataResult::Response {
+                            link_id,
+                            inbound_actions,
+                            plaintext,
+                        }
+                    }
+                    Err(_) => LinkDataResult::Error,
+                },
                 // --- Resource contexts ---
-                constants::CONTEXT_RESOURCE_ADV => {
-                    match link.engine.decrypt(&packet.data) {
-                        Ok(plaintext) => {
-                            let inbound_actions = link.engine.record_inbound(time::now());
-                            let link_id = *link.engine.link_id();
-                            LinkDataResult::ResourceAdv { link_id, inbound_actions, plaintext }
+                constants::CONTEXT_RESOURCE_ADV => match link.engine.decrypt(&packet.data) {
+                    Ok(plaintext) => {
+                        let inbound_actions = link.engine.record_inbound(time::now());
+                        let link_id = *link.engine.link_id();
+                        LinkDataResult::ResourceAdv {
+                            link_id,
+                            inbound_actions,
+                            plaintext,
                         }
-                        Err(_) => LinkDataResult::Error,
                     }
-                }
-                constants::CONTEXT_RESOURCE_REQ => {
-                    match link.engine.decrypt(&packet.data) {
-                        Ok(plaintext) => {
-                            let inbound_actions = link.engine.record_inbound(time::now());
-                            let link_id = *link.engine.link_id();
-                            LinkDataResult::ResourceReq { link_id, inbound_actions, plaintext }
+                    Err(_) => LinkDataResult::Error,
+                },
+                constants::CONTEXT_RESOURCE_REQ => match link.engine.decrypt(&packet.data) {
+                    Ok(plaintext) => {
+                        let inbound_actions = link.engine.record_inbound(time::now());
+                        let link_id = *link.engine.link_id();
+                        LinkDataResult::ResourceReq {
+                            link_id,
+                            inbound_actions,
+                            plaintext,
                         }
-                        Err(_) => LinkDataResult::Error,
                     }
-                }
-                constants::CONTEXT_RESOURCE_HMU => {
-                    match link.engine.decrypt(&packet.data) {
-                        Ok(plaintext) => {
-                            let inbound_actions = link.engine.record_inbound(time::now());
-                            let link_id = *link.engine.link_id();
-                            LinkDataResult::ResourceHmu { link_id, inbound_actions, plaintext }
+                    Err(_) => LinkDataResult::Error,
+                },
+                constants::CONTEXT_RESOURCE_HMU => match link.engine.decrypt(&packet.data) {
+                    Ok(plaintext) => {
+                        let inbound_actions = link.engine.record_inbound(time::now());
+                        let link_id = *link.engine.link_id();
+                        LinkDataResult::ResourceHmu {
+                            link_id,
+                            inbound_actions,
+                            plaintext,
                         }
-                        Err(_) => LinkDataResult::Error,
                     }
-                }
+                    Err(_) => LinkDataResult::Error,
+                },
                 constants::CONTEXT_RESOURCE => {
                     // Resource parts are NOT link-decrypted — they're pre-encrypted by ResourceSender
                     let inbound_actions = link.engine.record_inbound(time::now());
                     let link_id = *link.engine.link_id();
-                    LinkDataResult::ResourcePart { link_id, inbound_actions, raw_data: packet.data.clone() }
-                }
-                constants::CONTEXT_RESOURCE_PRF => {
-                    match link.engine.decrypt(&packet.data) {
-                        Ok(plaintext) => {
-                            let inbound_actions = link.engine.record_inbound(time::now());
-                            let link_id = *link.engine.link_id();
-                            LinkDataResult::ResourcePrf { link_id, inbound_actions, plaintext }
-                        }
-                        Err(_) => LinkDataResult::Error,
+                    LinkDataResult::ResourcePart {
+                        link_id,
+                        inbound_actions,
+                        raw_data: packet.data.clone(),
                     }
                 }
+                constants::CONTEXT_RESOURCE_PRF => match link.engine.decrypt(&packet.data) {
+                    Ok(plaintext) => {
+                        let inbound_actions = link.engine.record_inbound(time::now());
+                        let link_id = *link.engine.link_id();
+                        LinkDataResult::ResourcePrf {
+                            link_id,
+                            inbound_actions,
+                            plaintext,
+                        }
+                    }
+                    Err(_) => LinkDataResult::Error,
+                },
                 constants::CONTEXT_RESOURCE_ICL => {
                     let _ = link.engine.decrypt(&packet.data); // decrypt to validate
                     let inbound_actions = link.engine.record_inbound(time::now());
                     let link_id = *link.engine.link_id();
-                    LinkDataResult::ResourceIcl { link_id, inbound_actions }
+                    LinkDataResult::ResourceIcl {
+                        link_id,
+                        inbound_actions,
+                    }
                 }
                 constants::CONTEXT_RESOURCE_RCL => {
                     let _ = link.engine.decrypt(&packet.data); // decrypt to validate
                     let inbound_actions = link.engine.record_inbound(time::now());
                     let link_id = *link.engine.link_id();
-                    LinkDataResult::ResourceRcl { link_id, inbound_actions }
-                }
-                _ => {
-                    match link.engine.decrypt(&packet.data) {
-                        Ok(plaintext) => {
-                            let inbound_actions = link.engine.record_inbound(time::now());
-                            let link_id = *link.engine.link_id();
-                            LinkDataResult::Generic { link_id, inbound_actions, plaintext, context: packet.context, packet_hash }
-                        }
-                        Err(_) => LinkDataResult::Error,
+                    LinkDataResult::ResourceRcl {
+                        link_id,
+                        inbound_actions,
                     }
                 }
+                _ => match link.engine.decrypt(&packet.data) {
+                    Ok(plaintext) => {
+                        let inbound_actions = link.engine.record_inbound(time::now());
+                        let link_id = *link.engine.link_id();
+                        LinkDataResult::Generic {
+                            link_id,
+                            inbound_actions,
+                            plaintext,
+                            context: packet.context,
+                            packet_hash,
+                        }
+                    }
+                    Err(_) => LinkDataResult::Error,
+                },
             }
         }; // mutable borrow of self.links dropped here
 
         // Second pass: process results using self methods
         let mut actions = Vec::new();
         match result {
-            LinkDataResult::Lrrtt { link_id, link_actions } => {
+            LinkDataResult::Lrrtt {
+                link_id,
+                link_actions,
+            } => {
                 actions.extend(self.process_link_actions(&link_id, &link_actions));
                 // Initialize channel
                 if let Some(link) = self.links.get_mut(&link_id) {
@@ -700,10 +814,16 @@ impl LinkManager {
                     }
                 }
             }
-            LinkDataResult::Identify { link_id, link_actions } => {
+            LinkDataResult::Identify {
+                link_id,
+                link_actions,
+            } => {
                 actions.extend(self.process_link_actions(&link_id, &link_actions));
             }
-            LinkDataResult::Keepalive { link_id, inbound_actions } => {
+            LinkDataResult::Keepalive {
+                link_id,
+                inbound_actions,
+            } => {
                 actions.extend(self.process_link_actions(&link_id, &inbound_actions));
                 // record_inbound() already updated last_inbound, so the link
                 // won't go stale.  The regular tick() keepalive mechanism will
@@ -711,10 +831,17 @@ impl LinkManager {
                 // Do NOT reply here — unconditional replies create an infinite
                 // ping-pong loop between the two link endpoints.
             }
-            LinkDataResult::LinkClose { link_id, teardown_actions } => {
+            LinkDataResult::LinkClose {
+                link_id,
+                teardown_actions,
+            } => {
                 actions.extend(self.process_link_actions(&link_id, &teardown_actions));
             }
-            LinkDataResult::Channel { link_id, inbound_actions, plaintext } => {
+            LinkDataResult::Channel {
+                link_id,
+                inbound_actions,
+                plaintext,
+            } => {
                 actions.extend(self.process_link_actions(&link_id, &inbound_actions));
                 // Feed plaintext to channel
                 if let Some(link) = self.links.get_mut(&link_id) {
@@ -726,16 +853,30 @@ impl LinkManager {
                     }
                 }
             }
-            LinkDataResult::Request { link_id, inbound_actions, plaintext } => {
+            LinkDataResult::Request {
+                link_id,
+                inbound_actions,
+                plaintext,
+            } => {
                 actions.extend(self.process_link_actions(&link_id, &inbound_actions));
                 actions.extend(self.handle_request(&link_id, &plaintext, rng));
             }
-            LinkDataResult::Response { link_id, inbound_actions, plaintext } => {
+            LinkDataResult::Response {
+                link_id,
+                inbound_actions,
+                plaintext,
+            } => {
                 actions.extend(self.process_link_actions(&link_id, &inbound_actions));
                 // Unpack msgpack response: [Bin(request_id), response_value]
                 actions.extend(self.handle_response(&link_id, &plaintext));
             }
-            LinkDataResult::Generic { link_id, inbound_actions, plaintext, context, packet_hash } => {
+            LinkDataResult::Generic {
+                link_id,
+                inbound_actions,
+                plaintext,
+                context,
+                packet_hash,
+            } => {
                 actions.extend(self.process_link_actions(&link_id, &inbound_actions));
                 actions.push(LinkManagerAction::LinkDataReceived {
                     link_id,
@@ -759,8 +900,12 @@ impl LinkManager {
                             packet_type: constants::PACKET_TYPE_PROOF,
                         };
                         if let Ok(pkt) = RawPacket::pack(
-                            flags, 0, &link_id, None,
-                            constants::CONTEXT_NONE, &proof_data,
+                            flags,
+                            0,
+                            &link_id,
+                            None,
+                            constants::CONTEXT_NONE,
+                            &proof_data,
                         ) {
                             actions.push(LinkManagerAction::SendPacket {
                                 raw: pkt.raw,
@@ -771,31 +916,57 @@ impl LinkManager {
                     }
                 }
             }
-            LinkDataResult::ResourceAdv { link_id, inbound_actions, plaintext } => {
+            LinkDataResult::ResourceAdv {
+                link_id,
+                inbound_actions,
+                plaintext,
+            } => {
                 actions.extend(self.process_link_actions(&link_id, &inbound_actions));
                 actions.extend(self.handle_resource_adv(&link_id, &plaintext, rng));
             }
-            LinkDataResult::ResourceReq { link_id, inbound_actions, plaintext } => {
+            LinkDataResult::ResourceReq {
+                link_id,
+                inbound_actions,
+                plaintext,
+            } => {
                 actions.extend(self.process_link_actions(&link_id, &inbound_actions));
                 actions.extend(self.handle_resource_req(&link_id, &plaintext, rng));
             }
-            LinkDataResult::ResourceHmu { link_id, inbound_actions, plaintext } => {
+            LinkDataResult::ResourceHmu {
+                link_id,
+                inbound_actions,
+                plaintext,
+            } => {
                 actions.extend(self.process_link_actions(&link_id, &inbound_actions));
                 actions.extend(self.handle_resource_hmu(&link_id, &plaintext, rng));
             }
-            LinkDataResult::ResourcePart { link_id, inbound_actions, raw_data } => {
+            LinkDataResult::ResourcePart {
+                link_id,
+                inbound_actions,
+                raw_data,
+            } => {
                 actions.extend(self.process_link_actions(&link_id, &inbound_actions));
                 actions.extend(self.handle_resource_part(&link_id, &raw_data, rng));
             }
-            LinkDataResult::ResourcePrf { link_id, inbound_actions, plaintext } => {
+            LinkDataResult::ResourcePrf {
+                link_id,
+                inbound_actions,
+                plaintext,
+            } => {
                 actions.extend(self.process_link_actions(&link_id, &inbound_actions));
                 actions.extend(self.handle_resource_prf(&link_id, &plaintext));
             }
-            LinkDataResult::ResourceIcl { link_id, inbound_actions } => {
+            LinkDataResult::ResourceIcl {
+                link_id,
+                inbound_actions,
+            } => {
                 actions.extend(self.process_link_actions(&link_id, &inbound_actions));
                 actions.extend(self.handle_resource_icl(&link_id));
             }
-            LinkDataResult::ResourceRcl { link_id, inbound_actions } => {
+            LinkDataResult::ResourceRcl {
+                link_id,
+                inbound_actions,
+            } => {
                 actions.extend(self.process_link_actions(&link_id, &inbound_actions));
                 actions.extend(self.handle_resource_rcl(&link_id));
             }
@@ -835,7 +1006,9 @@ impl LinkManager {
 
         // Check if this is a management path (handled by the driver)
         if self.management_paths.contains(&path_hash) {
-            let remote_identity = self.links.get(link_id)
+            let remote_identity = self
+                .links
+                .get(link_id)
                 .and_then(|l| l.remote_identity)
                 .map(|(h, k)| (h, k));
             return vec![LinkManagerAction::ManagementRequest {
@@ -848,14 +1021,20 @@ impl LinkManager {
         }
 
         // Look up handler by path_hash
-        let handler_idx = self.request_handlers.iter().position(|h| h.path_hash == path_hash);
+        let handler_idx = self
+            .request_handlers
+            .iter()
+            .position(|h| h.path_hash == path_hash);
         let handler_idx = match handler_idx {
             Some(i) => i,
             None => return Vec::new(),
         };
 
         // Check ACL
-        let remote_identity = self.links.get(link_id).and_then(|l| l.remote_identity.as_ref());
+        let remote_identity = self
+            .links
+            .get(link_id)
+            .and_then(|l| l.remote_identity.as_ref());
         let handler = &self.request_handlers[handler_idx];
         if let Some(ref allowed) = handler.allowed_list {
             match remote_identity {
@@ -899,10 +1078,7 @@ impl LinkManager {
         let response_value = msgpack::unpack_exact(response_data)
             .unwrap_or_else(|_| Value::Bin(response_data.to_vec()));
 
-        let response_array = Value::Array(vec![
-            Value::Bin(request_id.to_vec()),
-            response_value,
-        ]);
+        let response_array = Value::Array(vec![Value::Bin(request_id.to_vec()), response_value]);
         let response_plaintext = msgpack::pack(&response_array);
 
         let mut actions = Vec::new();
@@ -916,7 +1092,12 @@ impl LinkManager {
                     packet_type: constants::PACKET_TYPE_DATA,
                 };
                 if let Ok(pkt) = RawPacket::pack(
-                    flags, 0, link_id, None, constants::CONTEXT_RESPONSE, &encrypted,
+                    flags,
+                    0,
+                    link_id,
+                    None,
+                    constants::CONTEXT_RESPONSE,
+                    &encrypted,
                 ) {
                     actions.push(LinkManagerAction::SendPacket {
                         raw: pkt.raw,
@@ -969,8 +1150,7 @@ impl LinkManager {
         let path_hash = compute_path_hash(path);
 
         // Decode data bytes to msgpack Value (or use Bin if can't decode)
-        let data_value = msgpack::unpack_exact(data)
-            .unwrap_or_else(|_| Value::Bin(data.to_vec()));
+        let data_value = msgpack::unpack_exact(data).unwrap_or_else(|_| Value::Bin(data.to_vec()));
 
         // Python-compatible format: msgpack([timestamp, Bin(path_hash), data_value])
         let request_array = Value::Array(vec![
@@ -995,7 +1175,12 @@ impl LinkManager {
 
         let mut actions = Vec::new();
         if let Ok(pkt) = RawPacket::pack(
-            flags, 0, link_id, None, constants::CONTEXT_REQUEST, &encrypted,
+            flags,
+            0,
+            link_id,
+            None,
+            constants::CONTEXT_REQUEST,
+            &encrypted,
         ) {
             actions.push(LinkManagerAction::SendPacket {
                 raw: pkt.raw,
@@ -1037,9 +1222,7 @@ impl LinkManager {
         };
 
         let mut actions = Vec::new();
-        if let Ok(pkt) = RawPacket::pack(
-            flags, 0, link_id, None, context, &encrypted,
-        ) {
+        if let Ok(pkt) = RawPacket::pack(flags, 0, link_id, None, context, &encrypted) {
             actions.push(LinkManagerAction::SendPacket {
                 raw: pkt.raw,
                 dest_type: constants::DESTINATION_LINK,
@@ -1076,7 +1259,12 @@ impl LinkManager {
 
         let mut actions = Vec::new();
         if let Ok(pkt) = RawPacket::pack(
-            flags, 0, link_id, None, constants::CONTEXT_LINKIDENTIFY, &encrypted,
+            flags,
+            0,
+            link_id,
+            None,
+            constants::CONTEXT_LINKIDENTIFY,
+            &encrypted,
         ) {
             actions.push(LinkManagerAction::SendPacket {
                 raw: pkt.raw,
@@ -1109,9 +1297,8 @@ impl LinkManager {
             destination_type: constants::DESTINATION_LINK,
             packet_type: constants::PACKET_TYPE_DATA,
         };
-        if let Ok(pkt) = RawPacket::pack(
-            flags, 0, link_id, None, constants::CONTEXT_LINKCLOSE, &[],
-        ) {
+        if let Ok(pkt) = RawPacket::pack(flags, 0, link_id, None, constants::CONTEXT_LINKCLOSE, &[])
+        {
             actions.push(LinkManagerAction::SendPacket {
                 raw: pkt.raw,
                 dest_type: constants::DESTINATION_LINK,
@@ -1123,11 +1310,7 @@ impl LinkManager {
     }
 
     /// Handle a response on a link.
-    fn handle_response(
-        &self,
-        link_id: &LinkId,
-        plaintext: &[u8],
-    ) -> Vec<LinkManagerAction> {
+    fn handle_response(&self, link_id: &LinkId, plaintext: &[u8]) -> Vec<LinkManagerAction> {
         use rns_core::msgpack;
 
         // Python-compatible response: msgpack([Bin(request_id), response_value])
@@ -1230,7 +1413,10 @@ impl LinkManager {
         };
 
         let now = time::now();
-        let idx = link.incoming_resources.iter().position(|r| r.resource_hash == resource_hash);
+        let idx = link
+            .incoming_resources
+            .iter()
+            .position(|r| r.resource_hash == resource_hash);
         let idx = match idx {
             Some(i) => i,
             None => return Vec::new(),
@@ -1331,7 +1517,8 @@ impl LinkManager {
             let decrypt_fn = |ciphertext: &[u8]| -> Result<Vec<u8>, ()> {
                 link.engine.decrypt(ciphertext).map_err(|_| ())
             };
-            let assemble_actions = link.incoming_resources[idx].assemble(&decrypt_fn, &Bzip2Compressor);
+            let assemble_actions =
+                link.incoming_resources[idx].assemble(&decrypt_fn, &Bzip2Compressor);
             all_actions.extend(assemble_actions);
         }
 
@@ -1378,18 +1565,14 @@ impl LinkManager {
         }
 
         // Clean up completed/failed senders
-        link.outgoing_resources.retain(|s| {
-            s.status < rns_core::resource::ResourceStatus::Complete
-        });
+        link.outgoing_resources
+            .retain(|s| s.status < rns_core::resource::ResourceStatus::Complete);
 
         actions
     }
 
     /// Handle cancel from initiator (CONTEXT_RESOURCE_ICL).
-    fn handle_resource_icl(
-        &mut self,
-        link_id: &LinkId,
-    ) -> Vec<LinkManagerAction> {
+    fn handle_resource_icl(&mut self, link_id: &LinkId) -> Vec<LinkManagerAction> {
         let link = match self.links.get_mut(link_id) {
             Some(l) => l,
             None => return Vec::new(),
@@ -1407,17 +1590,13 @@ impl LinkManager {
                 }
             }
         }
-        link.incoming_resources.retain(|r| {
-            r.status < rns_core::resource::ResourceStatus::Complete
-        });
+        link.incoming_resources
+            .retain(|r| r.status < rns_core::resource::ResourceStatus::Complete);
         actions
     }
 
     /// Handle cancel from receiver (CONTEXT_RESOURCE_RCL).
-    fn handle_resource_rcl(
-        &mut self,
-        link_id: &LinkId,
-    ) -> Vec<LinkManagerAction> {
+    fn handle_resource_rcl(&mut self, link_id: &LinkId) -> Vec<LinkManagerAction> {
         let link = match self.links.get_mut(link_id) {
             Some(l) => l,
             None => return Vec::new(),
@@ -1435,9 +1614,8 @@ impl LinkManager {
                 }
             }
         }
-        link.outgoing_resources.retain(|s| {
-            s.status < rns_core::resource::ResourceStatus::Complete
-        });
+        link.outgoing_resources
+            .retain(|s| s.status < rns_core::resource::ResourceStatus::Complete);
         actions
     }
 
@@ -1460,48 +1638,62 @@ impl LinkManager {
                     // Link-encrypt and send as CONTEXT_RESOURCE_ADV
                     if let Ok(encrypted) = link.engine.encrypt(&data, rng) {
                         result.extend(self.build_link_packet(
-                            link_id, constants::CONTEXT_RESOURCE_ADV, &encrypted,
+                            link_id,
+                            constants::CONTEXT_RESOURCE_ADV,
+                            &encrypted,
                         ));
                     }
                 }
                 ResourceAction::SendPart(data) => {
                     // Parts are NOT link-encrypted — send raw as CONTEXT_RESOURCE
                     result.extend(self.build_link_packet(
-                        link_id, constants::CONTEXT_RESOURCE, &data,
+                        link_id,
+                        constants::CONTEXT_RESOURCE,
+                        &data,
                     ));
                 }
                 ResourceAction::SendRequest(data) => {
                     if let Ok(encrypted) = link.engine.encrypt(&data, rng) {
                         result.extend(self.build_link_packet(
-                            link_id, constants::CONTEXT_RESOURCE_REQ, &encrypted,
+                            link_id,
+                            constants::CONTEXT_RESOURCE_REQ,
+                            &encrypted,
                         ));
                     }
                 }
                 ResourceAction::SendHmu(data) => {
                     if let Ok(encrypted) = link.engine.encrypt(&data, rng) {
                         result.extend(self.build_link_packet(
-                            link_id, constants::CONTEXT_RESOURCE_HMU, &encrypted,
+                            link_id,
+                            constants::CONTEXT_RESOURCE_HMU,
+                            &encrypted,
                         ));
                     }
                 }
                 ResourceAction::SendProof(data) => {
                     if let Ok(encrypted) = link.engine.encrypt(&data, rng) {
                         result.extend(self.build_link_packet(
-                            link_id, constants::CONTEXT_RESOURCE_PRF, &encrypted,
+                            link_id,
+                            constants::CONTEXT_RESOURCE_PRF,
+                            &encrypted,
                         ));
                     }
                 }
                 ResourceAction::SendCancelInitiator(data) => {
                     if let Ok(encrypted) = link.engine.encrypt(&data, rng) {
                         result.extend(self.build_link_packet(
-                            link_id, constants::CONTEXT_RESOURCE_ICL, &encrypted,
+                            link_id,
+                            constants::CONTEXT_RESOURCE_ICL,
+                            &encrypted,
                         ));
                     }
                 }
                 ResourceAction::SendCancelReceiver(data) => {
                     if let Ok(encrypted) = link.engine.encrypt(&data, rng) {
                         result.extend(self.build_link_packet(
-                            link_id, constants::CONTEXT_RESOURCE_RCL, &encrypted,
+                            link_id,
+                            constants::CONTEXT_RESOURCE_RCL,
+                            &encrypted,
                         ));
                     }
                 }
@@ -1582,7 +1774,9 @@ impl LinkManager {
         // but link.engine.encrypt needs &mut dyn Rng
         let enc_rng = std::cell::RefCell::new(rns_crypto::OsRng);
         let encrypt_fn = |plaintext: &[u8]| -> Vec<u8> {
-            link.engine.encrypt(plaintext, &mut *enc_rng.borrow_mut()).unwrap_or_else(|_| plaintext.to_vec())
+            link.engine
+                .encrypt(plaintext, &mut *enc_rng.borrow_mut())
+                .unwrap_or_else(|_| plaintext.to_vec())
         };
 
         let sender = match ResourceSender::new(
@@ -1593,14 +1787,14 @@ impl LinkManager {
             &Bzip2Compressor,
             rng,
             now,
-            true, // auto_compress
+            true,  // auto_compress
             false, // is_response
             None,  // request_id
             1,     // segment_index
             1,     // total_segments
             None,  // original_hash
             link_rtt,
-            6.0,   // traffic_timeout_factor
+            6.0, // traffic_timeout_factor
         ) {
             Ok(s) => s,
             Err(e) => {
@@ -1698,9 +1892,9 @@ impl LinkManager {
                     destination_type: constants::DESTINATION_LINK,
                     packet_type: constants::PACKET_TYPE_DATA,
                 };
-                if let Ok(pkt) = RawPacket::pack(
-                    flags, 0, link_id, None, constants::CONTEXT_KEEPALIVE, &[],
-                ) {
+                if let Ok(pkt) =
+                    RawPacket::pack(flags, 0, link_id, None, constants::CONTEXT_KEEPALIVE, &[])
+                {
                     all_actions.push(LinkManagerAction::SendPacket {
                         raw: pkt.raw,
                         dest_type: constants::DESTINATION_LINK,
@@ -1734,12 +1928,10 @@ impl LinkManager {
             }
 
             // Clean up completed/failed resources
-            link.outgoing_resources.retain(|s| {
-                s.status < rns_core::resource::ResourceStatus::Complete
-            });
-            link.incoming_resources.retain(|r| {
-                r.status < rns_core::resource::ResourceStatus::Assembling
-            });
+            link.outgoing_resources
+                .retain(|s| s.status < rns_core::resource::ResourceStatus::Complete);
+            link.incoming_resources
+                .retain(|r| r.status < rns_core::resource::ResourceStatus::Assembling);
 
             let _ = link;
             all_actions.extend(self.process_resource_actions(link_id, sender_actions, rng));
@@ -1747,7 +1939,9 @@ impl LinkManager {
         }
 
         // Clean up closed links
-        let closed: Vec<LinkId> = self.links.iter()
+        let closed: Vec<LinkId> = self
+            .links
+            .iter()
             .filter(|(_, l)| l.engine.state() == LinkState::Closed)
             .map(|(id, _)| *id)
             .collect();
@@ -1854,23 +2048,31 @@ impl LinkManager {
     }
 
     /// Convert LinkActions to LinkManagerActions.
-    fn process_link_actions(&self, link_id: &LinkId, actions: &[LinkAction]) -> Vec<LinkManagerAction> {
+    fn process_link_actions(
+        &self,
+        link_id: &LinkId,
+        actions: &[LinkAction],
+    ) -> Vec<LinkManagerAction> {
         let mut result = Vec::new();
         for action in actions {
             match action {
-                LinkAction::StateChanged { new_state, reason, .. } => {
-                    match new_state {
-                        LinkState::Closed => {
-                            result.push(LinkManagerAction::LinkClosed {
-                                link_id: *link_id,
-                                reason: *reason,
-                            });
-                        }
-                        _ => {}
+                LinkAction::StateChanged {
+                    new_state, reason, ..
+                } => match new_state {
+                    LinkState::Closed => {
+                        result.push(LinkManagerAction::LinkClosed {
+                            link_id: *link_id,
+                            reason: *reason,
+                        });
                     }
-                }
-                LinkAction::LinkEstablished { rtt, is_initiator, .. } => {
-                    let dest_hash = self.links.get(link_id)
+                    _ => {}
+                },
+                LinkAction::LinkEstablished {
+                    rtt, is_initiator, ..
+                } => {
+                    let dest_hash = self
+                        .links
+                        .get(link_id)
                         .map(|l| l.dest_hash)
                         .unwrap_or([0u8; 16]);
                     result.push(LinkManagerAction::LinkEstablished {
@@ -1880,7 +2082,11 @@ impl LinkManager {
                         is_initiator: *is_initiator,
                     });
                 }
-                LinkAction::RemoteIdentified { identity_hash, public_key, .. } => {
+                LinkAction::RemoteIdentified {
+                    identity_hash,
+                    public_key,
+                    ..
+                } => {
                     result.push(LinkManagerAction::RemoteIdentified {
                         link_id: *link_id,
                         identity_hash: *identity_hash,
@@ -1917,7 +2123,12 @@ impl LinkManager {
                                 packet_type: constants::PACKET_TYPE_DATA,
                             };
                             if let Ok(pkt) = RawPacket::pack(
-                                flags, 0, link_id, None, constants::CONTEXT_CHANNEL, &encrypted,
+                                flags,
+                                0,
+                                link_id,
+                                None,
+                                constants::CONTEXT_CHANNEL,
+                                &encrypted,
                             ) {
                                 result.push(LinkManagerAction::SendPacket {
                                     raw: pkt.raw,
@@ -1928,7 +2139,9 @@ impl LinkManager {
                         }
                     }
                 }
-                rns_core::channel::ChannelAction::MessageReceived { msgtype, payload, .. } => {
+                rns_core::channel::ChannelAction::MessageReceived {
+                    msgtype, payload, ..
+                } => {
                     result.push(LinkManagerAction::ChannelMessageReceived {
                         link_id: *link_id,
                         msgtype,
@@ -1979,7 +2192,12 @@ mod tests {
         let (sig_prv, sig_pub_bytes) = make_dest_keys(&mut rng);
         let dest_hash = [0xDD; 16];
 
-        mgr.register_link_destination(dest_hash, sig_prv, sig_pub_bytes, ResourceStrategy::AcceptNone);
+        mgr.register_link_destination(
+            dest_hash,
+            sig_prv,
+            sig_pub_bytes,
+            ResourceStrategy::AcceptNone,
+        );
         assert!(mgr.is_link_destination(&dest_hash));
 
         mgr.deregister_link_destination(&dest_hash);
@@ -1993,11 +2211,20 @@ mod tests {
         let dest_hash = [0xDD; 16];
 
         let sig_pub_bytes = [0xAA; 32]; // dummy sig pub for test
-        let (link_id, actions) = mgr.create_link(&dest_hash, &sig_pub_bytes, 1, constants::MTU as u32, &mut rng);
+        let (link_id, actions) = mgr.create_link(
+            &dest_hash,
+            &sig_pub_bytes,
+            1,
+            constants::MTU as u32,
+            &mut rng,
+        );
         assert_ne!(link_id, [0u8; 16]);
         // Should have RegisterLinkDest + SendPacket
         assert_eq!(actions.len(), 2);
-        assert!(matches!(actions[0], LinkManagerAction::RegisterLinkDest { .. }));
+        assert!(matches!(
+            actions[0],
+            LinkManagerAction::RegisterLinkDest { .. }
+        ));
         assert!(matches!(actions[1], LinkManagerAction::SendPacket { .. }));
 
         // Link should be in Pending state
@@ -2012,13 +2239,24 @@ mod tests {
         // Setup responder
         let mut responder_mgr = LinkManager::new();
         let (sig_prv, sig_pub_bytes) = make_dest_keys(&mut rng);
-        responder_mgr.register_link_destination(dest_hash, sig_prv, sig_pub_bytes, ResourceStrategy::AcceptNone);
+        responder_mgr.register_link_destination(
+            dest_hash,
+            sig_prv,
+            sig_pub_bytes,
+            ResourceStrategy::AcceptNone,
+        );
 
         // Setup initiator
         let mut initiator_mgr = LinkManager::new();
 
         // Step 1: Initiator creates link (needs dest signing pub key for LRPROOF verification)
-        let (link_id, init_actions) = initiator_mgr.create_link(&dest_hash, &sig_pub_bytes, 1, constants::MTU as u32, &mut rng);
+        let (link_id, init_actions) = initiator_mgr.create_link(
+            &dest_hash,
+            &sig_pub_bytes,
+            1,
+            constants::MTU as u32,
+            &mut rng,
+        );
         assert_eq!(init_actions.len(), 2);
 
         // Extract the LINKREQUEST packet raw bytes
@@ -2040,7 +2278,10 @@ mod tests {
         );
         // Should have RegisterLinkDest + SendPacket(LRPROOF)
         assert!(resp_actions.len() >= 2);
-        assert!(matches!(resp_actions[0], LinkManagerAction::RegisterLinkDest { .. }));
+        assert!(matches!(
+            resp_actions[0],
+            LinkManagerAction::RegisterLinkDest { .. }
+        ));
 
         // Extract LRPROOF packet
         let lrproof_raw = match &resp_actions[1] {
@@ -2059,14 +2300,19 @@ mod tests {
         );
 
         // Should have LinkEstablished + SendPacket(LRRTT)
-        let has_established = init_actions2.iter().any(|a| matches!(a, LinkManagerAction::LinkEstablished { .. }));
+        let has_established = init_actions2
+            .iter()
+            .any(|a| matches!(a, LinkManagerAction::LinkEstablished { .. }));
         assert!(has_established, "Initiator should emit LinkEstablished");
 
         // Extract LRRTT
-        let lrrtt_raw = init_actions2.iter().find_map(|a| match a {
-            LinkManagerAction::SendPacket { raw, .. } => Some(raw.clone()),
-            _ => None,
-        }).expect("Should have LRRTT SendPacket");
+        let lrrtt_raw = init_actions2
+            .iter()
+            .find_map(|a| match a {
+                LinkManagerAction::SendPacket { raw, .. } => Some(raw.clone()),
+                _ => None,
+            })
+            .expect("Should have LRRTT SendPacket");
 
         // Step 4: Responder handles LRRTT
         let lrrtt_packet = RawPacket::unpack(&lrrtt_raw).unwrap();
@@ -2079,7 +2325,9 @@ mod tests {
             &mut rng,
         );
 
-        let has_established = resp_actions2.iter().any(|a| matches!(a, LinkManagerAction::LinkEstablished { .. }));
+        let has_established = resp_actions2
+            .iter()
+            .any(|a| matches!(a, LinkManagerAction::LinkEstablished { .. }));
         assert!(has_established, "Responder should emit LinkEstablished");
 
         // Both sides should be Active
@@ -2097,23 +2345,53 @@ mod tests {
         let dest_hash = [0xDD; 16];
         let mut resp_mgr = LinkManager::new();
         let (sig_prv, sig_pub_bytes) = make_dest_keys(&mut rng);
-        resp_mgr.register_link_destination(dest_hash, sig_prv, sig_pub_bytes, ResourceStrategy::AcceptNone);
+        resp_mgr.register_link_destination(
+            dest_hash,
+            sig_prv,
+            sig_pub_bytes,
+            ResourceStrategy::AcceptNone,
+        );
         let mut init_mgr = LinkManager::new();
 
         // Handshake
-        let (link_id, init_actions) = init_mgr.create_link(&dest_hash, &sig_pub_bytes, 1, constants::MTU as u32, &mut rng);
+        let (link_id, init_actions) = init_mgr.create_link(
+            &dest_hash,
+            &sig_pub_bytes,
+            1,
+            constants::MTU as u32,
+            &mut rng,
+        );
         let lr_raw = extract_send_packet(&init_actions);
         let lr_pkt = RawPacket::unpack(&lr_raw).unwrap();
-        let resp_actions = resp_mgr.handle_local_delivery(lr_pkt.destination_hash, &lr_raw, lr_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng);
+        let resp_actions = resp_mgr.handle_local_delivery(
+            lr_pkt.destination_hash,
+            &lr_raw,
+            lr_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
         let lrproof_raw = extract_send_packet_at(&resp_actions, 1);
         let lrproof_pkt = RawPacket::unpack(&lrproof_raw).unwrap();
-        let init_actions2 = init_mgr.handle_local_delivery(lrproof_pkt.destination_hash, &lrproof_raw, lrproof_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng);
+        let init_actions2 = init_mgr.handle_local_delivery(
+            lrproof_pkt.destination_hash,
+            &lrproof_raw,
+            lrproof_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
         let lrrtt_raw = extract_any_send_packet(&init_actions2);
         let lrrtt_pkt = RawPacket::unpack(&lrrtt_raw).unwrap();
-        resp_mgr.handle_local_delivery(lrrtt_pkt.destination_hash, &lrrtt_raw, lrrtt_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng);
+        resp_mgr.handle_local_delivery(
+            lrrtt_pkt.destination_hash,
+            &lrrtt_raw,
+            lrrtt_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
 
         // Send data from initiator to responder
-        let actions = init_mgr.send_on_link(&link_id, b"hello link!", constants::CONTEXT_NONE, &mut rng);
+        let actions =
+            init_mgr.send_on_link(&link_id, b"hello link!", constants::CONTEXT_NONE, &mut rng);
         assert_eq!(actions.len(), 1);
         assert!(matches!(actions[0], LinkManagerAction::SendPacket { .. }));
     }
@@ -2124,7 +2402,12 @@ mod tests {
         let dest_hash = [0xDD; 16];
         let mut resp_mgr = LinkManager::new();
         let (sig_prv, sig_pub_bytes) = make_dest_keys(&mut rng);
-        resp_mgr.register_link_destination(dest_hash, sig_prv, sig_pub_bytes, ResourceStrategy::AcceptNone);
+        resp_mgr.register_link_destination(
+            dest_hash,
+            sig_prv,
+            sig_pub_bytes,
+            ResourceStrategy::AcceptNone,
+        );
 
         // Register a request handler
         resp_mgr.register_request_handler("/status", None, |_link_id, _path, _data, _remote| {
@@ -2134,16 +2417,40 @@ mod tests {
         let mut init_mgr = LinkManager::new();
 
         // Complete handshake
-        let (link_id, init_actions) = init_mgr.create_link(&dest_hash, &sig_pub_bytes, 1, constants::MTU as u32, &mut rng);
+        let (link_id, init_actions) = init_mgr.create_link(
+            &dest_hash,
+            &sig_pub_bytes,
+            1,
+            constants::MTU as u32,
+            &mut rng,
+        );
         let lr_raw = extract_send_packet(&init_actions);
         let lr_pkt = RawPacket::unpack(&lr_raw).unwrap();
-        let resp_actions = resp_mgr.handle_local_delivery(lr_pkt.destination_hash, &lr_raw, lr_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng);
+        let resp_actions = resp_mgr.handle_local_delivery(
+            lr_pkt.destination_hash,
+            &lr_raw,
+            lr_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
         let lrproof_raw = extract_send_packet_at(&resp_actions, 1);
         let lrproof_pkt = RawPacket::unpack(&lrproof_raw).unwrap();
-        let init_actions2 = init_mgr.handle_local_delivery(lrproof_pkt.destination_hash, &lrproof_raw, lrproof_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng);
+        let init_actions2 = init_mgr.handle_local_delivery(
+            lrproof_pkt.destination_hash,
+            &lrproof_raw,
+            lrproof_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
         let lrrtt_raw = extract_any_send_packet(&init_actions2);
         let lrrtt_pkt = RawPacket::unpack(&lrrtt_raw).unwrap();
-        resp_mgr.handle_local_delivery(lrrtt_pkt.destination_hash, &lrrtt_raw, lrrtt_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng);
+        resp_mgr.handle_local_delivery(
+            lrrtt_pkt.destination_hash,
+            &lrrtt_raw,
+            lrrtt_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
 
         // Send request from initiator
         let req_actions = init_mgr.send_request(&link_id, "/status", b"query", &mut rng);
@@ -2153,11 +2460,17 @@ mod tests {
         let req_raw = extract_send_packet_from(&req_actions);
         let req_pkt = RawPacket::unpack(&req_raw).unwrap();
         let resp_actions = resp_mgr.handle_local_delivery(
-            req_pkt.destination_hash, &req_raw, req_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
+            req_pkt.destination_hash,
+            &req_raw,
+            req_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
         );
 
         // Should have a response SendPacket
-        let has_response = resp_actions.iter().any(|a| matches!(a, LinkManagerAction::SendPacket { .. }));
+        let has_response = resp_actions
+            .iter()
+            .any(|a| matches!(a, LinkManagerAction::SendPacket { .. }));
         assert!(has_response, "Handler should produce a response packet");
     }
 
@@ -2167,7 +2480,12 @@ mod tests {
         let dest_hash = [0xDD; 16];
         let mut resp_mgr = LinkManager::new();
         let (sig_prv, sig_pub_bytes) = make_dest_keys(&mut rng);
-        resp_mgr.register_link_destination(dest_hash, sig_prv, sig_pub_bytes, ResourceStrategy::AcceptNone);
+        resp_mgr.register_link_destination(
+            dest_hash,
+            sig_prv,
+            sig_pub_bytes,
+            ResourceStrategy::AcceptNone,
+        );
 
         // Register handler with ACL (only allow specific identity)
         resp_mgr.register_request_handler(
@@ -2179,27 +2497,57 @@ mod tests {
         let mut init_mgr = LinkManager::new();
 
         // Complete handshake (without identification)
-        let (link_id, init_actions) = init_mgr.create_link(&dest_hash, &sig_pub_bytes, 1, constants::MTU as u32, &mut rng);
+        let (link_id, init_actions) = init_mgr.create_link(
+            &dest_hash,
+            &sig_pub_bytes,
+            1,
+            constants::MTU as u32,
+            &mut rng,
+        );
         let lr_raw = extract_send_packet(&init_actions);
         let lr_pkt = RawPacket::unpack(&lr_raw).unwrap();
-        let resp_actions = resp_mgr.handle_local_delivery(lr_pkt.destination_hash, &lr_raw, lr_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng);
+        let resp_actions = resp_mgr.handle_local_delivery(
+            lr_pkt.destination_hash,
+            &lr_raw,
+            lr_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
         let lrproof_raw = extract_send_packet_at(&resp_actions, 1);
         let lrproof_pkt = RawPacket::unpack(&lrproof_raw).unwrap();
-        let init_actions2 = init_mgr.handle_local_delivery(lrproof_pkt.destination_hash, &lrproof_raw, lrproof_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng);
+        let init_actions2 = init_mgr.handle_local_delivery(
+            lrproof_pkt.destination_hash,
+            &lrproof_raw,
+            lrproof_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
         let lrrtt_raw = extract_any_send_packet(&init_actions2);
         let lrrtt_pkt = RawPacket::unpack(&lrrtt_raw).unwrap();
-        resp_mgr.handle_local_delivery(lrrtt_pkt.destination_hash, &lrrtt_raw, lrrtt_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng);
+        resp_mgr.handle_local_delivery(
+            lrrtt_pkt.destination_hash,
+            &lrrtt_raw,
+            lrrtt_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
 
         // Send request without identifying first
         let req_actions = init_mgr.send_request(&link_id, "/restricted", b"query", &mut rng);
         let req_raw = extract_send_packet_from(&req_actions);
         let req_pkt = RawPacket::unpack(&req_raw).unwrap();
         let resp_actions = resp_mgr.handle_local_delivery(
-            req_pkt.destination_hash, &req_raw, req_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
+            req_pkt.destination_hash,
+            &req_raw,
+            req_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
         );
 
         // Should be denied — no response packet
-        let has_response = resp_actions.iter().any(|a| matches!(a, LinkManagerAction::SendPacket { .. }));
+        let has_response = resp_actions
+            .iter()
+            .any(|a| matches!(a, LinkManagerAction::SendPacket { .. }));
         assert!(!has_response, "Unidentified peer should be denied");
     }
 
@@ -2210,16 +2558,21 @@ mod tests {
         let mut mgr = LinkManager::new();
 
         let dummy_sig = [0xAA; 32];
-        let (link_id, _) = mgr.create_link(&dest_hash, &dummy_sig, 1, constants::MTU as u32, &mut rng);
+        let (link_id, _) =
+            mgr.create_link(&dest_hash, &dummy_sig, 1, constants::MTU as u32, &mut rng);
         assert_eq!(mgr.link_count(), 1);
 
         let actions = mgr.teardown_link(&link_id);
-        let has_close = actions.iter().any(|a| matches!(a, LinkManagerAction::LinkClosed { .. }));
+        let has_close = actions
+            .iter()
+            .any(|a| matches!(a, LinkManagerAction::LinkClosed { .. }));
         assert!(has_close);
 
         // After tick, closed links should be cleaned up
         let tick_actions = mgr.tick(&mut rng);
-        let has_deregister = tick_actions.iter().any(|a| matches!(a, LinkManagerAction::DeregisterLinkDest { .. }));
+        let has_deregister = tick_actions
+            .iter()
+            .any(|a| matches!(a, LinkManagerAction::DeregisterLinkDest { .. }));
         assert!(has_deregister);
         assert_eq!(mgr.link_count(), 0);
     }
@@ -2230,20 +2583,49 @@ mod tests {
         let dest_hash = [0xDD; 16];
         let mut resp_mgr = LinkManager::new();
         let (sig_prv, sig_pub_bytes) = make_dest_keys(&mut rng);
-        resp_mgr.register_link_destination(dest_hash, sig_prv, sig_pub_bytes, ResourceStrategy::AcceptNone);
+        resp_mgr.register_link_destination(
+            dest_hash,
+            sig_prv,
+            sig_pub_bytes,
+            ResourceStrategy::AcceptNone,
+        );
         let mut init_mgr = LinkManager::new();
 
         // Complete handshake
-        let (link_id, init_actions) = init_mgr.create_link(&dest_hash, &sig_pub_bytes, 1, constants::MTU as u32, &mut rng);
+        let (link_id, init_actions) = init_mgr.create_link(
+            &dest_hash,
+            &sig_pub_bytes,
+            1,
+            constants::MTU as u32,
+            &mut rng,
+        );
         let lr_raw = extract_send_packet(&init_actions);
         let lr_pkt = RawPacket::unpack(&lr_raw).unwrap();
-        let resp_actions = resp_mgr.handle_local_delivery(lr_pkt.destination_hash, &lr_raw, lr_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng);
+        let resp_actions = resp_mgr.handle_local_delivery(
+            lr_pkt.destination_hash,
+            &lr_raw,
+            lr_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
         let lrproof_raw = extract_send_packet_at(&resp_actions, 1);
         let lrproof_pkt = RawPacket::unpack(&lrproof_raw).unwrap();
-        let init_actions2 = init_mgr.handle_local_delivery(lrproof_pkt.destination_hash, &lrproof_raw, lrproof_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng);
+        let init_actions2 = init_mgr.handle_local_delivery(
+            lrproof_pkt.destination_hash,
+            &lrproof_raw,
+            lrproof_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
         let lrrtt_raw = extract_any_send_packet(&init_actions2);
         let lrrtt_pkt = RawPacket::unpack(&lrrtt_raw).unwrap();
-        resp_mgr.handle_local_delivery(lrrtt_pkt.destination_hash, &lrrtt_raw, lrrtt_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng);
+        resp_mgr.handle_local_delivery(
+            lrrtt_pkt.destination_hash,
+            &lrrtt_raw,
+            lrrtt_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
+        );
 
         // Identify initiator to responder
         let identity = Identity::new(&mut rng);
@@ -2254,10 +2636,16 @@ mod tests {
         let id_raw = extract_send_packet_from(&id_actions);
         let id_pkt = RawPacket::unpack(&id_raw).unwrap();
         let resp_actions = resp_mgr.handle_local_delivery(
-            id_pkt.destination_hash, &id_raw, id_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
+            id_pkt.destination_hash,
+            &id_raw,
+            id_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
         );
 
-        let has_identified = resp_actions.iter().any(|a| matches!(a, LinkManagerAction::RemoteIdentified { .. }));
+        let has_identified = resp_actions
+            .iter()
+            .any(|a| matches!(a, LinkManagerAction::RemoteIdentified { .. }));
         assert!(has_identified, "Responder should emit RemoteIdentified");
     }
 
@@ -2300,10 +2688,13 @@ mod tests {
     }
 
     fn extract_any_send_packet(actions: &[LinkManagerAction]) -> Vec<u8> {
-        actions.iter().find_map(|a| match a {
-            LinkManagerAction::SendPacket { raw, .. } => Some(raw.clone()),
-            _ => None,
-        }).expect("Expected at least one SendPacket action")
+        actions
+            .iter()
+            .find_map(|a| match a {
+                LinkManagerAction::SendPacket { raw, .. } => Some(raw.clone()),
+                _ => None,
+            })
+            .expect("Expected at least one SendPacket action")
     }
 
     fn extract_send_packet_from(actions: &[LinkManagerAction]) -> Vec<u8> {
@@ -2317,24 +2708,47 @@ mod tests {
         let dest_hash = [0xDD; 16];
         let mut resp_mgr = LinkManager::new();
         let (sig_prv, sig_pub_bytes) = make_dest_keys(&mut rng);
-        resp_mgr.register_link_destination(dest_hash, sig_prv, sig_pub_bytes, ResourceStrategy::AcceptNone);
+        resp_mgr.register_link_destination(
+            dest_hash,
+            sig_prv,
+            sig_pub_bytes,
+            ResourceStrategy::AcceptNone,
+        );
         let mut init_mgr = LinkManager::new();
 
-        let (link_id, init_actions) = init_mgr.create_link(&dest_hash, &sig_pub_bytes, 1, constants::MTU as u32, &mut rng);
+        let (link_id, init_actions) = init_mgr.create_link(
+            &dest_hash,
+            &sig_pub_bytes,
+            1,
+            constants::MTU as u32,
+            &mut rng,
+        );
         let lr_raw = extract_send_packet(&init_actions);
         let lr_pkt = RawPacket::unpack(&lr_raw).unwrap();
         let resp_actions = resp_mgr.handle_local_delivery(
-            lr_pkt.destination_hash, &lr_raw, lr_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
+            lr_pkt.destination_hash,
+            &lr_raw,
+            lr_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
         );
         let lrproof_raw = extract_send_packet_at(&resp_actions, 1);
         let lrproof_pkt = RawPacket::unpack(&lrproof_raw).unwrap();
         let init_actions2 = init_mgr.handle_local_delivery(
-            lrproof_pkt.destination_hash, &lrproof_raw, lrproof_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
+            lrproof_pkt.destination_hash,
+            &lrproof_raw,
+            lrproof_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
         );
         let lrrtt_raw = extract_any_send_packet(&init_actions2);
         let lrrtt_pkt = RawPacket::unpack(&lrrtt_raw).unwrap();
         resp_mgr.handle_local_delivery(
-            lrrtt_pkt.destination_hash, &lrrtt_raw, lrrtt_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
+            lrrtt_pkt.destination_hash,
+            &lrrtt_raw,
+            lrrtt_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
         );
 
         assert_eq!(init_mgr.link_state(&link_id), Some(LinkState::Active));
@@ -2352,7 +2766,8 @@ mod tests {
         let mut mgr = LinkManager::new();
         let mut rng = OsRng;
         let dummy_sig = [0xAA; 32];
-        let (link_id, _) = mgr.create_link(&[0x11; 16], &dummy_sig, 1, constants::MTU as u32, &mut rng);
+        let (link_id, _) =
+            mgr.create_link(&[0x11; 16], &dummy_sig, 1, constants::MTU as u32, &mut rng);
 
         // Default strategy is AcceptNone
         let link = mgr.links.get(&link_id).unwrap();
@@ -2364,13 +2779,20 @@ mod tests {
         let mut mgr = LinkManager::new();
         let mut rng = OsRng;
         let dummy_sig = [0xAA; 32];
-        let (link_id, _) = mgr.create_link(&[0x11; 16], &dummy_sig, 1, constants::MTU as u32, &mut rng);
+        let (link_id, _) =
+            mgr.create_link(&[0x11; 16], &dummy_sig, 1, constants::MTU as u32, &mut rng);
 
         mgr.set_resource_strategy(&link_id, ResourceStrategy::AcceptAll);
-        assert_eq!(mgr.links.get(&link_id).unwrap().resource_strategy, ResourceStrategy::AcceptAll);
+        assert_eq!(
+            mgr.links.get(&link_id).unwrap().resource_strategy,
+            ResourceStrategy::AcceptAll
+        );
 
         mgr.set_resource_strategy(&link_id, ResourceStrategy::AcceptApp);
-        assert_eq!(mgr.links.get(&link_id).unwrap().resource_strategy, ResourceStrategy::AcceptApp);
+        assert_eq!(
+            mgr.links.get(&link_id).unwrap().resource_strategy,
+            ResourceStrategy::AcceptApp
+        );
     }
 
     #[test]
@@ -2383,8 +2805,13 @@ mod tests {
         let actions = init_mgr.send_resource(&link_id, &data, None, &mut rng);
 
         // Should produce at least a SendPacket (advertisement)
-        let has_send = actions.iter().any(|a| matches!(a, LinkManagerAction::SendPacket { .. }));
-        assert!(has_send, "send_resource should emit advertisement SendPacket");
+        let has_send = actions
+            .iter()
+            .any(|a| matches!(a, LinkManagerAction::SendPacket { .. }));
+        assert!(
+            has_send,
+            "send_resource should emit advertisement SendPacket"
+        );
     }
 
     #[test]
@@ -2392,7 +2819,8 @@ mod tests {
         let mut mgr = LinkManager::new();
         let mut rng = OsRng;
         let dummy_sig = [0xAA; 32];
-        let (link_id, _) = mgr.create_link(&[0x11; 16], &dummy_sig, 1, constants::MTU as u32, &mut rng);
+        let (link_id, _) =
+            mgr.create_link(&[0x11; 16], &dummy_sig, 1, constants::MTU as u32, &mut rng);
 
         // Link is Pending, not Active
         let actions = mgr.send_resource(&link_id, b"data", None, &mut rng);
@@ -2414,13 +2842,20 @@ mod tests {
             if let LinkManagerAction::SendPacket { raw, .. } = action {
                 let pkt = RawPacket::unpack(raw).unwrap();
                 let resp_actions = resp_mgr.handle_local_delivery(
-                    pkt.destination_hash, raw, pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
+                    pkt.destination_hash,
+                    raw,
+                    pkt.packet_hash,
+                    rns_core::transport::types::InterfaceId(0),
+                    &mut rng,
                 );
                 // AcceptNone: should not produce ResourceReceived, may produce SendPacket (RCL)
-                let has_resource_received = resp_actions.iter().any(|a|
-                    matches!(a, LinkManagerAction::ResourceReceived { .. })
+                let has_resource_received = resp_actions
+                    .iter()
+                    .any(|a| matches!(a, LinkManagerAction::ResourceReceived { .. }));
+                assert!(
+                    !has_resource_received,
+                    "AcceptNone should not accept resource"
                 );
-                assert!(!has_resource_received, "AcceptNone should not accept resource");
             }
         }
     }
@@ -2442,12 +2877,16 @@ mod tests {
             if let LinkManagerAction::SendPacket { raw, .. } = action {
                 let pkt = RawPacket::unpack(raw).unwrap();
                 let resp_actions = resp_mgr.handle_local_delivery(
-                    pkt.destination_hash, raw, pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
+                    pkt.destination_hash,
+                    raw,
+                    pkt.packet_hash,
+                    rns_core::transport::types::InterfaceId(0),
+                    &mut rng,
                 );
                 // AcceptAll: should accept and produce a SendPacket (request for parts)
-                let has_send = resp_actions.iter().any(|a|
-                    matches!(a, LinkManagerAction::SendPacket { .. })
-                );
+                let has_send = resp_actions
+                    .iter()
+                    .any(|a| matches!(a, LinkManagerAction::SendPacket { .. }));
                 assert!(has_send, "AcceptAll should accept and request parts");
             }
         }
@@ -2471,7 +2910,11 @@ mod tests {
             if let LinkManagerAction::SendPacket { raw, .. } = action {
                 let pkt = RawPacket::unpack(raw).unwrap();
                 let resp_actions = resp_mgr.handle_local_delivery(
-                    pkt.destination_hash, raw, pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
+                    pkt.destination_hash,
+                    raw,
+                    pkt.packet_hash,
+                    rns_core::transport::types::InterfaceId(0),
+                    &mut rng,
                 );
                 for a in &resp_actions {
                     if matches!(a, LinkManagerAction::ResourceAcceptQuery { .. }) {
@@ -2497,17 +2940,30 @@ mod tests {
             if let LinkManagerAction::SendPacket { raw, .. } = action {
                 let pkt = RawPacket::unpack(raw).unwrap();
                 let resp_actions = resp_mgr.handle_local_delivery(
-                    pkt.destination_hash, raw, pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
+                    pkt.destination_hash,
+                    raw,
+                    pkt.packet_hash,
+                    rns_core::transport::types::InterfaceId(0),
+                    &mut rng,
                 );
                 for a in &resp_actions {
-                    if let LinkManagerAction::ResourceAcceptQuery { link_id: lid, resource_hash, .. } = a {
+                    if let LinkManagerAction::ResourceAcceptQuery {
+                        link_id: lid,
+                        resource_hash,
+                        ..
+                    } = a
+                    {
                         // Accept the resource
-                        let accept_actions = resp_mgr.accept_resource(lid, resource_hash, true, &mut rng);
+                        let accept_actions =
+                            resp_mgr.accept_resource(lid, resource_hash, true, &mut rng);
                         // Should produce a SendPacket (request for parts)
-                        let has_send = accept_actions.iter().any(|a|
-                            matches!(a, LinkManagerAction::SendPacket { .. })
+                        let has_send = accept_actions
+                            .iter()
+                            .any(|a| matches!(a, LinkManagerAction::SendPacket { .. }));
+                        assert!(
+                            has_send,
+                            "Accepting resource should produce request for parts"
                         );
-                        assert!(has_send, "Accepting resource should produce request for parts");
                     }
                 }
             }
@@ -2528,17 +2984,27 @@ mod tests {
             if let LinkManagerAction::SendPacket { raw, .. } = action {
                 let pkt = RawPacket::unpack(raw).unwrap();
                 let resp_actions = resp_mgr.handle_local_delivery(
-                    pkt.destination_hash, raw, pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
+                    pkt.destination_hash,
+                    raw,
+                    pkt.packet_hash,
+                    rns_core::transport::types::InterfaceId(0),
+                    &mut rng,
                 );
                 for a in &resp_actions {
-                    if let LinkManagerAction::ResourceAcceptQuery { link_id: lid, resource_hash, .. } = a {
+                    if let LinkManagerAction::ResourceAcceptQuery {
+                        link_id: lid,
+                        resource_hash,
+                        ..
+                    } = a
+                    {
                         // Reject the resource
-                        let reject_actions = resp_mgr.accept_resource(lid, resource_hash, false, &mut rng);
+                        let reject_actions =
+                            resp_mgr.accept_resource(lid, resource_hash, false, &mut rng);
                         // Rejecting should send a cancel and not request parts
                         // No ResourceReceived should appear
-                        let has_resource_received = reject_actions.iter().any(|a|
-                            matches!(a, LinkManagerAction::ResourceReceived { .. })
-                        );
+                        let has_resource_received = reject_actions
+                            .iter()
+                            .any(|a| matches!(a, LinkManagerAction::ResourceReceived { .. }));
                         assert!(!has_resource_received);
                     }
                 }
@@ -2560,9 +3026,8 @@ mod tests {
 
         // Drive the full transfer protocol between the two managers.
         // Tag each SendPacket with its source ('i' = initiator, 'r' = responder).
-        let mut pending: Vec<(char, LinkManagerAction)> = adv_actions.into_iter()
-            .map(|a| ('i', a))
-            .collect();
+        let mut pending: Vec<(char, LinkManagerAction)> =
+            adv_actions.into_iter().map(|a| ('i', a)).collect();
         let mut rounds = 0;
         let max_rounds = 50;
         let mut resource_received = false;
@@ -2579,11 +3044,19 @@ mod tests {
                     // Deliver only to the OTHER side
                     let target_actions = if source == 'i' {
                         resp_mgr.handle_local_delivery(
-                            pkt.destination_hash, &raw, pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
+                            pkt.destination_hash,
+                            &raw,
+                            pkt.packet_hash,
+                            rns_core::transport::types::InterfaceId(0),
+                            &mut rng,
                         )
                     } else {
                         init_mgr.handle_local_delivery(
-                            pkt.destination_hash, &raw, pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
+                            pkt.destination_hash,
+                            &raw,
+                            pkt.packet_hash,
+                            rns_core::transport::types::InterfaceId(0),
+                            &mut rng,
                         )
                     };
 
@@ -2606,8 +3079,16 @@ mod tests {
             pending = next;
         }
 
-        assert!(resource_received, "Responder should receive resource data (rounds={})", rounds);
-        assert!(sender_completed, "Sender should get completion proof (rounds={})", rounds);
+        assert!(
+            resource_received,
+            "Responder should receive resource data (rounds={})",
+            rounds
+        );
+        assert!(
+            sender_completed,
+            "Sender should get completion proof (rounds={})",
+            rounds
+        );
     }
 
     #[test]
@@ -2626,19 +3107,30 @@ mod tests {
             if let LinkManagerAction::SendPacket { raw, .. } = action {
                 let pkt = RawPacket::unpack(raw).unwrap();
                 resp_mgr.handle_local_delivery(
-                    pkt.destination_hash, raw, pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
+                    pkt.destination_hash,
+                    raw,
+                    pkt.packet_hash,
+                    rns_core::transport::types::InterfaceId(0),
+                    &mut rng,
                 );
             }
         }
 
         // Verify there are incoming resources on the responder
-        assert!(!resp_mgr.links.get(&link_id).unwrap().incoming_resources.is_empty());
+        assert!(!resp_mgr
+            .links
+            .get(&link_id)
+            .unwrap()
+            .incoming_resources
+            .is_empty());
 
         // Simulate ICL (cancel from initiator side) by calling handle_resource_icl
         let icl_actions = resp_mgr.handle_resource_icl(&link_id);
 
         // Should have resource failed
-        let has_failed = icl_actions.iter().any(|a| matches!(a, LinkManagerAction::ResourceFailed { .. }));
+        let has_failed = icl_actions
+            .iter()
+            .any(|a| matches!(a, LinkManagerAction::ResourceFailed { .. }));
         assert!(has_failed, "ICL should produce ResourceFailed");
     }
 
@@ -2652,12 +3144,19 @@ mod tests {
         init_mgr.send_resource(&link_id, &data, None, &mut rng);
 
         // Verify there are outgoing resources
-        assert!(!init_mgr.links.get(&link_id).unwrap().outgoing_resources.is_empty());
+        assert!(!init_mgr
+            .links
+            .get(&link_id)
+            .unwrap()
+            .outgoing_resources
+            .is_empty());
 
         // Simulate RCL (cancel from receiver side)
         let rcl_actions = init_mgr.handle_resource_rcl(&link_id);
 
-        let has_failed = rcl_actions.iter().any(|a| matches!(a, LinkManagerAction::ResourceFailed { .. }));
+        let has_failed = rcl_actions
+            .iter()
+            .any(|a| matches!(a, LinkManagerAction::ResourceFailed { .. }));
         assert!(has_failed, "RCL should produce ResourceFailed");
     }
 
@@ -2669,7 +3168,12 @@ mod tests {
         let data = vec![0xAB; 100];
         init_mgr.send_resource(&link_id, &data, None, &mut rng);
 
-        assert!(!init_mgr.links.get(&link_id).unwrap().outgoing_resources.is_empty());
+        assert!(!init_mgr
+            .links
+            .get(&link_id)
+            .unwrap()
+            .outgoing_resources
+            .is_empty());
 
         // Cancel the sender to make it Complete
         init_mgr.handle_resource_rcl(&link_id);
@@ -2677,15 +3181,23 @@ mod tests {
         // Tick should clean up completed resources
         init_mgr.tick(&mut rng);
 
-        assert!(init_mgr.links.get(&link_id).unwrap().outgoing_resources.is_empty(),
-            "Tick should clean up completed/failed outgoing resources");
+        assert!(
+            init_mgr
+                .links
+                .get(&link_id)
+                .unwrap()
+                .outgoing_resources
+                .is_empty(),
+            "Tick should clean up completed/failed outgoing resources"
+        );
     }
 
     #[test]
     fn test_build_link_packet() {
         let (init_mgr, _resp_mgr, link_id) = setup_active_link();
 
-        let actions = init_mgr.build_link_packet(&link_id, constants::CONTEXT_RESOURCE, b"test data");
+        let actions =
+            init_mgr.build_link_packet(&link_id, constants::CONTEXT_RESOURCE, b"test data");
         assert_eq!(actions.len(), 1);
         if let LinkManagerAction::SendPacket { raw, dest_type, .. } = &actions[0] {
             let pkt = RawPacket::unpack(raw).unwrap();
@@ -2715,10 +3227,17 @@ mod tests {
             if let LinkManagerAction::SendPacket { raw, .. } = action {
                 let pkt = RawPacket::unpack(raw).unwrap();
                 let resp_actions = resp_mgr.handle_local_delivery(
-                    pkt.destination_hash, raw, pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
+                    pkt.destination_hash,
+                    raw,
+                    pkt.packet_hash,
+                    rns_core::transport::types::InterfaceId(0),
+                    &mut rng,
                 );
                 for a in &resp_actions {
-                    if let LinkManagerAction::ChannelMessageReceived { msgtype, payload, .. } = a {
+                    if let LinkManagerAction::ChannelMessageReceived {
+                        msgtype, payload, ..
+                    } = a
+                    {
                         assert_eq!(*msgtype, 42);
                         assert_eq!(*payload, b"channel data");
                         got_channel_msg = true;
@@ -2742,13 +3261,20 @@ mod tests {
         let raw = extract_any_send_packet(&actions);
         let pkt = RawPacket::unpack(&raw).unwrap();
         let resp_actions = resp_mgr.handle_local_delivery(
-            pkt.destination_hash, &raw, pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
+            pkt.destination_hash,
+            &raw,
+            pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
         );
 
-        let has_data = resp_actions.iter().any(|a|
-            matches!(a, LinkManagerAction::LinkDataReceived { context: 0x42, .. })
+        let has_data = resp_actions
+            .iter()
+            .any(|a| matches!(a, LinkManagerAction::LinkDataReceived { context: 0x42, .. }));
+        assert!(
+            has_data,
+            "Responder should receive LinkDataReceived for unknown context"
         );
-        assert!(has_data, "Responder should receive LinkDataReceived for unknown context");
     }
 
     #[test]
@@ -2762,29 +3288,42 @@ mod tests {
         });
 
         // Send request from initiator
-        let req_actions = init_mgr.send_request(&link_id, "/echo", b"\xc0", &mut rng);  // msgpack nil
+        let req_actions = init_mgr.send_request(&link_id, "/echo", b"\xc0", &mut rng); // msgpack nil
         assert!(!req_actions.is_empty());
 
         // Deliver request to responder — should produce response
         let req_raw = extract_any_send_packet(&req_actions);
         let req_pkt = RawPacket::unpack(&req_raw).unwrap();
         let resp_actions = resp_mgr.handle_local_delivery(
-            req_pkt.destination_hash, &req_raw, req_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
+            req_pkt.destination_hash,
+            &req_raw,
+            req_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
         );
-        let has_resp_send = resp_actions.iter().any(|a| matches!(a, LinkManagerAction::SendPacket { .. }));
+        let has_resp_send = resp_actions
+            .iter()
+            .any(|a| matches!(a, LinkManagerAction::SendPacket { .. }));
         assert!(has_resp_send, "Handler should produce response");
 
         // Deliver response back to initiator
         let resp_raw = extract_any_send_packet(&resp_actions);
         let resp_pkt = RawPacket::unpack(&resp_raw).unwrap();
         let init_actions = init_mgr.handle_local_delivery(
-            resp_pkt.destination_hash, &resp_raw, resp_pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
+            resp_pkt.destination_hash,
+            &resp_raw,
+            resp_pkt.packet_hash,
+            rns_core::transport::types::InterfaceId(0),
+            &mut rng,
         );
 
-        let has_response_received = init_actions.iter().any(|a|
-            matches!(a, LinkManagerAction::ResponseReceived { .. })
+        let has_response_received = init_actions
+            .iter()
+            .any(|a| matches!(a, LinkManagerAction::ResponseReceived { .. }));
+        assert!(
+            has_response_received,
+            "Initiator should receive ResponseReceived"
         );
-        assert!(has_response_received, "Initiator should receive ResponseReceived");
     }
 
     #[test]
@@ -2792,7 +3331,8 @@ mod tests {
         let mut mgr = LinkManager::new();
         let mut rng = OsRng;
         let dummy_sig = [0xAA; 32];
-        let (link_id, _) = mgr.create_link(&[0x11; 16], &dummy_sig, 1, constants::MTU as u32, &mut rng);
+        let (link_id, _) =
+            mgr.create_link(&[0x11; 16], &dummy_sig, 1, constants::MTU as u32, &mut rng);
 
         // Link is Pending (no channel), should return empty
         let actions = mgr.send_channel_message(&link_id, 1, b"test", &mut rng);
@@ -2804,7 +3344,8 @@ mod tests {
         let mut mgr = LinkManager::new();
         let mut rng = OsRng;
         let dummy_sig = [0xAA; 32];
-        let (link_id, _) = mgr.create_link(&[0x11; 16], &dummy_sig, 1, constants::MTU as u32, &mut rng);
+        let (link_id, _) =
+            mgr.create_link(&[0x11; 16], &dummy_sig, 1, constants::MTU as u32, &mut rng);
 
         let actions = mgr.send_on_link(&link_id, b"test", constants::CONTEXT_NONE, &mut rng);
         assert!(actions.is_empty(), "Cannot send on pending link");
@@ -2827,16 +3368,17 @@ mod tests {
         resp_mgr.set_resource_strategy(&link_id, ResourceStrategy::AcceptAll);
 
         // Multi-part data (larger than a single SDU of 464 bytes)
-        let original_data: Vec<u8> = (0..2000u32).map(|i| {
-            let pos = i as usize;
-            (pos ^ (pos >> 8) ^ (pos >> 16)) as u8
-        }).collect();
+        let original_data: Vec<u8> = (0..2000u32)
+            .map(|i| {
+                let pos = i as usize;
+                (pos ^ (pos >> 8) ^ (pos >> 16)) as u8
+            })
+            .collect();
 
         let adv_actions = init_mgr.send_resource(&link_id, &original_data, None, &mut rng);
 
-        let mut pending: Vec<(char, LinkManagerAction)> = adv_actions.into_iter()
-            .map(|a| ('i', a))
-            .collect();
+        let mut pending: Vec<(char, LinkManagerAction)> =
+            adv_actions.into_iter().map(|a| ('i', a)).collect();
         let mut rounds = 0;
         let max_rounds = 200;
         let mut resource_received = false;
@@ -2855,11 +3397,19 @@ mod tests {
 
                     let target_actions = if source == 'i' {
                         resp_mgr.handle_local_delivery(
-                            pkt.destination_hash, &raw, pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
+                            pkt.destination_hash,
+                            &raw,
+                            pkt.packet_hash,
+                            rns_core::transport::types::InterfaceId(0),
+                            &mut rng,
                         )
                     } else {
                         init_mgr.handle_local_delivery(
-                            pkt.destination_hash, &raw, pkt.packet_hash, rns_core::transport::types::InterfaceId(0), &mut rng,
+                            pkt.destination_hash,
+                            &raw,
+                            pkt.packet_hash,
+                            rns_core::transport::types::InterfaceId(0),
+                            &mut rng,
                         )
                     };
 
@@ -2882,8 +3432,16 @@ mod tests {
             pending = next;
         }
 
-        assert!(resource_received, "Should receive large resource (rounds={})", rounds);
-        assert!(sender_completed, "Sender should complete (rounds={})", rounds);
+        assert!(
+            resource_received,
+            "Should receive large resource (rounds={})",
+            rounds
+        );
+        assert!(
+            sender_completed,
+            "Sender should complete (rounds={})",
+            rounds
+        );
     }
 
     #[test]
@@ -2893,18 +3451,40 @@ mod tests {
 
         // Test that various ResourceActions map to correct LinkManagerActions
         let actions = vec![
-            ResourceAction::DataReceived { data: vec![1, 2, 3], metadata: Some(vec![4, 5]) },
+            ResourceAction::DataReceived {
+                data: vec![1, 2, 3],
+                metadata: Some(vec![4, 5]),
+            },
             ResourceAction::Completed,
             ResourceAction::Failed(rns_core::resource::ResourceError::Timeout),
-            ResourceAction::ProgressUpdate { received: 10, total: 20 },
+            ResourceAction::ProgressUpdate {
+                received: 10,
+                total: 20,
+            },
         ];
 
         let result = init_mgr.process_resource_actions(&link_id, actions, &mut rng);
 
-        assert!(matches!(result[0], LinkManagerAction::ResourceReceived { .. }));
-        assert!(matches!(result[1], LinkManagerAction::ResourceCompleted { .. }));
-        assert!(matches!(result[2], LinkManagerAction::ResourceFailed { .. }));
-        assert!(matches!(result[3], LinkManagerAction::ResourceProgress { received: 10, total: 20, .. }));
+        assert!(matches!(
+            result[0],
+            LinkManagerAction::ResourceReceived { .. }
+        ));
+        assert!(matches!(
+            result[1],
+            LinkManagerAction::ResourceCompleted { .. }
+        ));
+        assert!(matches!(
+            result[2],
+            LinkManagerAction::ResourceFailed { .. }
+        ));
+        assert!(matches!(
+            result[3],
+            LinkManagerAction::ResourceProgress {
+                received: 10,
+                total: 20,
+                ..
+            }
+        ));
     }
 
     #[test]

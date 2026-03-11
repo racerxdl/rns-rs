@@ -20,8 +20,8 @@ use crate::ifac;
 #[cfg(feature = "iface-local")]
 use crate::interface::local::LocalServerConfig;
 use crate::interface::{InterfaceEntry, InterfaceStats};
-use crate::time;
 use crate::storage;
+use crate::time;
 
 /// Parse an interface mode string to the corresponding constant.
 /// Matches Python's `_synthesize_interface()` in `RNS/Reticulum.py`.
@@ -39,11 +39,16 @@ fn parse_interface_mode(mode: &str) -> u8 {
 
 /// Extract IFAC configuration from interface params, if present.
 /// Returns None if neither networkname/network_name nor passphrase/pass_phrase is set.
-fn extract_ifac_config(params: &std::collections::HashMap<String, String>, default_size: usize) -> Option<IfacConfig> {
-    let netname = params.get("networkname")
+fn extract_ifac_config(
+    params: &std::collections::HashMap<String, String>,
+    default_size: usize,
+) -> Option<IfacConfig> {
+    let netname = params
+        .get("networkname")
         .or_else(|| params.get("network_name"))
         .cloned();
-    let netkey = params.get("passphrase")
+    let netkey = params
+        .get("passphrase")
         .or_else(|| params.get("pass_phrase"))
         .cloned();
 
@@ -52,12 +57,17 @@ fn extract_ifac_config(params: &std::collections::HashMap<String, String>, defau
     }
 
     // ifac_size is specified in bits in config, divide by 8 for bytes
-    let size = params.get("ifac_size")
+    let size = params
+        .get("ifac_size")
         .and_then(|v| v.parse::<usize>().ok())
         .map(|bits| (bits / 8).max(1))
         .unwrap_or(default_size);
 
-    Some(IfacConfig { netname, netkey, size })
+    Some(IfacConfig {
+        netname,
+        netkey,
+        size,
+    })
 }
 
 /// Extract discovery configuration from interface params, if `discoverable` is set.
@@ -66,41 +76,47 @@ fn extract_discovery_config(
     iface_type: &str,
     params: &std::collections::HashMap<String, String>,
 ) -> Option<crate::discovery::DiscoveryConfig> {
-    let discoverable = params.get("discoverable")
+    let discoverable = params
+        .get("discoverable")
         .and_then(|v| config::parse_bool_pub(v))
         .unwrap_or(false);
     if !discoverable {
         return None;
     }
 
-    let discovery_name = params.get("discovery_name")
+    let discovery_name = params
+        .get("discovery_name")
         .cloned()
         .unwrap_or_else(|| iface_name.to_string());
 
     // Config value is in seconds. Min 300s (5min), default 21600s (6h).
-    let announce_interval = params.get("announce_interval")
+    let announce_interval = params
+        .get("announce_interval")
         .and_then(|v| v.parse::<u64>().ok())
         .map(|secs| secs.max(300))
         .unwrap_or(21600);
 
-    let stamp_value = params.get("discovery_stamp_value")
+    let stamp_value = params
+        .get("discovery_stamp_value")
         .and_then(|v| v.parse::<u8>().ok())
         .unwrap_or(crate::discovery::DEFAULT_STAMP_VALUE);
 
     let reachable_on = params.get("reachable_on").cloned();
 
-    let listen_port = params.get("listen_port")
+    let listen_port = params
+        .get("listen_port")
         .or_else(|| params.get("port"))
         .and_then(|v| v.parse().ok());
 
-    let latitude = params.get("latitude")
+    let latitude = params
+        .get("latitude")
         .or_else(|| params.get("lat"))
         .and_then(|v| v.parse().ok());
-    let longitude = params.get("longitude")
+    let longitude = params
+        .get("longitude")
         .or_else(|| params.get("lon"))
         .and_then(|v| v.parse().ok());
-    let height = params.get("height")
-        .and_then(|v| v.parse().ok());
+    let height = params.get("height").and_then(|v| v.parse().ok());
 
     Some(crate::discovery::DiscoveryConfig {
         discovery_name,
@@ -213,14 +229,12 @@ impl RnsNode {
         // Parse config file
         let config_file = config_dir.join("config");
         let rns_config = if config_file.exists() {
-            config::parse_file(&config_file).map_err(|e| {
-                io::Error::new(io::ErrorKind::InvalidData, format!("{}", e))
-            })?
+            config::parse_file(&config_file)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{}", e)))?
         } else {
             // No config file, use defaults
-            config::parse("").map_err(|e| {
-                io::Error::new(io::ErrorKind::InvalidData, format!("{}", e))
-            })?
+            config::parse("")
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{}", e)))?
         };
 
         // Load or create identity
@@ -267,7 +281,9 @@ impl RnsNode {
             // Auto-configure mode when discovery is enabled (Python Reticulum.py).
             let has_discovery = match iface.interface_type.as_str() {
                 "AutoInterface" => true,
-                "RNodeInterface" => iface.params.get("discoverable")
+                "RNodeInterface" => iface
+                    .params
+                    .get("discoverable")
                     .and_then(|v| config::parse_bool_pub(v))
                     .unwrap_or(false),
                 _ => false,
@@ -295,14 +311,16 @@ impl RnsNode {
 
             let default_ifac_size = factory.default_ifac_size();
             let ifac_config = extract_ifac_config(&iface.params, default_ifac_size);
-            let discovery_config = extract_discovery_config(
-                &iface.name, &iface.interface_type, &iface.params,
-            );
+            let discovery_config =
+                extract_discovery_config(&iface.name, &iface.interface_type, &iface.params);
 
             // Inject storage_dir for I2P (and any future factories that need it)
             let mut params = iface.params.clone();
             if !params.contains_key("storage_dir") {
-                params.insert("storage_dir".to_string(), paths.storage.to_string_lossy().to_string());
+                params.insert(
+                    "storage_dir".to_string(),
+                    paths.storage.to_string_lossy().to_string(),
+                );
             }
             // Inject device for TCP client
             if let Some(ref device) = rns_config.reticulum.device {
@@ -334,7 +352,7 @@ impl RnsNode {
             if hex_hash.len() == 32 {
                 if let Ok(bytes) = (0..hex_hash.len())
                     .step_by(2)
-                    .map(|i| u8::from_str_radix(&hex_hash[i..i+2], 16))
+                    .map(|i| u8::from_str_radix(&hex_hash[i..i + 2], 16))
                     .collect::<Result<Vec<u8>, _>>()
                 {
                     if bytes.len() == 16 {
@@ -354,7 +372,10 @@ impl RnsNode {
         }
 
         // Parse probe_addr (comma-separated list of SocketAddr)
-        let probe_addrs: Vec<std::net::SocketAddr> = rns_config.reticulum.probe_addr.as_ref()
+        let probe_addrs: Vec<std::net::SocketAddr> = rns_config
+            .reticulum
+            .probe_addr
+            .as_ref()
             .map(|s| {
                 s.split(',')
                     .filter_map(|entry| {
@@ -362,17 +383,25 @@ impl RnsNode {
                         if trimmed.is_empty() {
                             return None;
                         }
-                        trimmed.parse::<std::net::SocketAddr>().map_err(|e| {
-                            log::warn!("Invalid probe_addr entry '{}': {}", trimmed, e);
-                            e
-                        }).ok()
+                        trimmed
+                            .parse::<std::net::SocketAddr>()
+                            .map_err(|e| {
+                                log::warn!("Invalid probe_addr entry '{}': {}", trimmed, e);
+                                e
+                            })
+                            .ok()
                     })
                     .collect()
             })
             .unwrap_or_default();
 
         // Parse probe_protocol (default: rnsp)
-        let probe_protocol = match rns_config.reticulum.probe_protocol.as_deref().map(|s| s.to_lowercase()) {
+        let probe_protocol = match rns_config
+            .reticulum
+            .probe_protocol
+            .as_deref()
+            .map(|s| s.to_lowercase())
+        {
             Some(ref s) if s == "stun" => rns_core::holepunch::ProbeProtocol::Stun,
             _ => rns_core::holepunch::ProbeProtocol::Rnsp,
         };
@@ -401,7 +430,7 @@ impl RnsNode {
             prefer_shorter_path: rns_config.reticulum.prefer_shorter_path,
             max_paths_per_destination: rns_config.reticulum.max_paths_per_destination,
             interfaces: interface_configs,
-                registry: None,
+            registry: None,
         };
 
         Self::start(node_config, callbacks)
@@ -409,9 +438,7 @@ impl RnsNode {
 
     /// Start the node. Connects all interfaces, starts driver and timer threads.
     pub fn start(config: NodeConfig, callbacks: Box<dyn Callbacks>) -> io::Result<Self> {
-        let identity = config
-            .identity
-            .unwrap_or_else(|| Identity::new(&mut OsRng));
+        let identity = config.identity.unwrap_or_else(|| Identity::new(&mut OsRng));
 
         let transport_config = TransportConfig {
             transport_enabled: config.transport_enabled,
@@ -432,7 +459,11 @@ impl RnsNode {
 
         // Configure probe addresses and device for hole punching
         if !config.probe_addrs.is_empty() || config.device.is_some() {
-            driver.set_probe_config(config.probe_addrs.clone(), config.probe_protocol, config.device.clone());
+            driver.set_probe_config(
+                config.probe_addrs.clone(),
+                config.probe_protocol,
+                config.device.clone(),
+            );
         }
 
         // Start probe server if configured
@@ -481,7 +512,10 @@ impl RnsNode {
                 let mgr = match driver.hook_manager.as_ref() {
                     Some(m) => m,
                     None => {
-                        log::warn!("Hook manager not available, skipping hook '{}'", hook_cfg.name);
+                        log::warn!(
+                            "Hook manager not available, skipping hook '{}'",
+                            hook_cfg.name
+                        );
                         continue;
                     }
                 };
@@ -524,14 +558,17 @@ impl RnsNode {
         let mut discoverable_interfaces = Vec::new();
 
         // --- Registry-based startup for interfaces ---
-        let registry = config.registry.unwrap_or_else(
-            crate::interface::registry::InterfaceRegistry::with_builtins,
-        );
+        let registry = config
+            .registry
+            .unwrap_or_else(crate::interface::registry::InterfaceRegistry::with_builtins);
         for iface_config in config.interfaces {
             let factory = match registry.get(&iface_config.type_name) {
                 Some(f) => f,
                 None => {
-                    log::warn!("No factory registered for interface type '{}'", iface_config.type_name);
+                    log::warn!(
+                        "No factory registered for interface type '{}'",
+                        iface_config.type_name
+                    );
                     continue;
                 }
             };
@@ -566,7 +603,12 @@ impl RnsNode {
             let result = factory.start(iface_config.config_data, ctx)?;
 
             match result {
-                crate::interface::StartResult::Simple { id, info, writer, interface_type_name } => {
+                crate::interface::StartResult::Simple {
+                    id,
+                    info,
+                    writer,
+                    interface_type_name,
+                } => {
                     driver.engine.register_interface(info.clone());
                     driver.interfaces.insert(
                         id,
@@ -631,10 +673,8 @@ impl RnsNode {
         // Set up interface announcer if we have discoverable interfaces
         if !discoverable_interfaces.is_empty() {
             let transport_id = *identity.hash();
-            let announcer = crate::discovery::InterfaceAnnouncer::new(
-                transport_id,
-                discoverable_interfaces,
-            );
+            let announcer =
+                crate::discovery::InterfaceAnnouncer::new(transport_id, discoverable_interfaces);
             log::info!("Interface discovery announcer initialized");
             driver.interface_announcer = Some(announcer);
         }
@@ -648,7 +688,8 @@ impl RnsNode {
                 .join("discovery")
                 .join("interfaces");
             let _ = std::fs::create_dir_all(&disc_path);
-            driver.discovered_interfaces = crate::discovery::DiscoveredInterfaceStorage::new(disc_path);
+            driver.discovered_interfaces =
+                crate::discovery::DiscoveredInterfaceStorage::new(disc_path);
         }
 
         // Set up management destinations if enabled
@@ -661,21 +702,17 @@ impl RnsNode {
                 let sig_prv = rns_crypto::ed25519::Ed25519PrivateKey::from_bytes(
                     &prv_key[32..64].try_into().unwrap(),
                 );
-                let sig_pub_bytes: [u8; 32] = identity
-                    .get_public_key()
-                    .unwrap()[32..64]
+                let sig_pub_bytes: [u8; 32] = identity.get_public_key().unwrap()[32..64]
                     .try_into()
                     .unwrap();
 
                 // Register as SINGLE destination in transport engine
-                driver.engine.register_destination(
-                    mgmt_dest,
-                    rns_core::constants::DESTINATION_SINGLE,
-                );
-                driver.local_destinations.insert(
-                    mgmt_dest,
-                    rns_core::constants::DESTINATION_SINGLE,
-                );
+                driver
+                    .engine
+                    .register_destination(mgmt_dest, rns_core::constants::DESTINATION_SINGLE);
+                driver
+                    .local_destinations
+                    .insert(mgmt_dest, rns_core::constants::DESTINATION_SINGLE);
 
                 // Register as link destination in link manager
                 driver.link_manager.register_link_destination(
@@ -686,17 +723,14 @@ impl RnsNode {
                 );
 
                 // Register management path hashes
-                driver.link_manager.register_management_path(
-                    crate::management::status_path_hash(),
-                );
-                driver.link_manager.register_management_path(
-                    crate::management::path_path_hash(),
-                );
+                driver
+                    .link_manager
+                    .register_management_path(crate::management::status_path_hash());
+                driver
+                    .link_manager
+                    .register_management_path(crate::management::path_path_hash());
 
-                log::info!(
-                    "Remote management enabled on {:02x?}",
-                    &mgmt_dest[..4],
-                );
+                log::info!("Remote management enabled on {:02x?}", &mgmt_dest[..4],);
 
                 // Set up allowed list
                 if !config.management.remote_management_allowed.is_empty() {
@@ -716,25 +750,22 @@ impl RnsNode {
                 let sig_prv = rns_crypto::ed25519::Ed25519PrivateKey::from_bytes(
                     &prv_key[32..64].try_into().unwrap(),
                 );
-                let sig_pub_bytes: [u8; 32] = identity
-                    .get_public_key()
-                    .unwrap()[32..64]
+                let sig_pub_bytes: [u8; 32] = identity.get_public_key().unwrap()[32..64]
                     .try_into()
                     .unwrap();
 
-                driver.engine.register_destination(
-                    bh_dest,
-                    rns_core::constants::DESTINATION_SINGLE,
-                );
+                driver
+                    .engine
+                    .register_destination(bh_dest, rns_core::constants::DESTINATION_SINGLE);
                 driver.link_manager.register_link_destination(
                     bh_dest,
                     sig_prv,
                     sig_pub_bytes,
                     crate::link_manager::ResourceStrategy::AcceptNone,
                 );
-                driver.link_manager.register_management_path(
-                    crate::management::list_path_hash(),
-                );
+                driver
+                    .link_manager
+                    .register_management_path(crate::management::list_path_hash());
 
                 log::info!(
                     "Blackhole list publishing enabled on {:02x?}",
@@ -749,14 +780,12 @@ impl RnsNode {
             let probe_dest = crate::management::probe_dest_hash(&identity_hash);
 
             // Register as SINGLE destination in transport engine
-            driver.engine.register_destination(
-                probe_dest,
-                rns_core::constants::DESTINATION_SINGLE,
-            );
-            driver.local_destinations.insert(
-                probe_dest,
-                rns_core::constants::DESTINATION_SINGLE,
-            );
+            driver
+                .engine
+                .register_destination(probe_dest, rns_core::constants::DESTINATION_SINGLE);
+            driver
+                .local_destinations
+                .insert(probe_dest, rns_core::constants::DESTINATION_SINGLE);
 
             // Register PROVE_ALL proof strategy with transport identity
             let probe_identity = rns_crypto::identity::Identity::from_private_key(
@@ -772,10 +801,7 @@ impl RnsNode {
 
             driver.probe_responder_hash = Some(probe_dest);
 
-            log::info!(
-                "Probe responder enabled on {:02x?}",
-                &probe_dest[..4],
-            );
+            log::info!("Probe responder enabled on {:02x?}", &probe_dest[..4],);
         }
 
         // Spawn timer thread with configurable tick interval
@@ -822,9 +848,8 @@ impl RnsNode {
 
         // Start RPC server if share_instance is enabled
         let rpc_server = if config.share_instance {
-            let auth_key = crate::rpc::derive_auth_key(
-                &identity.get_private_key().unwrap_or([0u8; 64]),
-            );
+            let auth_key =
+                crate::rpc::derive_auth_key(&identity.get_private_key().unwrap_or([0u8; 64]));
             let rpc_addr = crate::rpc::RpcAddr::Tcp("127.0.0.1".into(), config.rpc_port);
             match crate::rpc::RpcServer::start(&rpc_addr, auth_key, tx.clone()) {
                 Ok(server) => {
@@ -888,7 +913,10 @@ impl RnsNode {
         dest_type: u8,
     ) -> Result<(), SendError> {
         self.tx
-            .send(Event::RegisterDestination { dest_hash, dest_type })
+            .send(Event::RegisterDestination {
+                dest_hash,
+                dest_type,
+            })
             .map_err(|_| SendError)
     }
 
@@ -936,7 +964,9 @@ impl RnsNode {
         handler: F,
     ) -> Result<(), SendError>
     where
-        F: Fn([u8; 16], &str, &[u8], Option<&([u8; 16], [u8; 64])>) -> Option<Vec<u8>> + Send + 'static,
+        F: Fn([u8; 16], &str, &[u8], Option<&([u8; 16], [u8; 64])>) -> Option<Vec<u8>>
+            + Send
+            + 'static,
     {
         self.tx
             .send(Event::RegisterRequestHandler {
@@ -1011,18 +1041,18 @@ impl RnsNode {
         metadata: Option<Vec<u8>>,
     ) -> Result<(), SendError> {
         self.tx
-            .send(Event::SendResource { link_id, data, metadata })
+            .send(Event::SendResource {
+                link_id,
+                data,
+                metadata,
+            })
             .map_err(|_| SendError)
     }
 
     /// Set the resource acceptance strategy for a link.
     ///
     /// 0 = AcceptNone, 1 = AcceptAll, 2 = AcceptApp
-    pub fn set_resource_strategy(
-        &self,
-        link_id: [u8; 16],
-        strategy: u8,
-    ) -> Result<(), SendError> {
+    pub fn set_resource_strategy(&self, link_id: [u8; 16], strategy: u8) -> Result<(), SendError> {
         self.tx
             .send(Event::SetResourceStrategy { link_id, strategy })
             .map_err(|_| SendError)
@@ -1036,7 +1066,11 @@ impl RnsNode {
         accept: bool,
     ) -> Result<(), SendError> {
         self.tx
-            .send(Event::AcceptResource { link_id, resource_hash, accept })
+            .send(Event::AcceptResource {
+                link_id,
+                resource_hash,
+                accept,
+            })
             .map_err(|_| SendError)
     }
 
@@ -1048,7 +1082,11 @@ impl RnsNode {
         payload: Vec<u8>,
     ) -> Result<(), SendError> {
         self.tx
-            .send(Event::SendChannelMessage { link_id, msgtype, payload })
+            .send(Event::SendChannelMessage {
+                link_id,
+                msgtype,
+                payload,
+            })
             .map_err(|_| SendError)
     }
 
@@ -1080,7 +1118,11 @@ impl RnsNode {
         context: u8,
     ) -> Result<(), SendError> {
         self.tx
-            .send(Event::SendOnLink { link_id, data, context })
+            .send(Event::SendOnLink {
+                link_id,
+                data,
+                context,
+            })
             .map_err(|_| SendError)
     }
 
@@ -1117,7 +1159,8 @@ impl RnsNode {
             &random_hash,
             None, // no ratchet
             app_data,
-        ).map_err(|_| SendError)?;
+        )
+        .map_err(|_| SendError)?;
 
         let context_flag = rns_core::constants::FLAG_UNSET;
 
@@ -1130,15 +1173,16 @@ impl RnsNode {
         };
 
         let packet = rns_core::packet::RawPacket::pack(
-            flags, 0, &dest.hash.0, None,
-            rns_core::constants::CONTEXT_NONE, &announce_data,
-        ).map_err(|_| SendError)?;
-
-        self.send_raw(
-            packet.raw,
-            dest.dest_type.to_wire_constant(),
+            flags,
+            0,
+            &dest.hash.0,
             None,
+            rns_core::constants::CONTEXT_NONE,
+            &announce_data,
         )
+        .map_err(|_| SendError)?;
+
+        self.send_raw(packet.raw, dest.dest_type.to_wire_constant(), None)
     }
 
     /// Send an encrypted (SINGLE) or plaintext (PLAIN) packet to a destination.
@@ -1159,9 +1203,7 @@ impl RnsNode {
                 remote_id.encrypt(data, &mut OsRng).map_err(|_| SendError)?
             }
             DestinationType::Plain => data.to_vec(),
-            DestinationType::Group => {
-                dest.encrypt(data).map_err(|_| SendError)?
-            }
+            DestinationType::Group => dest.encrypt(data).map_err(|_| SendError)?,
         };
 
         let flags = rns_core::packet::PacketFlags {
@@ -1173,9 +1215,14 @@ impl RnsNode {
         };
 
         let packet = rns_core::packet::RawPacket::pack(
-            flags, 0, &dest.hash.0, None,
-            rns_core::constants::CONTEXT_NONE, &payload,
-        ).map_err(|_| SendError)?;
+            flags,
+            0,
+            &dest.hash.0,
+            None,
+            rns_core::constants::CONTEXT_NONE,
+            &payload,
+        )
+        .map_err(|_| SendError)?;
 
         let packet_hash = rns_core::types::PacketHash(packet.packet_hash);
 
@@ -1219,13 +1266,17 @@ impl RnsNode {
     /// Request a path to a destination from the network.
     pub fn request_path(&self, dest_hash: &rns_core::types::DestHash) -> Result<(), SendError> {
         self.tx
-            .send(Event::RequestPath { dest_hash: dest_hash.0 })
+            .send(Event::RequestPath {
+                dest_hash: dest_hash.0,
+            })
             .map_err(|_| SendError)
     }
 
     /// Check if a path exists to a destination (synchronous query).
     pub fn has_path(&self, dest_hash: &rns_core::types::DestHash) -> Result<bool, SendError> {
-        match self.query(QueryRequest::HasPath { dest_hash: dest_hash.0 })? {
+        match self.query(QueryRequest::HasPath {
+            dest_hash: dest_hash.0,
+        })? {
             QueryResponse::HasPath(v) => Ok(v),
             _ => Ok(false),
         }
@@ -1233,7 +1284,9 @@ impl RnsNode {
 
     /// Get hop count to a destination (synchronous query).
     pub fn hops_to(&self, dest_hash: &rns_core::types::DestHash) -> Result<Option<u8>, SendError> {
-        match self.query(QueryRequest::HopsTo { dest_hash: dest_hash.0 })? {
+        match self.query(QueryRequest::HopsTo {
+            dest_hash: dest_hash.0,
+        })? {
             QueryResponse::HopsTo(v) => Ok(v),
             _ => Ok(None),
         }
@@ -1244,7 +1297,9 @@ impl RnsNode {
         &self,
         dest_hash: &rns_core::types::DestHash,
     ) -> Result<Option<crate::destination::AnnouncedIdentity>, SendError> {
-        match self.query(QueryRequest::RecallIdentity { dest_hash: dest_hash.0 })? {
+        match self.query(QueryRequest::RecallIdentity {
+            dest_hash: dest_hash.0,
+        })? {
             QueryResponse::RecallIdentity(v) => Ok(v),
             _ => Ok(None),
         }
@@ -1383,7 +1438,13 @@ mod tests {
     impl Callbacks for NoopCallbacks {
         fn on_announce(&mut self, _: crate::destination::AnnouncedIdentity) {}
         fn on_path_updated(&mut self, _: rns_core::types::DestHash, _: u8) {}
-        fn on_local_delivery(&mut self, _: rns_core::types::DestHash, _: Vec<u8>, _: rns_core::types::PacketHash) {}
+        fn on_local_delivery(
+            &mut self,
+            _: rns_core::types::DestHash,
+            _: Vec<u8>,
+            _: rns_core::types::PacketHash,
+        ) {
+        }
     }
 
     #[test]
@@ -1907,14 +1968,14 @@ enable_transport = False
                 registry: None,
             },
             Box::new(NoopCallbacks),
-        ).unwrap();
+        )
+        .unwrap();
 
-        let dest = crate::destination::Destination::single_in(
-            "test", &["echo"], identity_hash,
-        );
+        let dest = crate::destination::Destination::single_in("test", &["echo"], identity_hash);
 
         // Register destination first
-        node.register_destination(dest.hash.0, dest.dest_type.to_wire_constant()).unwrap();
+        node.register_destination(dest.hash.0, dest.dest_type.to_wire_constant())
+            .unwrap();
 
         // Announce should succeed (though no interfaces to send on)
         let result = node.announce(&dest, &identity, Some(b"hello"));
@@ -1949,7 +2010,8 @@ enable_transport = False
                 registry: None,
             },
             Box::new(NoopCallbacks),
-        ).unwrap();
+        )
+        .unwrap();
 
         let dh = rns_core::types::DestHash([0xAA; 16]);
 
@@ -1986,7 +2048,8 @@ enable_transport = False
                 registry: None,
             },
             Box::new(NoopCallbacks),
-        ).unwrap();
+        )
+        .unwrap();
 
         let dh = rns_core::types::DestHash([0xBB; 16]);
         assert!(node.recall_identity(&dh).unwrap().is_none());
@@ -2020,7 +2083,8 @@ enable_transport = False
                 registry: None,
             },
             Box::new(NoopCallbacks),
-        ).unwrap();
+        )
+        .unwrap();
 
         let dh = rns_core::types::DestHash([0xCC; 16]);
         assert!(node.request_path(&dh).is_ok());
@@ -2061,7 +2125,8 @@ enable_transport = False
                 registry: None,
             },
             Box::new(NoopCallbacks),
-        ).unwrap();
+        )
+        .unwrap();
 
         let dest = crate::destination::Destination::plain("test", &["echo"]);
         let result = node.send_packet(&dest, b"hello world");
@@ -2103,11 +2168,13 @@ enable_transport = False
                 registry: None,
             },
             Box::new(NoopCallbacks),
-        ).unwrap();
+        )
+        .unwrap();
 
         // single_in has no public_key — sending should fail
         let dest = crate::destination::Destination::single_in(
-            "test", &["echo"],
+            "test",
+            &["echo"],
             rns_core::types::IdentityHash([0x42; 16]),
         );
         let result = node.send_packet(&dest, b"hello");
@@ -2142,7 +2209,8 @@ enable_transport = False
                 registry: None,
             },
             Box::new(NoopCallbacks),
-        ).unwrap();
+        )
+        .unwrap();
 
         // Create a proper OUT SINGLE destination with a real identity's public key
         let remote_identity = Identity::new(&mut OsRng);
@@ -2193,7 +2261,8 @@ enable_transport = False
                 registry: None,
             },
             Box::new(NoopCallbacks),
-        ).unwrap();
+        )
+        .unwrap();
 
         let identity = Identity::new(&mut OsRng);
         let ih = rns_core::types::IdentityHash(*identity.hash());
@@ -2236,7 +2305,8 @@ enable_transport = False
                 registry: None,
             },
             Box::new(NoopCallbacks),
-        ).unwrap();
+        )
+        .unwrap();
 
         // ProveNone should not send RegisterProofStrategy event
         let dest = crate::destination::Destination::plain("test", &["data"])

@@ -1,8 +1,8 @@
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
-use crate::constants;
 use super::types::InterfaceId;
+use crate::constants;
 
 /// A held announce waiting for release after burst conditions subside.
 #[derive(Debug, Clone)]
@@ -61,7 +61,10 @@ impl IngressControl {
         interface_started: f64,
         now: f64,
     ) -> bool {
-        let state = self.states.entry(interface).or_insert_with(IngressControlState::new);
+        let state = self
+            .states
+            .entry(interface)
+            .or_insert_with(IngressControlState::new);
         let interface_age = now - interface_started;
         let threshold = if interface_age < constants::IC_NEW_TIME {
             constants::IC_BURST_FREQ_NEW
@@ -97,7 +100,10 @@ impl IngressControl {
         dest_hash: [u8; 16],
         held: HeldAnnounce,
     ) {
-        let state = self.states.entry(interface).or_insert_with(IngressControlState::new);
+        let state = self
+            .states
+            .entry(interface)
+            .or_insert_with(IngressControlState::new);
         if state.held_announces.contains_key(&dest_hash) {
             // Update existing
             state.held_announces.insert(dest_hash, held);
@@ -217,7 +223,7 @@ mod tests {
         let mut ic = IngressControl::new();
         let started = 9000.0;
         let now = 9500.0; // interface_age = 500s < IC_NEW_TIME (7200s)
-        // Below mature threshold but above new threshold (3.5)
+                          // Below mature threshold but above new threshold (3.5)
         assert!(ic.should_ingress_limit(iface(1), 4.0, started, now));
     }
 
@@ -259,12 +265,16 @@ mod tests {
         ic.should_ingress_limit(iface(1), 13.0, started, now);
 
         // Hold an announce
-        ic.hold_announce(iface(1), [1u8; 16], HeldAnnounce {
-            raw: vec![0; 10],
-            hops: 3,
-            receiving_interface: iface(1),
-            timestamp: now,
-        });
+        ic.hold_announce(
+            iface(1),
+            [1u8; 16],
+            HeldAnnounce {
+                raw: vec![0; 10],
+                hops: 3,
+                receiving_interface: iface(1),
+                timestamp: now,
+            },
+        );
 
         // Deactivate burst
         let now2 = now + constants::IC_BURST_HOLD + 1.0;
@@ -272,7 +282,9 @@ mod tests {
 
         // During penalty period, no release
         let now3 = now2 + 10.0; // < IC_BURST_PENALTY (300s)
-        assert!(ic.process_held_announces(iface(1), 1.0, started, now3).is_none());
+        assert!(ic
+            .process_held_announces(iface(1), 1.0, started, now3)
+            .is_none());
 
         // After penalty period, release
         let now4 = now2 + constants::IC_BURST_PENALTY + 1.0;
@@ -287,24 +299,36 @@ mod tests {
         let started = 0.0;
         let now = 10000.0;
 
-        ic.hold_announce(iface(1), [1u8; 16], HeldAnnounce {
-            raw: vec![0; 10],
-            hops: 5,
-            receiving_interface: iface(1),
-            timestamp: now,
-        });
-        ic.hold_announce(iface(1), [2u8; 16], HeldAnnounce {
-            raw: vec![0; 10],
-            hops: 2,
-            receiving_interface: iface(1),
-            timestamp: now,
-        });
-        ic.hold_announce(iface(1), [3u8; 16], HeldAnnounce {
-            raw: vec![0; 10],
-            hops: 8,
-            receiving_interface: iface(1),
-            timestamp: now,
-        });
+        ic.hold_announce(
+            iface(1),
+            [1u8; 16],
+            HeldAnnounce {
+                raw: vec![0; 10],
+                hops: 5,
+                receiving_interface: iface(1),
+                timestamp: now,
+            },
+        );
+        ic.hold_announce(
+            iface(1),
+            [2u8; 16],
+            HeldAnnounce {
+                raw: vec![0; 10],
+                hops: 2,
+                receiving_interface: iface(1),
+                timestamp: now,
+            },
+        );
+        ic.hold_announce(
+            iface(1),
+            [3u8; 16],
+            HeldAnnounce {
+                raw: vec![0; 10],
+                hops: 8,
+                receiving_interface: iface(1),
+                timestamp: now,
+            },
+        );
 
         // Release (no burst active, past penalty)
         let release_time = now + 1.0;
@@ -326,23 +350,31 @@ mod tests {
             let mut hash = [0u8; 16];
             hash[0] = (i >> 8) as u8;
             hash[1] = (i & 0xff) as u8;
-            ic.hold_announce(iface(1), hash, HeldAnnounce {
-                raw: vec![0; 10],
-                hops: 1,
-                receiving_interface: iface(1),
-                timestamp: 0.0,
-            });
+            ic.hold_announce(
+                iface(1),
+                hash,
+                HeldAnnounce {
+                    raw: vec![0; 10],
+                    hops: 1,
+                    receiving_interface: iface(1),
+                    timestamp: 0.0,
+                },
+            );
         }
 
         assert_eq!(ic.held_count(&iface(1)), constants::IC_MAX_HELD_ANNOUNCES);
 
         // One more should be dropped
-        ic.hold_announce(iface(1), [0xff; 16], HeldAnnounce {
-            raw: vec![0; 10],
-            hops: 1,
-            receiving_interface: iface(1),
-            timestamp: 0.0,
-        });
+        ic.hold_announce(
+            iface(1),
+            [0xff; 16],
+            HeldAnnounce {
+                raw: vec![0; 10],
+                hops: 1,
+                receiving_interface: iface(1),
+                timestamp: 0.0,
+            },
+        );
         assert_eq!(ic.held_count(&iface(1)), constants::IC_MAX_HELD_ANNOUNCES);
     }
 
@@ -351,21 +383,29 @@ mod tests {
         let mut ic = IngressControl::new();
         let hash = [1u8; 16];
 
-        ic.hold_announce(iface(1), hash, HeldAnnounce {
-            raw: vec![1; 10],
-            hops: 5,
-            receiving_interface: iface(1),
-            timestamp: 0.0,
-        });
+        ic.hold_announce(
+            iface(1),
+            hash,
+            HeldAnnounce {
+                raw: vec![1; 10],
+                hops: 5,
+                receiving_interface: iface(1),
+                timestamp: 0.0,
+            },
+        );
         assert_eq!(ic.held_count(&iface(1)), 1);
 
         // Update with better hops
-        ic.hold_announce(iface(1), hash, HeldAnnounce {
-            raw: vec![2; 10],
-            hops: 2,
-            receiving_interface: iface(1),
-            timestamp: 1.0,
-        });
+        ic.hold_announce(
+            iface(1),
+            hash,
+            HeldAnnounce {
+                raw: vec![2; 10],
+                hops: 2,
+                receiving_interface: iface(1),
+                timestamp: 1.0,
+            },
+        );
         assert_eq!(ic.held_count(&iface(1)), 1);
     }
 
@@ -374,12 +414,16 @@ mod tests {
         let mut ic = IngressControl::new();
         assert!(ic.interfaces_with_held().is_empty());
 
-        ic.hold_announce(iface(1), [1u8; 16], HeldAnnounce {
-            raw: vec![0; 10],
-            hops: 1,
-            receiving_interface: iface(1),
-            timestamp: 0.0,
-        });
+        ic.hold_announce(
+            iface(1),
+            [1u8; 16],
+            HeldAnnounce {
+                raw: vec![0; 10],
+                hops: 1,
+                receiving_interface: iface(1),
+                timestamp: 0.0,
+            },
+        );
 
         let ifaces = ic.interfaces_with_held();
         assert_eq!(ifaces.len(), 1);
@@ -389,12 +433,16 @@ mod tests {
     #[test]
     fn test_remove_interface() {
         let mut ic = IngressControl::new();
-        ic.hold_announce(iface(1), [1u8; 16], HeldAnnounce {
-            raw: vec![0; 10],
-            hops: 1,
-            receiving_interface: iface(1),
-            timestamp: 0.0,
-        });
+        ic.hold_announce(
+            iface(1),
+            [1u8; 16],
+            HeldAnnounce {
+                raw: vec![0; 10],
+                hops: 1,
+                receiving_interface: iface(1),
+                timestamp: 0.0,
+            },
+        );
         assert_eq!(ic.held_count(&iface(1)), 1);
 
         ic.remove_interface(&iface(1));
@@ -408,18 +456,26 @@ mod tests {
         let started = 0.0;
         let now = 10000.0;
 
-        ic.hold_announce(iface(1), [1u8; 16], HeldAnnounce {
-            raw: vec![0; 10],
-            hops: 1,
-            receiving_interface: iface(1),
-            timestamp: now,
-        });
-        ic.hold_announce(iface(1), [2u8; 16], HeldAnnounce {
-            raw: vec![0; 10],
-            hops: 2,
-            receiving_interface: iface(1),
-            timestamp: now,
-        });
+        ic.hold_announce(
+            iface(1),
+            [1u8; 16],
+            HeldAnnounce {
+                raw: vec![0; 10],
+                hops: 1,
+                receiving_interface: iface(1),
+                timestamp: now,
+            },
+        );
+        ic.hold_announce(
+            iface(1),
+            [2u8; 16],
+            HeldAnnounce {
+                raw: vec![0; 10],
+                hops: 2,
+                receiving_interface: iface(1),
+                timestamp: now,
+            },
+        );
 
         // First release
         let released = ic.process_held_announces(iface(1), 1.0, started, now);
@@ -427,10 +483,14 @@ mod tests {
 
         // Too soon for second release
         let too_soon = now + 10.0; // < IC_HELD_RELEASE_INTERVAL (30s)
-        assert!(ic.process_held_announces(iface(1), 1.0, started, too_soon).is_none());
+        assert!(ic
+            .process_held_announces(iface(1), 1.0, started, too_soon)
+            .is_none());
 
         // After interval, second release works
         let ok_time = now + constants::IC_HELD_RELEASE_INTERVAL + 1.0;
-        assert!(ic.process_held_announces(iface(1), 1.0, started, ok_time).is_some());
+        assert!(ic
+            .process_held_announces(iface(1), 1.0, started, ok_time)
+            .is_some());
     }
 }

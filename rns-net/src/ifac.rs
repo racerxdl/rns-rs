@@ -9,10 +9,8 @@ use rns_crypto::sha256;
 
 /// IFAC salt from `Reticulum.py:152`.
 pub const IFAC_SALT: [u8; 32] = [
-    0xad, 0xf5, 0x4d, 0x88, 0x2c, 0x9a, 0x9b, 0x80,
-    0x77, 0x1e, 0xb4, 0x99, 0x5d, 0x70, 0x2d, 0x4a,
-    0x3e, 0x73, 0x33, 0x91, 0xb2, 0xa0, 0xf5, 0x3f,
-    0x41, 0x6d, 0x9f, 0x90, 0x7e, 0x55, 0xcf, 0xf8,
+    0xad, 0xf5, 0x4d, 0x88, 0x2c, 0x9a, 0x9b, 0x80, 0x77, 0x1e, 0xb4, 0x99, 0x5d, 0x70, 0x2d, 0x4a,
+    0x3e, 0x73, 0x33, 0x91, 0xb2, 0xa0, 0xf5, 0x3f, 0x41, 0x6d, 0x9f, 0x90, 0x7e, 0x55, 0xcf, 0xf8,
 ];
 
 pub const IFAC_MIN_SIZE: usize = 1;
@@ -33,11 +31,7 @@ pub struct IfacState {
 /// ifac_key = hkdf(length=64, derive_from=ifac_origin_hash, salt=IFAC_SALT)
 /// ifac_identity = Identity.from_bytes(ifac_key)
 /// ```
-pub fn derive_ifac(
-    netname: Option<&str>,
-    netkey: Option<&str>,
-    size: usize,
-) -> IfacState {
+pub fn derive_ifac(netname: Option<&str>, netkey: Option<&str>, size: usize) -> IfacState {
     let mut ifac_origin = Vec::new();
 
     if let Some(name) = netname {
@@ -79,18 +73,15 @@ pub fn mask_outbound(raw: &[u8], state: &IfacState) -> Vec<u8> {
     }
 
     // Calculate IFAC: last `size` bytes of the Ed25519 signature
-    let sig = state.identity.sign(raw)
+    let sig = state
+        .identity
+        .sign(raw)
         .expect("IFAC identity must have private key");
     let ifac = &sig[64 - state.size..];
 
     // Generate mask
-    let mask = hkdf::hkdf(
-        raw.len() + state.size,
-        ifac,
-        Some(&state.key),
-        None,
-    )
-    .expect("HKDF should not fail");
+    let mask = hkdf::hkdf(raw.len() + state.size, ifac, Some(&state.key), None)
+        .expect("HKDF should not fail");
 
     // Build new_raw: [flags|0x80, hops] + ifac + raw[2..]
     let mut new_raw = Vec::with_capacity(raw.len() + state.size);
@@ -135,13 +126,7 @@ pub fn unmask_inbound(raw: &[u8], state: &IfacState) -> Option<Vec<u8>> {
     let ifac = &raw[2..2 + state.size];
 
     // Generate mask
-    let mask = hkdf::hkdf(
-        raw.len(),
-        ifac,
-        Some(&state.key),
-        None,
-    )
-    .expect("HKDF should not fail");
+    let mask = hkdf::hkdf(raw.len(), ifac, Some(&state.key), None).expect("HKDF should not fail");
 
     // Unmask: header bytes and payload are unmasked, IFAC is left as-is
     let mut unmasked = Vec::with_capacity(raw.len());
@@ -166,7 +151,9 @@ pub fn unmask_inbound(raw: &[u8], state: &IfacState) -> Option<Vec<u8>> {
     new_raw.extend_from_slice(&unmasked[2 + state.size..]);
 
     // Verify IFAC: expected = identity.sign(new_raw)[-ifac_size:]
-    let expected_sig = state.identity.sign(&new_raw)
+    let expected_sig = state
+        .identity
+        .sign(&new_raw)
         .expect("IFAC identity must have private key");
     let expected_ifac = &expected_sig[64 - state.size..];
 
@@ -254,7 +241,9 @@ mod tests {
         let state = derive_ifac(Some("testnet"), None, 8);
 
         // Packet without 0x80 flag
-        let raw = vec![0x00, 0x01, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x50];
+        let raw = vec![
+            0x00, 0x01, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x50,
+        ];
         let result = unmask_inbound(&raw, &state);
         assert!(result.is_none());
     }

@@ -78,13 +78,22 @@ impl Default for RNodeConfig {
 /// Validate subinterface configuration. Returns error message if invalid.
 pub fn validate_sub_config(sub: &RNodeSubConfig) -> Option<String> {
     if sub.frequency < FREQ_MIN || sub.frequency > FREQ_MAX {
-        return Some(format!("Invalid frequency {} for {}", sub.frequency, sub.name));
+        return Some(format!(
+            "Invalid frequency {} for {}",
+            sub.frequency, sub.name
+        ));
     }
     if sub.bandwidth < BW_MIN || sub.bandwidth > BW_MAX {
-        return Some(format!("Invalid bandwidth {} for {}", sub.bandwidth, sub.name));
+        return Some(format!(
+            "Invalid bandwidth {} for {}",
+            sub.bandwidth, sub.name
+        ));
     }
     if sub.spreading_factor < SF_MIN || sub.spreading_factor > SF_MAX {
-        return Some(format!("Invalid SF {} for {}", sub.spreading_factor, sub.name));
+        return Some(format!(
+            "Invalid SF {} for {}",
+            sub.spreading_factor, sub.name
+        ));
     }
     if sub.coding_rate < CR_MIN || sub.coding_rate > CR_MAX {
         return Some(format!("Invalid CR {} for {}", sub.coding_rate, sub.name));
@@ -257,8 +266,14 @@ fn reader_loop(
         let detect_cmd = rnode_kiss::detect_request();
         // Also request FW version, platform, MCU (matches Python detect())
         let mut cmd = detect_cmd;
-        cmd.extend_from_slice(&rnode_kiss::rnode_command(rnode_kiss::CMD_FW_VERSION, &[0x00]));
-        cmd.extend_from_slice(&rnode_kiss::rnode_command(rnode_kiss::CMD_PLATFORM, &[0x00]));
+        cmd.extend_from_slice(&rnode_kiss::rnode_command(
+            rnode_kiss::CMD_FW_VERSION,
+            &[0x00],
+        ));
+        cmd.extend_from_slice(&rnode_kiss::rnode_command(
+            rnode_kiss::CMD_PLATFORM,
+            &[0x00],
+        ));
         cmd.extend_from_slice(&rnode_kiss::rnode_command(rnode_kiss::CMD_MCU, &[0x00]));
 
         if let Err(e) = writer.lock().unwrap().write_all(&cmd) {
@@ -289,12 +304,7 @@ fn reader_loop(
                             log::info!("[{}] RNode device detected", config.name);
                         }
                         rnode_kiss::RNodeEvent::FirmwareVersion { major, minor } => {
-                            log::info!(
-                                "[{}] firmware version {}.{}",
-                                config.name,
-                                major,
-                                minor
-                            );
+                            log::info!("[{}] firmware version {}.{}", config.name, major, minor);
                         }
                         rnode_kiss::RNodeEvent::Platform(p) => {
                             log::info!("[{}] platform: 0x{:02X}", config.name, p);
@@ -320,8 +330,15 @@ fn reader_loop(
 
     // Configure each subinterface
     for (i, sub) in config.subinterfaces.iter().enumerate() {
-        if let Err(e) = configure_subinterface(&writer, i as u8, sub, config.subinterfaces.len() > 1) {
-            log::error!("[{}] failed to configure subinterface {}: {}", config.name, i, e);
+        if let Err(e) =
+            configure_subinterface(&writer, i as u8, sub, config.subinterfaces.len() > 1)
+        {
+            log::error!(
+                "[{}] failed to configure subinterface {}: {}",
+                config.name,
+                i,
+                e
+            );
             return;
         }
     }
@@ -426,17 +443,49 @@ fn configure_subinterface(
     };
 
     if multi {
-        w.write_all(&rnode_kiss::rnode_select_command(index, rnode_kiss::CMD_FREQUENCY, &freq_bytes))?;
-        w.write_all(&rnode_kiss::rnode_select_command(index, rnode_kiss::CMD_BANDWIDTH, &bw_bytes))?;
-        w.write_all(&rnode_kiss::rnode_select_command(index, rnode_kiss::CMD_TXPOWER, &[txp]))?;
-        w.write_all(&rnode_kiss::rnode_select_command(index, rnode_kiss::CMD_SF, &[sub.spreading_factor]))?;
-        w.write_all(&rnode_kiss::rnode_select_command(index, rnode_kiss::CMD_CR, &[sub.coding_rate]))?;
+        w.write_all(&rnode_kiss::rnode_select_command(
+            index,
+            rnode_kiss::CMD_FREQUENCY,
+            &freq_bytes,
+        ))?;
+        w.write_all(&rnode_kiss::rnode_select_command(
+            index,
+            rnode_kiss::CMD_BANDWIDTH,
+            &bw_bytes,
+        ))?;
+        w.write_all(&rnode_kiss::rnode_select_command(
+            index,
+            rnode_kiss::CMD_TXPOWER,
+            &[txp],
+        ))?;
+        w.write_all(&rnode_kiss::rnode_select_command(
+            index,
+            rnode_kiss::CMD_SF,
+            &[sub.spreading_factor],
+        ))?;
+        w.write_all(&rnode_kiss::rnode_select_command(
+            index,
+            rnode_kiss::CMD_CR,
+            &[sub.coding_rate],
+        ))?;
     } else {
-        w.write_all(&rnode_kiss::rnode_command(rnode_kiss::CMD_FREQUENCY, &freq_bytes))?;
-        w.write_all(&rnode_kiss::rnode_command(rnode_kiss::CMD_BANDWIDTH, &bw_bytes))?;
+        w.write_all(&rnode_kiss::rnode_command(
+            rnode_kiss::CMD_FREQUENCY,
+            &freq_bytes,
+        ))?;
+        w.write_all(&rnode_kiss::rnode_command(
+            rnode_kiss::CMD_BANDWIDTH,
+            &bw_bytes,
+        ))?;
         w.write_all(&rnode_kiss::rnode_command(rnode_kiss::CMD_TXPOWER, &[txp]))?;
-        w.write_all(&rnode_kiss::rnode_command(rnode_kiss::CMD_SF, &[sub.spreading_factor]))?;
-        w.write_all(&rnode_kiss::rnode_command(rnode_kiss::CMD_CR, &[sub.coding_rate]))?;
+        w.write_all(&rnode_kiss::rnode_command(
+            rnode_kiss::CMD_SF,
+            &[sub.spreading_factor],
+        ))?;
+        w.write_all(&rnode_kiss::rnode_command(
+            rnode_kiss::CMD_CR,
+            &[sub.coding_rate],
+        ))?;
     }
 
     // Airtime locks
@@ -444,26 +493,47 @@ fn configure_subinterface(
         let st_val = (st * 100.0) as u16;
         let st_bytes = [(st_val >> 8) as u8, (st_val & 0xFF) as u8];
         if multi {
-            w.write_all(&rnode_kiss::rnode_select_command(index, rnode_kiss::CMD_ST_ALOCK, &st_bytes))?;
+            w.write_all(&rnode_kiss::rnode_select_command(
+                index,
+                rnode_kiss::CMD_ST_ALOCK,
+                &st_bytes,
+            ))?;
         } else {
-            w.write_all(&rnode_kiss::rnode_command(rnode_kiss::CMD_ST_ALOCK, &st_bytes))?;
+            w.write_all(&rnode_kiss::rnode_command(
+                rnode_kiss::CMD_ST_ALOCK,
+                &st_bytes,
+            ))?;
         }
     }
     if let Some(lt) = sub.lt_alock {
         let lt_val = (lt * 100.0) as u16;
         let lt_bytes = [(lt_val >> 8) as u8, (lt_val & 0xFF) as u8];
         if multi {
-            w.write_all(&rnode_kiss::rnode_select_command(index, rnode_kiss::CMD_LT_ALOCK, &lt_bytes))?;
+            w.write_all(&rnode_kiss::rnode_select_command(
+                index,
+                rnode_kiss::CMD_LT_ALOCK,
+                &lt_bytes,
+            ))?;
         } else {
-            w.write_all(&rnode_kiss::rnode_command(rnode_kiss::CMD_LT_ALOCK, &lt_bytes))?;
+            w.write_all(&rnode_kiss::rnode_command(
+                rnode_kiss::CMD_LT_ALOCK,
+                &lt_bytes,
+            ))?;
         }
     }
 
     // Turn on radio
     if multi {
-        w.write_all(&rnode_kiss::rnode_select_command(index, rnode_kiss::CMD_RADIO_STATE, &[rnode_kiss::RADIO_STATE_ON]))?;
+        w.write_all(&rnode_kiss::rnode_select_command(
+            index,
+            rnode_kiss::CMD_RADIO_STATE,
+            &[rnode_kiss::RADIO_STATE_ON],
+        ))?;
     } else {
-        w.write_all(&rnode_kiss::rnode_command(rnode_kiss::CMD_RADIO_STATE, &[rnode_kiss::RADIO_STATE_ON]))?;
+        w.write_all(&rnode_kiss::rnode_command(
+            rnode_kiss::CMD_RADIO_STATE,
+            &[rnode_kiss::RADIO_STATE_ON],
+        ))?;
     }
 
     Ok(())
@@ -488,17 +558,21 @@ fn process_flow_queue(
 
 // --- Factory implementation ---
 
-use std::collections::HashMap;
+use super::{InterfaceConfigData, InterfaceFactory, StartContext, StartResult, SubInterface};
 use rns_core::transport::types::InterfaceInfo;
-use super::{InterfaceFactory, InterfaceConfigData, StartContext, StartResult, SubInterface};
+use std::collections::HashMap;
 
 /// Factory for `RNodeInterface`.
 pub struct RNodeFactory;
 
 impl InterfaceFactory for RNodeFactory {
-    fn type_name(&self) -> &str { "RNodeInterface" }
+    fn type_name(&self) -> &str {
+        "RNodeInterface"
+    }
 
-    fn default_ifac_size(&self) -> usize { 8 }
+    fn default_ifac_size(&self) -> usize {
+        8
+    }
 
     fn parse_config(
         &self,
@@ -506,55 +580,58 @@ impl InterfaceFactory for RNodeFactory {
         id: InterfaceId,
         params: &HashMap<String, String>,
     ) -> Result<Box<dyn InterfaceConfigData>, String> {
-        let pre_opened_fd = params.get("fd")
-            .and_then(|v| v.parse::<i32>().ok());
+        let pre_opened_fd = params.get("fd").and_then(|v| v.parse::<i32>().ok());
 
-        let port = params.get("port")
+        let port = params
+            .get("port")
             .cloned()
             .or_else(|| pre_opened_fd.map(|_| "usb-bridge".to_string()))
             .ok_or_else(|| "RNodeInterface requires 'port' or 'fd'".to_string())?;
 
-        let speed = params.get("speed")
+        let speed = params
+            .get("speed")
             .and_then(|v| v.parse().ok())
             .unwrap_or(115200u32);
 
-        let frequency = params.get("frequency")
+        let frequency = params
+            .get("frequency")
             .and_then(|v| v.parse().ok())
             .unwrap_or(868_000_000u32);
 
-        let bandwidth = params.get("bandwidth")
+        let bandwidth = params
+            .get("bandwidth")
             .and_then(|v| v.parse().ok())
             .unwrap_or(125_000u32);
 
-        let txpower = params.get("txpower")
+        let txpower = params
+            .get("txpower")
             .and_then(|v| v.parse().ok())
             .unwrap_or(7i8);
 
-        let spreading_factor = params.get("spreadingfactor")
+        let spreading_factor = params
+            .get("spreadingfactor")
             .or_else(|| params.get("spreading_factor"))
             .and_then(|v| v.parse().ok())
             .unwrap_or(8u8);
 
-        let coding_rate = params.get("codingrate")
+        let coding_rate = params
+            .get("codingrate")
             .or_else(|| params.get("coding_rate"))
             .and_then(|v| v.parse().ok())
             .unwrap_or(5u8);
 
-        let flow_control = params.get("flow_control")
+        let flow_control = params
+            .get("flow_control")
             .and_then(|v| crate::config::parse_bool_pub(v))
             .unwrap_or(false);
 
-        let st_alock = params.get("st_alock")
-            .and_then(|v| v.parse().ok());
+        let st_alock = params.get("st_alock").and_then(|v| v.parse().ok());
 
-        let lt_alock = params.get("lt_alock")
-            .and_then(|v| v.parse().ok());
+        let lt_alock = params.get("lt_alock").and_then(|v| v.parse().ok());
 
-        let id_interval = params.get("id_interval")
-            .and_then(|v| v.parse().ok());
+        let id_interval = params.get("id_interval").and_then(|v| v.parse().ok());
 
-        let id_callsign = params.get("id_callsign")
-            .map(|v| v.as_bytes().to_vec());
+        let id_callsign = params.get("id_callsign").map(|v| v.as_bytes().to_vec());
 
         let sub = RNodeSubConfig {
             name: name.to_string(),
@@ -585,8 +662,9 @@ impl InterfaceFactory for RNodeFactory {
         config: Box<dyn InterfaceConfigData>,
         ctx: StartContext,
     ) -> std::io::Result<StartResult> {
-        let rnode_config = *config.into_any().downcast::<RNodeConfig>()
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "wrong config type"))?;
+        let rnode_config = *config.into_any().downcast::<RNodeConfig>().map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "wrong config type")
+        })?;
 
         let name = rnode_config.name.clone();
 
@@ -666,15 +744,24 @@ mod tests {
     fn mock_respond_detect(master: &mut std::fs::File) {
         // Respond: DETECT_RESP
         master
-            .write_all(&rnode_kiss::rnode_command(rnode_kiss::CMD_DETECT, &[rnode_kiss::DETECT_RESP]))
+            .write_all(&rnode_kiss::rnode_command(
+                rnode_kiss::CMD_DETECT,
+                &[rnode_kiss::DETECT_RESP],
+            ))
             .unwrap();
         // FW version 1.74
         master
-            .write_all(&rnode_kiss::rnode_command(rnode_kiss::CMD_FW_VERSION, &[0x01, 0x4A]))
+            .write_all(&rnode_kiss::rnode_command(
+                rnode_kiss::CMD_FW_VERSION,
+                &[0x01, 0x4A],
+            ))
             .unwrap();
         // Platform ESP32
         master
-            .write_all(&rnode_kiss::rnode_command(rnode_kiss::CMD_PLATFORM, &[0x80]))
+            .write_all(&rnode_kiss::rnode_command(
+                rnode_kiss::CMD_PLATFORM,
+                &[0x80],
+            ))
             .unwrap();
         // MCU
         master
@@ -701,11 +788,15 @@ mod tests {
         let events = decoder.feed(&buf[..n]);
 
         assert!(
-            events.iter().any(|e| matches!(e, rnode_kiss::RNodeEvent::Detected(true))),
+            events
+                .iter()
+                .any(|e| matches!(e, rnode_kiss::RNodeEvent::Detected(true))),
             "should detect device"
         );
         assert!(
-            events.iter().any(|e| matches!(e, rnode_kiss::RNodeEvent::FirmwareVersion { .. })),
+            events
+                .iter()
+                .any(|e| matches!(e, rnode_kiss::RNodeEvent::FirmwareVersion { .. })),
             "should get firmware version"
         );
     }
@@ -735,14 +826,24 @@ mod tests {
         let data = read_available(&mut master);
 
         // Should contain frequency command
-        assert!(data.windows(2).any(|w| w[0] == kiss::FEND && w[1] == rnode_kiss::CMD_FREQUENCY),
-            "should contain FREQUENCY command");
+        assert!(
+            data.windows(2)
+                .any(|w| w[0] == kiss::FEND && w[1] == rnode_kiss::CMD_FREQUENCY),
+            "should contain FREQUENCY command"
+        );
         // Should contain bandwidth command
-        assert!(data.windows(2).any(|w| w[0] == kiss::FEND && w[1] == rnode_kiss::CMD_BANDWIDTH),
-            "should contain BANDWIDTH command");
+        assert!(
+            data.windows(2)
+                .any(|w| w[0] == kiss::FEND && w[1] == rnode_kiss::CMD_BANDWIDTH),
+            "should contain BANDWIDTH command"
+        );
         // Should contain RADIO_STATE ON
-        assert!(data.windows(3).any(|w| w[0] == kiss::FEND && w[1] == rnode_kiss::CMD_RADIO_STATE && w[2] == rnode_kiss::RADIO_STATE_ON),
-            "should contain RADIO_STATE ON command");
+        assert!(
+            data.windows(3).any(|w| w[0] == kiss::FEND
+                && w[1] == rnode_kiss::CMD_RADIO_STATE
+                && w[2] == rnode_kiss::RADIO_STATE_ON),
+            "should contain RADIO_STATE ON command"
+        );
 
         unsafe { libc::close(slave_fd) };
     }
@@ -857,13 +958,25 @@ mod tests {
         let frame0 = rnode_kiss::rnode_data_frame(0, &payload0);
         let events0 = decoder.feed(&frame0);
         assert_eq!(events0.len(), 1);
-        assert_eq!(events0[0], rnode_kiss::RNodeEvent::DataFrame { index: 0, data: payload0 });
+        assert_eq!(
+            events0[0],
+            rnode_kiss::RNodeEvent::DataFrame {
+                index: 0,
+                data: payload0
+            }
+        );
 
         let payload1 = vec![0x03, 0x04];
         let frame1 = rnode_kiss::rnode_data_frame(1, &payload1);
         let events1 = decoder.feed(&frame1);
         assert_eq!(events1.len(), 1);
-        assert_eq!(events1[0], rnode_kiss::RNodeEvent::DataFrame { index: 1, data: payload1 });
+        assert_eq!(
+            events1[0],
+            rnode_kiss::RNodeEvent::DataFrame {
+                index: 1,
+                data: payload1
+            }
+        );
     }
 
     #[test]

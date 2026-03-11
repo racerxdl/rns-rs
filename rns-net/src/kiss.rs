@@ -119,9 +119,7 @@ impl Decoder {
                 // End of data frame
                 self.in_frame = false;
                 if !self.buffer.is_empty() {
-                    events.push(KissEvent::DataFrame(
-                        core::mem::take(&mut self.buffer),
-                    ));
+                    events.push(KissEvent::DataFrame(core::mem::take(&mut self.buffer)));
                 }
             } else if byte == FEND {
                 // Start of new frame

@@ -44,7 +44,7 @@ const EMPTY_TUPLE: u8 = b')';
 const LONG1: u8 = 0x8a;
 const SHORT_BINSTRING: u8 = b'U'; // protocol 0/1 but appears in some pickles
 const BINSTRING: u8 = b'T'; // protocol 0/1
-// Protocol 4+ opcodes
+                            // Protocol 4+ opcodes
 const FRAME: u8 = 0x95;
 const MEMOIZE: u8 = 0x94;
 const SHORT_BINBYTES8: u8 = 0x8e; // protocol 4: 8-byte length bytes
@@ -344,12 +344,8 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
                 if pos + 4 > data.len() {
                     return Err(DecodeError::UnexpectedEnd);
                 }
-                let val = i32::from_le_bytes([
-                    data[pos],
-                    data[pos + 1],
-                    data[pos + 2],
-                    data[pos + 3],
-                ]);
+                let val =
+                    i32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
                 stack.push(PickleValue::Int(val as i64));
                 pos += 4;
             }
@@ -401,12 +397,9 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
                 if pos + 4 > data.len() {
                     return Err(DecodeError::UnexpectedEnd);
                 }
-                let len = u32::from_le_bytes([
-                    data[pos],
-                    data[pos + 1],
-                    data[pos + 2],
-                    data[pos + 3],
-                ]) as usize;
+                let len =
+                    u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]])
+                        as usize;
                 pos += 4;
                 if pos + len > data.len() {
                     return Err(DecodeError::UnexpectedEnd);
@@ -434,12 +427,9 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
                 if pos + 4 > data.len() {
                     return Err(DecodeError::UnexpectedEnd);
                 }
-                let len = i32::from_le_bytes([
-                    data[pos],
-                    data[pos + 1],
-                    data[pos + 2],
-                    data[pos + 3],
-                ]) as usize;
+                let len =
+                    i32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]])
+                        as usize;
                 pos += 4;
                 if pos + len > data.len() {
                     return Err(DecodeError::UnexpectedEnd);
@@ -468,12 +458,9 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
                 if pos + 4 > data.len() {
                     return Err(DecodeError::UnexpectedEnd);
                 }
-                let len = u32::from_le_bytes([
-                    data[pos],
-                    data[pos + 1],
-                    data[pos + 2],
-                    data[pos + 3],
-                ]) as usize;
+                let len =
+                    u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]])
+                        as usize;
                 pos += 4;
                 if pos + len > data.len() {
                     return Err(DecodeError::UnexpectedEnd);
@@ -564,8 +551,14 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
                     return Err(DecodeError::UnexpectedEnd);
                 }
                 let len = u64::from_le_bytes([
-                    data[pos], data[pos+1], data[pos+2], data[pos+3],
-                    data[pos+4], data[pos+5], data[pos+6], data[pos+7],
+                    data[pos],
+                    data[pos + 1],
+                    data[pos + 2],
+                    data[pos + 3],
+                    data[pos + 4],
+                    data[pos + 5],
+                    data[pos + 6],
+                    data[pos + 7],
                 ]) as usize;
                 pos += 8;
                 if pos + len > data.len() {
@@ -580,8 +573,14 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
                     return Err(DecodeError::UnexpectedEnd);
                 }
                 let len = u64::from_le_bytes([
-                    data[pos], data[pos+1], data[pos+2], data[pos+3],
-                    data[pos+4], data[pos+5], data[pos+6], data[pos+7],
+                    data[pos],
+                    data[pos + 1],
+                    data[pos + 2],
+                    data[pos + 3],
+                    data[pos + 4],
+                    data[pos + 5],
+                    data[pos + 6],
+                    data[pos + 7],
                 ]) as usize;
                 pos += 8;
                 if pos + len > data.len() {
@@ -598,8 +597,14 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
                     return Err(DecodeError::UnexpectedEnd);
                 }
                 let len = u64::from_le_bytes([
-                    data[pos], data[pos+1], data[pos+2], data[pos+3],
-                    data[pos+4], data[pos+5], data[pos+6], data[pos+7],
+                    data[pos],
+                    data[pos + 1],
+                    data[pos + 2],
+                    data[pos + 3],
+                    data[pos + 4],
+                    data[pos + 5],
+                    data[pos + 6],
+                    data[pos + 7],
                 ]) as usize;
                 pos += 8;
                 if pos + len > data.len() {
@@ -622,12 +627,8 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
                 if pos + 4 > data.len() {
                     return Err(DecodeError::UnexpectedEnd);
                 }
-                let idx = u32::from_le_bytes([
-                    data[pos],
-                    data[pos + 1],
-                    data[pos + 2],
-                    data[pos + 3],
-                ]);
+                let idx =
+                    u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
                 pos += 4;
                 if let Some(val) = stack.last() {
                     memo.insert(idx, val.clone());
@@ -639,27 +640,17 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
                 }
                 let idx = data[pos] as u32;
                 pos += 1;
-                let val = memo
-                    .get(&idx)
-                    .cloned()
-                    .ok_or(DecodeError::StackUnderflow)?;
+                let val = memo.get(&idx).cloned().ok_or(DecodeError::StackUnderflow)?;
                 stack.push(val);
             }
             LONG_BINGET => {
                 if pos + 4 > data.len() {
                     return Err(DecodeError::UnexpectedEnd);
                 }
-                let idx = u32::from_le_bytes([
-                    data[pos],
-                    data[pos + 1],
-                    data[pos + 2],
-                    data[pos + 3],
-                ]);
+                let idx =
+                    u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
                 pos += 4;
-                let val = memo
-                    .get(&idx)
-                    .cloned()
-                    .ok_or(DecodeError::StackUnderflow)?;
+                let val = memo.get(&idx).cloned().ok_or(DecodeError::StackUnderflow)?;
                 stack.push(val);
             }
             GLOBAL => {
@@ -668,15 +659,15 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
                     .iter()
                     .position(|&b| b == b'\n')
                     .ok_or(DecodeError::UnexpectedEnd)?;
-                let module =
-                    std::str::from_utf8(&data[pos..pos + nl1]).map_err(|_| DecodeError::InvalidUtf8)?;
+                let module = std::str::from_utf8(&data[pos..pos + nl1])
+                    .map_err(|_| DecodeError::InvalidUtf8)?;
                 pos += nl1 + 1;
                 let nl2 = data[pos..]
                     .iter()
                     .position(|&b| b == b'\n')
                     .ok_or(DecodeError::UnexpectedEnd)?;
-                let name =
-                    std::str::from_utf8(&data[pos..pos + nl2]).map_err(|_| DecodeError::InvalidUtf8)?;
+                let name = std::str::from_utf8(&data[pos..pos + nl2])
+                    .map_err(|_| DecodeError::InvalidUtf8)?;
                 pos += nl2 + 1;
 
                 // Only allow _codecs.encode (for bytes encoding)
@@ -700,8 +691,7 @@ pub fn decode(data: &[u8]) -> Result<PickleValue, DecodeError> {
                         if let PickleValue::List(ref items) = args {
                             if let Some(PickleValue::String(ref text)) = items.first() {
                                 // Convert latin-1 string back to bytes
-                                let bytes: Vec<u8> =
-                                    text.chars().map(|c| c as u8).collect();
+                                let bytes: Vec<u8> = text.chars().map(|c| c as u8).collect();
                                 stack.push(PickleValue::Bytes(bytes));
                             } else {
                                 stack.push(PickleValue::None);
@@ -876,14 +866,8 @@ mod tests {
     #[test]
     fn roundtrip_dict() {
         let val = PickleValue::Dict(vec![
-            (
-                PickleValue::String("key".into()),
-                PickleValue::Int(42),
-            ),
-            (
-                PickleValue::String("flag".into()),
-                PickleValue::Bool(false),
-            ),
+            (PickleValue::String("key".into()), PickleValue::Int(42)),
+            (PickleValue::String("flag".into()), PickleValue::Bool(false)),
         ]);
         let encoded = encode(&val);
         let decoded = decode(&encoded).unwrap();
@@ -922,13 +906,11 @@ mod tests {
 
     #[test]
     fn dict_get_helper() {
-        let val = PickleValue::Dict(vec![
-            (PickleValue::String("get".into()), PickleValue::String("interface_stats".into())),
-        ]);
-        assert_eq!(
-            val.get("get").unwrap().as_str().unwrap(),
-            "interface_stats"
-        );
+        let val = PickleValue::Dict(vec![(
+            PickleValue::String("get".into()),
+            PickleValue::String("interface_stats".into()),
+        )]);
+        assert_eq!(val.get("get").unwrap().as_str().unwrap(), "interface_stats");
         assert!(val.get("missing").is_none());
     }
 
@@ -978,12 +960,12 @@ mod tests {
         // PROTO 2, EMPTY_DICT, MARK, SHORT_BINUNICODE 3 "get", SHORT_BINUNICODE 5 "stats", SETITEMS, STOP
         let data = vec![
             0x80, 0x02, // PROTO 2
-            b'}',       // EMPTY_DICT
-            b'(',       // MARK
+            b'}', // EMPTY_DICT
+            b'(', // MARK
             0x8c, 3, b'g', b'e', b't', // SHORT_BINUNICODE "get"
             0x8c, 5, b's', b't', b'a', b't', b's', // SHORT_BINUNICODE "stats"
-            b'u',       // SETITEMS
-            b'.',       // STOP
+            b'u', // SETITEMS
+            b'.', // STOP
         ];
         let val = decode(&data).unwrap();
         assert_eq!(val.get("get").unwrap().as_str().unwrap(), "stats");
@@ -994,18 +976,17 @@ mod tests {
         // Protocol 4 pickle of {"get": "interface_stats"} (from Python 3.8+)
         // Generated by: pickle.dumps({"get": "interface_stats"})
         let data = vec![
-            0x80, 0x04,  // PROTO 4
+            0x80, 0x04, // PROTO 4
             0x95, 0x1c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // FRAME (28 bytes)
-            b'}',        // EMPTY_DICT
-            0x94,        // MEMOIZE
+            b'}', // EMPTY_DICT
+            0x94, // MEMOIZE
             0x8c, 0x03, b'g', b'e', b't', // SHORT_BINUNICODE "get"
-            0x94,        // MEMOIZE
-            0x8c, 0x0f,  // SHORT_BINUNICODE (15 bytes)
-            b'i', b'n', b't', b'e', b'r', b'f', b'a', b'c', b'e',
-            b'_', b's', b't', b'a', b't', b's',
-            0x94,        // MEMOIZE
-            b's',        // SETITEM
-            b'.',        // STOP
+            0x94, // MEMOIZE
+            0x8c, 0x0f, // SHORT_BINUNICODE (15 bytes)
+            b'i', b'n', b't', b'e', b'r', b'f', b'a', b'c', b'e', b'_', b's', b't', b'a', b't',
+            b's', 0x94, // MEMOIZE
+            b's', // SETITEM
+            b'.', // STOP
         ];
         let val = decode(&data).unwrap();
         assert_eq!(val.get("get").unwrap().as_str().unwrap(), "interface_stats");
@@ -1015,25 +996,27 @@ mod tests {
     fn decode_protocol4_with_bytes() {
         // Protocol 4 pickle of {"drop": "path", "destination_hash": b"\x01\x02\x03"}
         let data = vec![
-            0x80, 0x04,  // PROTO 4
+            0x80, 0x04, // PROTO 4
             0x95, 0x2c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // FRAME
-            b'}',        // EMPTY_DICT
-            0x94,        // MEMOIZE
-            b'(',        // MARK
+            b'}', // EMPTY_DICT
+            0x94, // MEMOIZE
+            b'(', // MARK
             0x8c, 0x04, b'd', b'r', b'o', b'p', // SHORT_BINUNICODE "drop"
-            0x94,        // MEMOIZE
+            0x94, // MEMOIZE
             0x8c, 0x04, b'p', b'a', b't', b'h', // SHORT_BINUNICODE "path"
-            0x94,        // MEMOIZE
-            0x8c, 0x10, b'd', b'e', b's', b't', b'i', b'n', b'a', b't',
-            b'i', b'o', b'n', b'_', b'h', b'a', b's', b'h',
-            0x94,        // MEMOIZE
+            0x94, // MEMOIZE
+            0x8c, 0x10, b'd', b'e', b's', b't', b'i', b'n', b'a', b't', b'i', b'o', b'n', b'_',
+            b'h', b'a', b's', b'h', 0x94, // MEMOIZE
             b'C', 0x03, 0x01, 0x02, 0x03, // SHORT_BINBYTES 3 bytes
-            0x94,        // MEMOIZE
-            b'u',        // SETITEMS
-            b'.',        // STOP
+            0x94, // MEMOIZE
+            b'u', // SETITEMS
+            b'.', // STOP
         ];
         let val = decode(&data).unwrap();
         assert_eq!(val.get("drop").unwrap().as_str().unwrap(), "path");
-        assert_eq!(val.get("destination_hash").unwrap().as_bytes().unwrap(), &[1, 2, 3]);
+        assert_eq!(
+            val.get("destination_hash").unwrap().as_bytes().unwrap(),
+            &[1, 2, 3]
+        );
     }
 }

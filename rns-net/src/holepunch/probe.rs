@@ -8,14 +8,14 @@
 
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 const PROBE_MAGIC: &[u8; 4] = b"RNSP";
 const PROBE_VERSION: u8 = 1;
-const PROBE_REQUEST_LEN: usize = 21;  // 4 + 1 + 16
+const PROBE_REQUEST_LEN: usize = 21; // 4 + 1 + 16
 const ADDR_TYPE_IPV4: u8 = 4;
 const ADDR_TYPE_IPV6: u8 = 6;
 
@@ -46,7 +46,9 @@ fn run_probe_server(socket: UdpSocket, running: Arc<AtomicBool>) {
     while running.load(Ordering::Relaxed) {
         let (len, src) = match socket.recv_from(&mut buf) {
             Ok(r) => r,
-            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut => {
+            Err(ref e)
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
+            {
                 continue;
             }
             Err(e) => {
@@ -160,7 +162,9 @@ pub fn probe_endpoint(
     let thread_id = std::thread::current().id();
     let thread_hash = format!("{:?}", thread_id);
     for (i, b) in thread_hash.bytes().enumerate() {
-        if 10 + i >= 16 { break; }
+        if 10 + i >= 16 {
+            break;
+        }
         nonce[10 + i] = b;
     }
 
@@ -241,7 +245,9 @@ pub fn stun_probe_endpoint(
     let thread_id = std::thread::current().id();
     let thread_hash = format!("{:?}", thread_id);
     for (i, b) in thread_hash.bytes().enumerate() {
-        if 10 + i >= 12 { break; }
+        if 10 + i >= 12 {
+            break;
+        }
         txn_id[10 + i] = b;
     }
 
@@ -260,9 +266,9 @@ pub fn stun_probe_endpoint(
 fn build_stun_binding_request(txn_id: &[u8; 12]) -> Vec<u8> {
     let mut pkt = Vec::with_capacity(STUN_HEADER_LEN);
     pkt.extend_from_slice(&STUN_BINDING_REQUEST.to_be_bytes()); // type
-    pkt.extend_from_slice(&0u16.to_be_bytes());                 // length (no attributes)
-    pkt.extend_from_slice(&STUN_MAGIC_COOKIE.to_be_bytes());    // magic cookie
-    pkt.extend_from_slice(txn_id);                               // transaction ID
+    pkt.extend_from_slice(&0u16.to_be_bytes()); // length (no attributes)
+    pkt.extend_from_slice(&STUN_MAGIC_COOKIE.to_be_bytes()); // magic cookie
+    pkt.extend_from_slice(txn_id); // transaction ID
     pkt
 }
 
@@ -407,8 +413,12 @@ pub fn probe_endpoint_with_protocol(
     device: Option<&str>,
 ) -> io::Result<(SocketAddr, UdpSocket)> {
     match protocol {
-        rns_core::holepunch::ProbeProtocol::Rnsp => probe_endpoint(server, existing_socket, timeout, device),
-        rns_core::holepunch::ProbeProtocol::Stun => stun_probe_endpoint(server, existing_socket, timeout, device),
+        rns_core::holepunch::ProbeProtocol::Rnsp => {
+            probe_endpoint(server, existing_socket, timeout, device)
+        }
+        rns_core::holepunch::ProbeProtocol::Stun => {
+            stun_probe_endpoint(server, existing_socket, timeout, device)
+        }
     }
 }
 
@@ -483,7 +493,9 @@ mod tests {
         let server_addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let socket = UdpSocket::bind(server_addr).unwrap();
         let actual_addr = socket.local_addr().unwrap();
-        socket.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
 
         let running = Arc::new(AtomicBool::new(true));
         let running_clone = running.clone();
@@ -495,12 +507,8 @@ mod tests {
         thread::sleep(Duration::from_millis(50));
 
         // Probe from client
-        let (observed, _socket) = probe_endpoint(
-            actual_addr,
-            None,
-            Duration::from_secs(3),
-            None,
-        ).unwrap();
+        let (observed, _socket) =
+            probe_endpoint(actual_addr, None, Duration::from_secs(3), None).unwrap();
 
         // Since we're on localhost, the observed address should be 127.0.0.1
         assert_eq!(observed.ip(), std::net::Ipv4Addr::new(127, 0, 0, 1));
@@ -622,7 +630,10 @@ mod tests {
         assert_eq!(req.len(), STUN_HEADER_LEN);
         assert_eq!(u16::from_be_bytes([req[0], req[1]]), STUN_BINDING_REQUEST);
         assert_eq!(u16::from_be_bytes([req[2], req[3]]), 0); // no attributes
-        assert_eq!(u32::from_be_bytes([req[4], req[5], req[6], req[7]]), STUN_MAGIC_COOKIE);
+        assert_eq!(
+            u32::from_be_bytes([req[4], req[5], req[6], req[7]]),
+            STUN_MAGIC_COOKIE
+        );
         assert_eq!(&req[8..20], &txn_id);
     }
 

@@ -380,8 +380,7 @@ fn unpack_depth(data: &[u8], depth: usize) -> Result<(Value, usize), Error> {
         0xcb => {
             ensure_len(data, 9)?;
             let bits = u64::from_be_bytes([
-                data[1], data[2], data[3], data[4],
-                data[5], data[6], data[7], data[8],
+                data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8],
             ]);
             Ok((Value::Float(f64::from_bits(bits)), 9))
         }
@@ -434,8 +433,7 @@ fn unpack_depth(data: &[u8], depth: usize) -> Result<(Value, usize), Error> {
         0xcf => {
             ensure_len(data, 9)?;
             let v = u64::from_be_bytes([
-                data[1], data[2], data[3], data[4],
-                data[5], data[6], data[7], data[8],
+                data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8],
             ]);
             Ok((Value::UInt(v), 9))
         }
@@ -464,8 +462,7 @@ fn unpack_depth(data: &[u8], depth: usize) -> Result<(Value, usize), Error> {
         0xd3 => {
             ensure_len(data, 9)?;
             let v = i64::from_be_bytes([
-                data[1], data[2], data[3], data[4],
-                data[5], data[6], data[7], data[8],
+                data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8],
             ]);
             Ok((Value::Int(v), 9))
         }
@@ -550,7 +547,12 @@ fn unpack_str_bytes(data: &[u8], offset: usize, len: usize) -> Result<(Value, us
     Ok((Value::Str(String::from(s)), offset + len))
 }
 
-fn unpack_array_entries(data: &[u8], start: usize, count: usize, depth: usize) -> Result<(Value, usize), Error> {
+fn unpack_array_entries(
+    data: &[u8],
+    start: usize,
+    count: usize,
+    depth: usize,
+) -> Result<(Value, usize), Error> {
     let mut offset = start;
     let mut items = Vec::with_capacity(count);
     for _ in 0..count {
@@ -561,7 +563,12 @@ fn unpack_array_entries(data: &[u8], start: usize, count: usize, depth: usize) -
     Ok((Value::Array(items), offset))
 }
 
-fn unpack_map_entries(data: &[u8], start: usize, count: usize, depth: usize) -> Result<(Value, usize), Error> {
+fn unpack_map_entries(
+    data: &[u8],
+    start: usize,
+    count: usize,
+    depth: usize,
+) -> Result<(Value, usize), Error> {
     let mut offset = start;
     let mut entries = Vec::with_capacity(count);
     for _ in 0..count {
@@ -626,7 +633,10 @@ mod tests {
 
     #[test]
     fn test_uint32() {
-        assert_eq!(pack(&Value::UInt(0x10000)), vec![0xce, 0x00, 0x01, 0x00, 0x00]);
+        assert_eq!(
+            pack(&Value::UInt(0x10000)),
+            vec![0xce, 0x00, 0x01, 0x00, 0x00]
+        );
         assert_eq!(roundtrip(&Value::UInt(0x10000)), Value::UInt(0x10000));
         assert_eq!(roundtrip(&Value::UInt(0xFFFFFFFF)), Value::UInt(0xFFFFFFFF));
     }
@@ -764,10 +774,7 @@ mod tests {
 
     #[test]
     fn test_pack_str_map() {
-        let packed = pack_str_map(&[
-            ("x", Value::UInt(42)),
-            ("y", Value::Bool(true)),
-        ]);
+        let packed = pack_str_map(&[("x", Value::UInt(42)), ("y", Value::Bool(true))]);
         let (v, _) = unpack(&packed).unwrap();
         assert_eq!(v.map_get("x").unwrap().as_uint(), Some(42));
         assert_eq!(v.map_get("y").unwrap().as_bool(), Some(true));
@@ -775,9 +782,7 @@ mod tests {
 
     #[test]
     fn test_map_get_missing_key() {
-        let v = Value::Map(vec![
-            (Value::Str(String::from("a")), Value::UInt(1)),
-        ]);
+        let v = Value::Map(vec![(Value::Str(String::from("a")), Value::UInt(1))]);
         assert!(v.map_get("b").is_none());
     }
 

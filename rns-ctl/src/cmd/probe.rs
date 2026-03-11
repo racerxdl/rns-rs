@@ -7,13 +7,13 @@ use std::path::Path;
 use std::process;
 use std::time::{Duration, Instant};
 
-use rns_net::{RpcAddr, RpcClient};
-use rns_net::pickle::PickleValue;
-use rns_net::rpc::derive_auth_key;
-use rns_net::config;
-use rns_net::storage;
 use crate::args::Args;
 use crate::format::prettyhexrep;
+use rns_net::config;
+use rns_net::pickle::PickleValue;
+use rns_net::rpc::derive_auth_key;
+use rns_net::storage;
+use rns_net::{RpcAddr, RpcClient};
 
 const DEFAULT_TIMEOUT: f64 = 15.0;
 const DEFAULT_PAYLOAD_SIZE: usize = 16;
@@ -39,19 +39,23 @@ pub fn run(args: Args) {
         .init();
 
     let config_path = args.config_path().map(|s| s.to_string());
-    let timeout: f64 = args.get("t")
+    let timeout: f64 = args
+        .get("t")
         .or_else(|| args.get("timeout"))
         .and_then(|s| s.parse().ok())
         .unwrap_or(DEFAULT_TIMEOUT);
-    let payload_size: usize = args.get("s")
+    let payload_size: usize = args
+        .get("s")
         .or_else(|| args.get("size"))
         .and_then(|s| s.parse().ok())
         .unwrap_or(DEFAULT_PAYLOAD_SIZE);
-    let count: usize = args.get("n")
+    let count: usize = args
+        .get("n")
         .or_else(|| args.get("count"))
         .and_then(|s| s.parse().ok())
         .unwrap_or(1);
-    let wait: f64 = args.get("w")
+    let wait: f64 = args
+        .get("w")
         .or_else(|| args.get("wait"))
         .and_then(|s| s.parse().ok())
         .unwrap_or(0.0);
@@ -79,9 +83,8 @@ pub fn run(args: Args) {
     };
 
     // Load config
-    let config_dir = storage::resolve_config_dir(
-        config_path.as_ref().map(|s| Path::new(s.as_str())),
-    );
+    let config_dir =
+        storage::resolve_config_dir(config_path.as_ref().map(|s| Path::new(s.as_str())));
     let config_file = config_dir.join("config");
     let rns_config = if config_file.exists() {
         match config::parse_file(&config_file) {
@@ -137,7 +140,12 @@ pub fn run(args: Args) {
         }
 
         if !send_and_wait_probe(
-            &rpc_addr, &auth_key, &dest_hash, payload_size, timeout_dur, verbosity,
+            &rpc_addr,
+            &auth_key,
+            &dest_hash,
+            payload_size,
+            timeout_dur,
+            verbosity,
         ) {
             any_failed = true;
         }
@@ -262,10 +270,7 @@ fn send_and_wait_probe(
         match check_proof_rpc(addr, auth_key, &packet_hash) {
             Ok(Some(rtt)) => {
                 let rtt_ms = rtt * 1000.0;
-                println!(
-                    "Probe reply received in {:.0}ms, {} hops",
-                    rtt_ms, hops,
-                );
+                println!("Probe reply received in {:.0}ms, {} hops", rtt_ms, hops,);
                 return true;
             }
             Ok(None) => continue,
@@ -284,25 +289,32 @@ fn query_has_path(
     auth_key: &[u8; 32],
     dest_hash: &[u8; 16],
 ) -> Result<bool, String> {
-    let mut client = RpcClient::connect(addr, auth_key)
-        .map_err(|e| format!("RPC connect: {}", e))?;
-    let response = client.call(&PickleValue::Dict(vec![
-        (PickleValue::String("get".into()), PickleValue::String("next_hop".into())),
-        (PickleValue::String("destination_hash".into()), PickleValue::Bytes(dest_hash.to_vec())),
-    ])).map_err(|e| format!("RPC call: {}", e))?;
+    let mut client =
+        RpcClient::connect(addr, auth_key).map_err(|e| format!("RPC connect: {}", e))?;
+    let response = client
+        .call(&PickleValue::Dict(vec![
+            (
+                PickleValue::String("get".into()),
+                PickleValue::String("next_hop".into()),
+            ),
+            (
+                PickleValue::String("destination_hash".into()),
+                PickleValue::Bytes(dest_hash.to_vec()),
+            ),
+        ]))
+        .map_err(|e| format!("RPC call: {}", e))?;
     Ok(response.as_bytes().map_or(false, |b| b.len() == 16))
 }
 
-fn request_path(
-    addr: &RpcAddr,
-    auth_key: &[u8; 32],
-    dest_hash: &[u8; 16],
-) -> Result<(), String> {
-    let mut client = RpcClient::connect(addr, auth_key)
-        .map_err(|e| format!("RPC connect: {}", e))?;
-    let _ = client.call(&PickleValue::Dict(vec![
-        (PickleValue::String("request_path".into()), PickleValue::Bytes(dest_hash.to_vec())),
-    ])).map_err(|e| format!("RPC call: {}", e))?;
+fn request_path(addr: &RpcAddr, auth_key: &[u8; 32], dest_hash: &[u8; 16]) -> Result<(), String> {
+    let mut client =
+        RpcClient::connect(addr, auth_key).map_err(|e| format!("RPC connect: {}", e))?;
+    let _ = client
+        .call(&PickleValue::Dict(vec![(
+            PickleValue::String("request_path".into()),
+            PickleValue::Bytes(dest_hash.to_vec()),
+        )]))
+        .map_err(|e| format!("RPC call: {}", e))?;
     Ok(())
 }
 
@@ -312,19 +324,29 @@ fn send_probe_rpc(
     dest_hash: &[u8; 16],
     payload_size: usize,
 ) -> Result<Option<([u8; 32], u8)>, String> {
-    let mut client = RpcClient::connect(addr, auth_key)
-        .map_err(|e| format!("RPC connect: {}", e))?;
-    let response = client.call(&PickleValue::Dict(vec![
-        (PickleValue::String("send_probe".into()), PickleValue::Bytes(dest_hash.to_vec())),
-        (PickleValue::String("size".into()), PickleValue::Int(payload_size as i64)),
-    ])).map_err(|e| format!("RPC call: {}", e))?;
+    let mut client =
+        RpcClient::connect(addr, auth_key).map_err(|e| format!("RPC connect: {}", e))?;
+    let response = client
+        .call(&PickleValue::Dict(vec![
+            (
+                PickleValue::String("send_probe".into()),
+                PickleValue::Bytes(dest_hash.to_vec()),
+            ),
+            (
+                PickleValue::String("size".into()),
+                PickleValue::Int(payload_size as i64),
+            ),
+        ]))
+        .map_err(|e| format!("RPC call: {}", e))?;
 
     match &response {
         PickleValue::Dict(entries) => {
-            let packet_hash = entries.iter()
+            let packet_hash = entries
+                .iter()
                 .find(|(k, _)| *k == PickleValue::String("packet_hash".into()))
                 .and_then(|(_, v)| v.as_bytes());
-            let hops = entries.iter()
+            let hops = entries
+                .iter()
                 .find(|(k, _)| *k == PickleValue::String("hops".into()))
                 .and_then(|(_, v)| v.as_int());
             if let (Some(ph), Some(h)) = (packet_hash, hops) {
@@ -348,11 +370,14 @@ fn check_proof_rpc(
     auth_key: &[u8; 32],
     packet_hash: &[u8; 32],
 ) -> Result<Option<f64>, String> {
-    let mut client = RpcClient::connect(addr, auth_key)
-        .map_err(|e| format!("RPC connect: {}", e))?;
-    let response = client.call(&PickleValue::Dict(vec![
-        (PickleValue::String("check_proof".into()), PickleValue::Bytes(packet_hash.to_vec())),
-    ])).map_err(|e| format!("RPC call: {}", e))?;
+    let mut client =
+        RpcClient::connect(addr, auth_key).map_err(|e| format!("RPC connect: {}", e))?;
+    let response = client
+        .call(&PickleValue::Dict(vec![(
+            PickleValue::String("check_proof".into()),
+            PickleValue::Bytes(packet_hash.to_vec()),
+        )]))
+        .map_err(|e| format!("RPC call: {}", e))?;
 
     match &response {
         PickleValue::Float(rtt) => Ok(Some(*rtt)),
@@ -373,13 +398,21 @@ fn query_path_info(
     auth_key: &[u8; 32],
     dest_hash: &[u8; 16],
 ) -> Result<Option<PathInfo>, String> {
-    let mut client = RpcClient::connect(addr, auth_key)
-        .map_err(|e| format!("RPC connect: {}", e))?;
+    let mut client =
+        RpcClient::connect(addr, auth_key).map_err(|e| format!("RPC connect: {}", e))?;
 
-    let response = client.call(&PickleValue::Dict(vec![
-        (PickleValue::String("get".into()), PickleValue::String("next_hop".into())),
-        (PickleValue::String("destination_hash".into()), PickleValue::Bytes(dest_hash.to_vec())),
-    ])).map_err(|e| format!("RPC call: {}", e))?;
+    let response = client
+        .call(&PickleValue::Dict(vec![
+            (
+                PickleValue::String("get".into()),
+                PickleValue::String("next_hop".into()),
+            ),
+            (
+                PickleValue::String("destination_hash".into()),
+                PickleValue::Bytes(dest_hash.to_vec()),
+            ),
+        ]))
+        .map_err(|e| format!("RPC call: {}", e))?;
 
     let next_hop = match response.as_bytes() {
         Some(b) if b.len() == 16 => {
@@ -392,13 +425,21 @@ fn query_path_info(
 
     // Query interface name
     let if_name = {
-        let mut client2 = RpcClient::connect(addr, auth_key)
-            .map_err(|e| format!("RPC connect: {}", e))?;
+        let mut client2 =
+            RpcClient::connect(addr, auth_key).map_err(|e| format!("RPC connect: {}", e))?;
 
-        let resp = client2.call(&PickleValue::Dict(vec![
-            (PickleValue::String("get".into()), PickleValue::String("next_hop_if_name".into())),
-            (PickleValue::String("destination_hash".into()), PickleValue::Bytes(dest_hash.to_vec())),
-        ])).map_err(|e| format!("RPC call: {}", e))?;
+        let resp = client2
+            .call(&PickleValue::Dict(vec![
+                (
+                    PickleValue::String("get".into()),
+                    PickleValue::String("next_hop_if_name".into()),
+                ),
+                (
+                    PickleValue::String("destination_hash".into()),
+                    PickleValue::Bytes(dest_hash.to_vec()),
+                ),
+            ]))
+            .map_err(|e| format!("RPC call: {}", e))?;
 
         match resp {
             PickleValue::String(s) => s,
@@ -408,12 +449,15 @@ fn query_path_info(
 
     // Query hop count
     let hops = {
-        let mut client3 = RpcClient::connect(addr, auth_key)
-            .map_err(|e| format!("RPC connect: {}", e))?;
+        let mut client3 =
+            RpcClient::connect(addr, auth_key).map_err(|e| format!("RPC connect: {}", e))?;
 
-        let resp = client3.call(&PickleValue::Dict(vec![
-            (PickleValue::String("get".into()), PickleValue::String("path_table".into())),
-        ])).map_err(|e| format!("RPC call: {}", e))?;
+        let resp = client3
+            .call(&PickleValue::Dict(vec![(
+                PickleValue::String("get".into()),
+                PickleValue::String("path_table".into()),
+            )]))
+            .map_err(|e| format!("RPC call: {}", e))?;
 
         extract_hops_from_path_table(&resp, dest_hash)
     };
@@ -525,8 +569,10 @@ mod tests {
 
     #[test]
     fn prettyhexrep_format() {
-        let hash = [0xAA, 0xBB, 0xCC, 0xDD, 0x00, 0x11, 0x22, 0x33,
-                     0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB];
+        let hash = [
+            0xAA, 0xBB, 0xCC, 0xDD, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99,
+            0xAA, 0xBB,
+        ];
         let hex = prettyhexrep(&hash);
         assert_eq!(hex, "aabbccdd00112233445566778899aabb");
     }

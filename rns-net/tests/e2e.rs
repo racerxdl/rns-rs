@@ -17,8 +17,8 @@ use rns_crypto::{OsRng, Rng};
 
 use rns_net::{
     AnnouncedIdentity, Callbacks, DestHash, Destination, IdentityHash, InterfaceConfig,
-    InterfaceId, NodeConfig, PacketHash, ProofStrategy, QueryRequest,
-    QueryResponse, RnsNode, TcpClientConfig, TcpServerConfig, UdpConfig, MODE_FULL,
+    InterfaceId, NodeConfig, PacketHash, ProofStrategy, QueryRequest, QueryResponse, RnsNode,
+    TcpClientConfig, TcpServerConfig, UdpConfig, MODE_FULL,
 };
 
 // ─── TestEvent ───────────────────────────────────────────────────────────────
@@ -146,7 +146,13 @@ impl Callbacks for TestCallbacks {
         let _ = self.tx.send(TestEvent::InterfaceDown(id));
     }
 
-    fn on_link_established(&mut self, link_id: rns_core::types::LinkId, _dest_hash: rns_core::types::DestHash, rtt: f64, is_initiator: bool) {
+    fn on_link_established(
+        &mut self,
+        link_id: rns_core::types::LinkId,
+        _dest_hash: rns_core::types::DestHash,
+        rtt: f64,
+        is_initiator: bool,
+    ) {
         let _ = self.tx.send(TestEvent::LinkEstablished {
             link_id: link_id.0,
             rtt,
@@ -154,14 +160,23 @@ impl Callbacks for TestCallbacks {
         });
     }
 
-    fn on_link_closed(&mut self, link_id: rns_core::types::LinkId, reason: Option<rns_core::link::TeardownReason>) {
+    fn on_link_closed(
+        &mut self,
+        link_id: rns_core::types::LinkId,
+        reason: Option<rns_core::link::TeardownReason>,
+    ) {
         let _ = self.tx.send(TestEvent::LinkClosed {
             link_id: link_id.0,
             reason,
         });
     }
 
-    fn on_remote_identified(&mut self, link_id: rns_core::types::LinkId, identity_hash: rns_core::types::IdentityHash, public_key: [u8; 64]) {
+    fn on_remote_identified(
+        &mut self,
+        link_id: rns_core::types::LinkId,
+        identity_hash: rns_core::types::IdentityHash,
+        public_key: [u8; 64],
+    ) {
         let _ = self.tx.send(TestEvent::RemoteIdentified {
             link_id: link_id.0,
             identity_hash,
@@ -169,7 +184,12 @@ impl Callbacks for TestCallbacks {
         });
     }
 
-    fn on_resource_received(&mut self, link_id: rns_core::types::LinkId, data: Vec<u8>, metadata: Option<Vec<u8>>) {
+    fn on_resource_received(
+        &mut self,
+        link_id: rns_core::types::LinkId,
+        data: Vec<u8>,
+        metadata: Option<Vec<u8>>,
+    ) {
         let _ = self.tx.send(TestEvent::ResourceReceived {
             link_id: link_id.0,
             data,
@@ -178,9 +198,9 @@ impl Callbacks for TestCallbacks {
     }
 
     fn on_resource_completed(&mut self, link_id: rns_core::types::LinkId) {
-        let _ = self.tx.send(TestEvent::ResourceCompleted {
-            link_id: link_id.0,
-        });
+        let _ = self
+            .tx
+            .send(TestEvent::ResourceCompleted { link_id: link_id.0 });
     }
 
     fn on_resource_failed(&mut self, link_id: rns_core::types::LinkId, error: String) {
@@ -190,7 +210,12 @@ impl Callbacks for TestCallbacks {
         });
     }
 
-    fn on_resource_progress(&mut self, link_id: rns_core::types::LinkId, received: usize, total: usize) {
+    fn on_resource_progress(
+        &mut self,
+        link_id: rns_core::types::LinkId,
+        received: usize,
+        total: usize,
+    ) {
         let _ = self.tx.send(TestEvent::ResourceProgress {
             link_id: link_id.0,
             received,
@@ -198,11 +223,22 @@ impl Callbacks for TestCallbacks {
         });
     }
 
-    fn on_resource_accept_query(&mut self, _link_id: rns_core::types::LinkId, _resource_hash: Vec<u8>, _transfer_size: u64, _has_metadata: bool) -> bool {
+    fn on_resource_accept_query(
+        &mut self,
+        _link_id: rns_core::types::LinkId,
+        _resource_hash: Vec<u8>,
+        _transfer_size: u64,
+        _has_metadata: bool,
+    ) -> bool {
         *self.resource_accept_flag.lock().unwrap()
     }
 
-    fn on_channel_message(&mut self, link_id: rns_core::types::LinkId, msgtype: u16, payload: Vec<u8>) {
+    fn on_channel_message(
+        &mut self,
+        link_id: rns_core::types::LinkId,
+        msgtype: u16,
+        payload: Vec<u8>,
+    ) {
         let _ = self.tx.send(TestEvent::ChannelMessage {
             link_id: link_id.0,
             msgtype,
@@ -218,7 +254,12 @@ impl Callbacks for TestCallbacks {
         });
     }
 
-    fn on_response(&mut self, link_id: rns_core::types::LinkId, request_id: [u8; 16], data: Vec<u8>) {
+    fn on_response(
+        &mut self,
+        link_id: rns_core::types::LinkId,
+        request_id: [u8; 16],
+        data: Vec<u8>,
+    ) {
         let _ = self.tx.send(TestEvent::Response {
             link_id: link_id.0,
             request_id,
@@ -252,8 +293,8 @@ impl Callbacks for TransportCallbacks {
 // ─── Helper functions ────────────────────────────────────────────────────────
 
 fn find_free_port() -> u16 {
-    use std::sync::Mutex;
     use std::collections::HashSet;
+    use std::sync::Mutex;
     static USED_PORTS: Mutex<Option<HashSet<u16>>> = Mutex::new(None);
 
     let mut used = USED_PORTS.lock().unwrap();
@@ -301,7 +342,9 @@ where
 {
     let deadline = Instant::now() + timeout;
     loop {
-        let remaining = deadline.checked_duration_since(Instant::now()).unwrap_or(Duration::ZERO);
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .unwrap_or(Duration::ZERO);
         if remaining.is_zero() {
             return None;
         }
@@ -360,19 +403,20 @@ fn wait_for_delivery(
     timeout: Duration,
 ) -> Option<(DestHash, Vec<u8>, PacketHash)> {
     wait_for_event(rx, timeout, |event| match event {
-        TestEvent::Delivery { dest_hash, raw, packet_hash } => {
-            Some((dest_hash.clone(), raw.clone(), packet_hash.clone()))
-        }
+        TestEvent::Delivery {
+            dest_hash,
+            raw,
+            packet_hash,
+        } => Some((dest_hash.clone(), raw.clone(), packet_hash.clone())),
         _ => None,
     })
 }
 
-fn wait_for_proof(
-    rx: &mpsc::Receiver<TestEvent>,
-    timeout: Duration,
-) -> Option<(PacketHash, f64)> {
+fn wait_for_proof(rx: &mpsc::Receiver<TestEvent>, timeout: Duration) -> Option<(PacketHash, f64)> {
     wait_for_event(rx, timeout, |event| match event {
-        TestEvent::Proof { packet_hash, rtt, .. } => Some((packet_hash.clone(), *rtt)),
+        TestEvent::Proof {
+            packet_hash, rtt, ..
+        } => Some((packet_hash.clone(), *rtt)),
         _ => None,
     })
 }
@@ -382,9 +426,11 @@ fn wait_for_link_established(
     timeout: Duration,
 ) -> Option<([u8; 16], f64, bool)> {
     wait_for_event(rx, timeout, |event| match event {
-        TestEvent::LinkEstablished { link_id, rtt, is_initiator } => {
-            Some((*link_id, *rtt, *is_initiator))
-        }
+        TestEvent::LinkEstablished {
+            link_id,
+            rtt,
+            is_initiator,
+        } => Some((*link_id, *rtt, *is_initiator)),
         _ => None,
     })
 }
@@ -404,9 +450,11 @@ fn wait_for_resource_received(
     timeout: Duration,
 ) -> Option<([u8; 16], Vec<u8>, Option<Vec<u8>>)> {
     wait_for_event(rx, timeout, |event| match event {
-        TestEvent::ResourceReceived { link_id, data, metadata } => {
-            Some((*link_id, data.clone(), metadata.clone()))
-        }
+        TestEvent::ResourceReceived {
+            link_id,
+            data,
+            metadata,
+        } => Some((*link_id, data.clone(), metadata.clone())),
         _ => None,
     })
 }
@@ -416,9 +464,11 @@ fn wait_for_channel_message(
     timeout: Duration,
 ) -> Option<([u8; 16], u16, Vec<u8>)> {
     wait_for_event(rx, timeout, |event| match event {
-        TestEvent::ChannelMessage { link_id, msgtype, payload } => {
-            Some((*link_id, *msgtype, payload.clone()))
-        }
+        TestEvent::ChannelMessage {
+            link_id,
+            msgtype,
+            payload,
+        } => Some((*link_id, *msgtype, payload.clone())),
         _ => None,
     })
 }
@@ -428,9 +478,11 @@ fn wait_for_response(
     timeout: Duration,
 ) -> Option<([u8; 16], [u8; 16], Vec<u8>)> {
     wait_for_event(rx, timeout, |event| match event {
-        TestEvent::Response { link_id, request_id, data } => {
-            Some((*link_id, *request_id, data.clone()))
-        }
+        TestEvent::Response {
+            link_id,
+            request_id,
+            data,
+        } => Some((*link_id, *request_id, data.clone())),
         _ => None,
     })
 }
@@ -440,9 +492,11 @@ fn wait_for_remote_identified(
     timeout: Duration,
 ) -> Option<([u8; 16], rns_core::types::IdentityHash)> {
     wait_for_event(rx, timeout, |event| match event {
-        TestEvent::RemoteIdentified { link_id, identity_hash, .. } => {
-            Some((*link_id, identity_hash.clone()))
-        }
+        TestEvent::RemoteIdentified {
+            link_id,
+            identity_hash,
+            ..
+        } => Some((*link_id, identity_hash.clone())),
         _ => None,
     })
 }
@@ -452,9 +506,11 @@ fn wait_for_link_data(
     timeout: Duration,
 ) -> Option<([u8; 16], u8, Vec<u8>)> {
     wait_for_event(rx, timeout, |event| match event {
-        TestEvent::LinkData { link_id, context, data } => {
-            Some((*link_id, *context, data.clone()))
-        }
+        TestEvent::LinkData {
+            link_id,
+            context,
+            data,
+        } => Some((*link_id, *context, data.clone())),
         _ => None,
     })
 }
@@ -474,9 +530,11 @@ fn wait_for_resource_progress(
     timeout: Duration,
 ) -> Option<([u8; 16], usize, usize)> {
     wait_for_event(rx, timeout, |event| match event {
-        TestEvent::ResourceProgress { link_id, received, total } => {
-            Some((*link_id, *received, *total))
-        }
+        TestEvent::ResourceProgress {
+            link_id,
+            received,
+            total,
+        } => Some((*link_id, *received, *total)),
         _ => None,
     })
 }
@@ -520,7 +578,7 @@ fn start_transport_node(port: u16) -> RnsNode {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
-        registry: None,
+            registry: None,
         },
         Box::new(TransportCallbacks),
     )
@@ -528,11 +586,7 @@ fn start_transport_node(port: u16) -> RnsNode {
 }
 
 /// Start a client node (TCP client) connecting to the given port.
-fn start_client_node(
-    port: u16,
-    identity: &Identity,
-    callbacks: Box<dyn Callbacks>,
-) -> RnsNode {
+fn start_client_node(port: u16, identity: &Identity, callbacks: Box<dyn Callbacks>) -> RnsNode {
     RnsNode::start(
         NodeConfig {
             transport_enabled: false,
@@ -568,7 +622,7 @@ fn start_client_node(
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
-        registry: None,
+            registry: None,
         },
         callbacks,
     )
@@ -603,9 +657,16 @@ fn setup_two_peers() -> (
         .set_proof_strategy(ProofStrategy::ProveAll);
 
     let (alice_tx, alice_rx) = mpsc::channel();
-    let alice_node = start_client_node(port, &alice_identity, Box::new(TestCallbacks::new(alice_tx)));
+    let alice_node = start_client_node(
+        port,
+        &alice_identity,
+        Box::new(TestCallbacks::new(alice_tx)),
+    );
     alice_node
-        .register_destination_with_proof(&alice_dest, Some(alice_identity.get_private_key().unwrap()))
+        .register_destination_with_proof(
+            &alice_dest,
+            Some(alice_identity.get_private_key().unwrap()),
+        )
         .unwrap();
 
     let (bob_tx, bob_rx) = mpsc::channel();
@@ -615,10 +676,14 @@ fn setup_two_peers() -> (
         .unwrap();
 
     // Wait for both TCP interfaces to come up, then let transport settle
-    wait_for_event(&alice_rx, TIMEOUT, |e| matches!(e, TestEvent::InterfaceUp(_)).then_some(()))
-        .expect("Alice InterfaceUp timed out");
-    wait_for_event(&bob_rx, TIMEOUT, |e| matches!(e, TestEvent::InterfaceUp(_)).then_some(()))
-        .expect("Bob InterfaceUp timed out");
+    wait_for_event(&alice_rx, TIMEOUT, |e| {
+        matches!(e, TestEvent::InterfaceUp(_)).then_some(())
+    })
+    .expect("Alice InterfaceUp timed out");
+    wait_for_event(&bob_rx, TIMEOUT, |e| {
+        matches!(e, TestEvent::InterfaceUp(_)).then_some(())
+    })
+    .expect("Bob InterfaceUp timed out");
     std::thread::sleep(SETTLE);
 
     (
@@ -660,8 +725,9 @@ fn setup_two_peers_announced() -> (
     // retransmit path, causing one direction to be permanently dropped.
     let bob_announced = announce_with_retry(&bob_node, &bob_dest, &bob_id, Some(b"Bob"), &alice_rx)
         .expect("Alice never received Bob's announce after retries");
-    let alice_announced = announce_with_retry(&alice_node, &alice_dest, &alice_id, Some(b"Alice"), &bob_rx)
-        .expect("Bob never received Alice's announce after retries");
+    let alice_announced =
+        announce_with_retry(&alice_node, &alice_dest, &alice_id, Some(b"Alice"), &bob_rx)
+            .expect("Bob never received Alice's announce after retries");
 
     (
         transport,
@@ -693,8 +759,19 @@ fn setup_link() -> (
     Destination,
     [u8; 16],
 ) {
-    let (transport, alice_node, alice_rx, bob_node, bob_rx, alice_id, bob_id, alice_dest, bob_dest, _alice_ann, bob_announced) =
-        setup_two_peers_announced();
+    let (
+        transport,
+        alice_node,
+        alice_rx,
+        bob_node,
+        bob_rx,
+        alice_id,
+        bob_id,
+        alice_dest,
+        bob_dest,
+        _alice_ann,
+        bob_announced,
+    ) = setup_two_peers_announced();
 
     // Bob registers as link destination
     let (bob_sig_prv, bob_sig_pub) = extract_sig_keys(&bob_id);
@@ -732,15 +809,7 @@ fn setup_link() -> (
     std::thread::sleep(Duration::from_millis(200));
 
     (
-        transport,
-        alice_node,
-        alice_rx,
-        bob_node,
-        bob_rx,
-        alice_id,
-        bob_id,
-        alice_dest,
-        bob_dest,
+        transport, alice_node, alice_rx, bob_node, bob_rx, alice_id, bob_id, alice_dest, bob_dest,
         link_id,
     )
 }
@@ -768,7 +837,9 @@ fn test_direct_link_no_transport() {
     let bob_node = RnsNode::start(
         NodeConfig {
             transport_enabled: false,
-            identity: Some(Identity::from_private_key(&bob_id.get_private_key().unwrap())),
+            identity: Some(Identity::from_private_key(
+                &bob_id.get_private_key().unwrap(),
+            )),
             interfaces: vec![InterfaceConfig {
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
@@ -797,7 +868,7 @@ fn test_direct_link_no_transport() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
-        registry: None,
+            registry: None,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
@@ -824,14 +895,18 @@ fn test_direct_link_no_transport() {
 
     // Bob registers as link destination
     let (bob_sig_prv, bob_sig_pub) = extract_sig_keys(&bob_id);
-    bob_node.register_link_destination(bob_dest.hash.0, bob_sig_prv, bob_sig_pub, 0).unwrap();
+    bob_node
+        .register_link_destination(bob_dest.hash.0, bob_sig_prv, bob_sig_pub, 0)
+        .unwrap();
     std::thread::sleep(Duration::from_millis(500));
 
     // Alice creates link
     let bob_pub = bob_id.get_public_key().unwrap();
     let mut bob_sig_pub_link = [0u8; 32];
     bob_sig_pub_link.copy_from_slice(&bob_pub[32..64]);
-    let link_id = alice_node.create_link(bob_dest.hash.0, bob_sig_pub_link).unwrap();
+    let link_id = alice_node
+        .create_link(bob_dest.hash.0, bob_sig_pub_link)
+        .unwrap();
 
     // Wait for link established on both sides
     let alice_est = wait_for_link_established(&alice_rx, TIMEOUT);
@@ -860,7 +935,11 @@ fn test_announce_propagation() {
     let alice_dest = Destination::single_in(APP_NAME, &["announce", "test"], alice_ih);
 
     let (alice_tx, _alice_rx) = mpsc::channel();
-    let alice_node = start_client_node(port, &alice_identity, Box::new(TestCallbacks::new(alice_tx)));
+    let alice_node = start_client_node(
+        port,
+        &alice_identity,
+        Box::new(TestCallbacks::new(alice_tx)),
+    );
     alice_node
         .register_destination_with_proof(&alice_dest, None)
         .unwrap();
@@ -896,7 +975,11 @@ fn test_announce_binary_app_data() {
     let alice_dest = Destination::single_in(APP_NAME, &["announce", "binary"], alice_ih);
 
     let (alice_tx, _alice_rx) = mpsc::channel();
-    let alice_node = start_client_node(port, &alice_identity, Box::new(TestCallbacks::new(alice_tx)));
+    let alice_node = start_client_node(
+        port,
+        &alice_identity,
+        Box::new(TestCallbacks::new(alice_tx)),
+    );
     alice_node
         .register_destination_with_proof(&alice_dest, None)
         .unwrap();
@@ -946,9 +1029,15 @@ fn test_multiple_announces_cross_discovery() {
     let node_b = start_client_node(port, &id_b, Box::new(TestCallbacks::new(tx_b)));
     let node_c = start_client_node(port, &id_c, Box::new(TestCallbacks::new(tx_c)));
 
-    node_a.register_destination_with_proof(&dest_a, None).unwrap();
-    node_b.register_destination_with_proof(&dest_b, None).unwrap();
-    node_c.register_destination_with_proof(&dest_c, None).unwrap();
+    node_a
+        .register_destination_with_proof(&dest_a, None)
+        .unwrap();
+    node_b
+        .register_destination_with_proof(&dest_b, None)
+        .unwrap();
+    node_c
+        .register_destination_with_proof(&dest_c, None)
+        .unwrap();
 
     std::thread::sleep(SETTLE);
 
@@ -960,36 +1049,59 @@ fn test_multiple_announces_cross_discovery() {
     node_c.announce(&dest_c, &id_c, Some(b"C")).unwrap();
 
     // Collect all announces at each node (wait for 2 announces each)
-    let collect_announces = |rx: &mpsc::Receiver<TestEvent>, count: usize| -> Vec<AnnouncedIdentity> {
-        let mut announces = Vec::new();
-        let deadline = Instant::now() + TIMEOUT;
-        while announces.len() < count {
-            let remaining = deadline.checked_duration_since(Instant::now()).unwrap_or(Duration::ZERO);
-            if remaining.is_zero() { break; }
-            if let Ok(event) = rx.recv_timeout(remaining) {
-                if let TestEvent::Announce(a) = event {
-                    announces.push(a);
+    let collect_announces =
+        |rx: &mpsc::Receiver<TestEvent>, count: usize| -> Vec<AnnouncedIdentity> {
+            let mut announces = Vec::new();
+            let deadline = Instant::now() + TIMEOUT;
+            while announces.len() < count {
+                let remaining = deadline
+                    .checked_duration_since(Instant::now())
+                    .unwrap_or(Duration::ZERO);
+                if remaining.is_zero() {
+                    break;
+                }
+                if let Ok(event) = rx.recv_timeout(remaining) {
+                    if let TestEvent::Announce(a) = event {
+                        announces.push(a);
+                    }
                 }
             }
-        }
-        announces
-    };
+            announces
+        };
 
     let a_announces = collect_announces(&rx_a, 2);
     let b_announces = collect_announces(&rx_b, 2);
     let c_announces = collect_announces(&rx_c, 2);
 
     // A should see B and C
-    assert!(a_announces.iter().any(|a| a.dest_hash == dest_b.hash), "A did not discover B");
-    assert!(a_announces.iter().any(|a| a.dest_hash == dest_c.hash), "A did not discover C");
+    assert!(
+        a_announces.iter().any(|a| a.dest_hash == dest_b.hash),
+        "A did not discover B"
+    );
+    assert!(
+        a_announces.iter().any(|a| a.dest_hash == dest_c.hash),
+        "A did not discover C"
+    );
 
     // B should see A and C
-    assert!(b_announces.iter().any(|a| a.dest_hash == dest_a.hash), "B did not discover A");
-    assert!(b_announces.iter().any(|a| a.dest_hash == dest_c.hash), "B did not discover C");
+    assert!(
+        b_announces.iter().any(|a| a.dest_hash == dest_a.hash),
+        "B did not discover A"
+    );
+    assert!(
+        b_announces.iter().any(|a| a.dest_hash == dest_c.hash),
+        "B did not discover C"
+    );
 
     // C should see A and B
-    assert!(c_announces.iter().any(|a| a.dest_hash == dest_a.hash), "C did not discover A");
-    assert!(c_announces.iter().any(|a| a.dest_hash == dest_b.hash), "C did not discover B");
+    assert!(
+        c_announces.iter().any(|a| a.dest_hash == dest_a.hash),
+        "C did not discover A"
+    );
+    assert!(
+        c_announces.iter().any(|a| a.dest_hash == dest_b.hash),
+        "C did not discover B"
+    );
 
     node_a.shutdown();
     node_b.shutdown();
@@ -1007,7 +1119,11 @@ fn test_re_announce_updated_app_data() {
     let alice_dest = Destination::single_in(APP_NAME, &["reannounce", "test"], alice_ih);
 
     let (alice_tx, _alice_rx) = mpsc::channel();
-    let alice_node = start_client_node(port, &alice_identity, Box::new(TestCallbacks::new(alice_tx)));
+    let alice_node = start_client_node(
+        port,
+        &alice_identity,
+        Box::new(TestCallbacks::new(alice_tx)),
+    );
     alice_node
         .register_destination_with_proof(&alice_dest, None)
         .unwrap();
@@ -1044,8 +1160,12 @@ fn test_re_announce_updated_app_data() {
             .unwrap();
 
         if let Some(_) = wait_for_event(&bob_rx, Duration::from_secs(8), |event| match event {
-            TestEvent::Announce(a) if a.dest_hash == alice_dest.hash
-                && a.app_data.as_deref() == Some(b"v2".as_slice()) => Some(()),
+            TestEvent::Announce(a)
+                if a.dest_hash == alice_dest.hash
+                    && a.app_data.as_deref() == Some(b"v2".as_slice()) =>
+            {
+                Some(())
+            }
             _ => None,
         }) {
             got_v2 = true;
@@ -1061,8 +1181,19 @@ fn test_re_announce_updated_app_data() {
 
 #[test]
 fn test_recall_identity_after_announce() {
-    let (transport, alice_node, _alice_rx, bob_node, _bob_rx, _alice_id, _bob_id, _alice_dest, bob_dest, _alice_ann, _bob_ann) =
-        setup_two_peers_announced();
+    let (
+        transport,
+        alice_node,
+        _alice_rx,
+        bob_node,
+        _bob_rx,
+        _alice_id,
+        _bob_id,
+        _alice_dest,
+        bob_dest,
+        _alice_ann,
+        _bob_ann,
+    ) = setup_two_peers_announced();
 
     // Alice should be able to recall Bob's announced identity
     let recalled = alice_node
@@ -1090,8 +1221,19 @@ fn test_recall_identity_after_announce() {
 
 #[test]
 fn test_single_message_delivery() {
-    let (transport, alice_node, _alice_rx, _bob_node, bob_rx, _alice_id, bob_id, _alice_dest, _bob_dest, _alice_ann, bob_announced) =
-        setup_two_peers_announced();
+    let (
+        transport,
+        alice_node,
+        _alice_rx,
+        _bob_node,
+        bob_rx,
+        _alice_id,
+        bob_id,
+        _alice_dest,
+        _bob_dest,
+        _alice_ann,
+        bob_announced,
+    ) = setup_two_peers_announced();
 
     let dest_to_bob = Destination::single_out(APP_NAME, &["msg", "rx"], &bob_announced);
     let plaintext = b"Hello Bob from Alice!";
@@ -1108,8 +1250,19 @@ fn test_single_message_delivery() {
 
 #[test]
 fn test_single_bidirectional() {
-    let (transport, alice_node, alice_rx, bob_node, bob_rx, alice_id, bob_id, _alice_dest, _bob_dest, alice_announced, bob_announced) =
-        setup_two_peers_announced();
+    let (
+        transport,
+        alice_node,
+        alice_rx,
+        bob_node,
+        bob_rx,
+        alice_id,
+        bob_id,
+        _alice_dest,
+        _bob_dest,
+        alice_announced,
+        bob_announced,
+    ) = setup_two_peers_announced();
 
     // Alice → Bob
     let dest_to_bob = Destination::single_out(APP_NAME, &["msg", "rx"], &bob_announced);
@@ -1134,14 +1287,27 @@ fn test_single_bidirectional() {
 
 #[test]
 fn test_single_multiple_sequential() {
-    let (transport, alice_node, _alice_rx, _bob_node, bob_rx, _alice_id, bob_id, _alice_dest, _bob_dest, _alice_ann, bob_announced) =
-        setup_two_peers_announced();
+    let (
+        transport,
+        alice_node,
+        _alice_rx,
+        _bob_node,
+        bob_rx,
+        _alice_id,
+        bob_id,
+        _alice_dest,
+        _bob_dest,
+        _alice_ann,
+        bob_announced,
+    ) = setup_two_peers_announced();
 
     let dest_to_bob = Destination::single_out(APP_NAME, &["msg", "rx"], &bob_announced);
 
     for i in 0..5 {
         let msg = format!("Message #{}", i);
-        alice_node.send_packet(&dest_to_bob, msg.as_bytes()).unwrap();
+        alice_node
+            .send_packet(&dest_to_bob, msg.as_bytes())
+            .unwrap();
 
         let (_, raw, _) = wait_for_delivery(&bob_rx, TIMEOUT)
             .unwrap_or_else(|| panic!("Bob did not receive message #{}", i));
@@ -1156,13 +1322,25 @@ fn test_single_multiple_sequential() {
 
 #[test]
 fn test_single_empty_payload() {
-    let (transport, alice_node, _alice_rx, _bob_node, bob_rx, _alice_id, bob_id, _alice_dest, _bob_dest, _alice_ann, bob_announced) =
-        setup_two_peers_announced();
+    let (
+        transport,
+        alice_node,
+        _alice_rx,
+        _bob_node,
+        bob_rx,
+        _alice_id,
+        bob_id,
+        _alice_dest,
+        _bob_dest,
+        _alice_ann,
+        bob_announced,
+    ) = setup_two_peers_announced();
 
     let dest_to_bob = Destination::single_out(APP_NAME, &["msg", "rx"], &bob_announced);
     alice_node.send_packet(&dest_to_bob, b"").unwrap();
 
-    let (_, raw, _) = wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive empty message");
+    let (_, raw, _) =
+        wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive empty message");
     let decrypted = decrypt_delivery(&raw, &bob_id).expect("Decryption failed");
     assert_eq!(decrypted, b"");
 
@@ -1188,7 +1366,9 @@ fn test_plain_message_delivery() {
     let bob_node = RnsNode::start(
         NodeConfig {
             transport_enabled: false,
-            identity: Some(Identity::from_private_key(&bob_identity.get_private_key().unwrap())),
+            identity: Some(Identity::from_private_key(
+                &bob_identity.get_private_key().unwrap(),
+            )),
             interfaces: vec![InterfaceConfig {
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
@@ -1217,7 +1397,7 @@ fn test_plain_message_delivery() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
-        registry: None,
+            registry: None,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
@@ -1229,13 +1409,18 @@ fn test_plain_message_delivery() {
     // Alice connects as TCP client
     let alice_identity = Identity::new(&mut OsRng);
     let (alice_tx, _alice_rx) = mpsc::channel();
-    let alice_node = start_client_node(port, &alice_identity, Box::new(TestCallbacks::new(alice_tx)));
+    let alice_node = start_client_node(
+        port,
+        &alice_identity,
+        Box::new(TestCallbacks::new(alice_tx)),
+    );
 
     std::thread::sleep(SETTLE);
 
     alice_node.send_packet(&plain_dest, b"plain text").unwrap();
 
-    let (_, raw, _) = wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive plain message");
+    let (_, raw, _) =
+        wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive plain message");
     let packet = rns_core::packet::RawPacket::unpack(&raw).unwrap();
     assert_eq!(packet.data, b"plain text");
 
@@ -1265,7 +1450,9 @@ fn test_group_message_delivery() {
     let bob_node = RnsNode::start(
         NodeConfig {
             transport_enabled: false,
-            identity: Some(Identity::from_private_key(&bob_identity.get_private_key().unwrap())),
+            identity: Some(Identity::from_private_key(
+                &bob_identity.get_private_key().unwrap(),
+            )),
             interfaces: vec![InterfaceConfig {
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
@@ -1294,27 +1481,39 @@ fn test_group_message_delivery() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
-        registry: None,
+            registry: None,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
     .unwrap();
     bob_node
-        .register_destination(group_dest_receiver.hash.0, rns_core::constants::DESTINATION_GROUP)
+        .register_destination(
+            group_dest_receiver.hash.0,
+            rns_core::constants::DESTINATION_GROUP,
+        )
         .unwrap();
 
     // Alice connects as TCP client
     let alice_identity = Identity::new(&mut OsRng);
     let (alice_tx, _alice_rx) = mpsc::channel();
-    let alice_node = start_client_node(port, &alice_identity, Box::new(TestCallbacks::new(alice_tx)));
+    let alice_node = start_client_node(
+        port,
+        &alice_identity,
+        Box::new(TestCallbacks::new(alice_tx)),
+    );
 
     std::thread::sleep(SETTLE);
 
-    alice_node.send_packet(&group_dest_sender, b"group message").unwrap();
+    alice_node
+        .send_packet(&group_dest_sender, b"group message")
+        .unwrap();
 
-    let (_, raw, _) = wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive group message");
+    let (_, raw, _) =
+        wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive group message");
     let packet = rns_core::packet::RawPacket::unpack(&raw).unwrap();
-    let decrypted = group_dest_receiver.decrypt(&packet.data).expect("GROUP decrypt failed");
+    let decrypted = group_dest_receiver
+        .decrypt(&packet.data)
+        .expect("GROUP decrypt failed");
     assert_eq!(decrypted, b"group message");
 
     alice_node.shutdown();
@@ -1339,7 +1538,9 @@ fn test_group_wrong_key_fails() {
     let bob_node = RnsNode::start(
         NodeConfig {
             transport_enabled: false,
-            identity: Some(Identity::from_private_key(&bob_identity.get_private_key().unwrap())),
+            identity: Some(Identity::from_private_key(
+                &bob_identity.get_private_key().unwrap(),
+            )),
             interfaces: vec![InterfaceConfig {
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
@@ -1368,25 +1569,35 @@ fn test_group_wrong_key_fails() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
-        registry: None,
+            registry: None,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
     .unwrap();
     bob_node
-        .register_destination(group_dest_receiver.hash.0, rns_core::constants::DESTINATION_GROUP)
+        .register_destination(
+            group_dest_receiver.hash.0,
+            rns_core::constants::DESTINATION_GROUP,
+        )
         .unwrap();
 
     // Alice connects as TCP client
     let alice_identity = Identity::new(&mut OsRng);
     let (alice_tx, _alice_rx) = mpsc::channel();
-    let alice_node = start_client_node(port, &alice_identity, Box::new(TestCallbacks::new(alice_tx)));
+    let alice_node = start_client_node(
+        port,
+        &alice_identity,
+        Box::new(TestCallbacks::new(alice_tx)),
+    );
 
     std::thread::sleep(SETTLE);
 
-    alice_node.send_packet(&group_dest_sender, b"secret").unwrap();
+    alice_node
+        .send_packet(&group_dest_sender, b"secret")
+        .unwrap();
 
-    let (_, raw, _) = wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive group message");
+    let (_, raw, _) =
+        wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive group message");
     let packet = rns_core::packet::RawPacket::unpack(&raw).unwrap();
     let result = group_dest_receiver.decrypt(&packet.data);
     assert!(result.is_err(), "Decryption with wrong key should fail");
@@ -1401,14 +1612,25 @@ fn test_group_wrong_key_fails() {
 
 #[test]
 fn test_prove_all() {
-    let (transport, alice_node, alice_rx, _bob_node, _bob_rx, _alice_id, _bob_id, _alice_dest, _bob_dest, _alice_ann, bob_announced) =
-        setup_two_peers_announced();
+    let (
+        transport,
+        alice_node,
+        alice_rx,
+        _bob_node,
+        _bob_rx,
+        _alice_id,
+        _bob_id,
+        _alice_dest,
+        _bob_dest,
+        _alice_ann,
+        bob_announced,
+    ) = setup_two_peers_announced();
 
     let dest_to_bob = Destination::single_out(APP_NAME, &["msg", "rx"], &bob_announced);
     let pkt_hash = alice_node.send_packet(&dest_to_bob, b"prove me").unwrap();
 
-    let (proof_hash, rtt) = wait_for_proof(&alice_rx, TIMEOUT)
-        .expect("Alice did not receive proof");
+    let (proof_hash, rtt) =
+        wait_for_proof(&alice_rx, TIMEOUT).expect("Alice did not receive proof");
     assert_eq!(proof_hash, pkt_hash);
     assert!(rtt > 0.0, "RTT should be positive");
 
@@ -1433,9 +1655,16 @@ fn test_prove_app_conditional() {
         .set_proof_strategy(ProofStrategy::ProveApp);
 
     let (alice_tx, alice_rx) = mpsc::channel();
-    let alice_node = start_client_node(port, &alice_identity, Box::new(TestCallbacks::new(alice_tx)));
+    let alice_node = start_client_node(
+        port,
+        &alice_identity,
+        Box::new(TestCallbacks::new(alice_tx)),
+    );
     alice_node
-        .register_destination_with_proof(&alice_dest, Some(alice_identity.get_private_key().unwrap()))
+        .register_destination_with_proof(
+            &alice_dest,
+            Some(alice_identity.get_private_key().unwrap()),
+        )
         .unwrap();
 
     let proof_flag = Arc::new(Mutex::new(true));
@@ -1449,8 +1678,16 @@ fn test_prove_app_conditional() {
 
     std::thread::sleep(SETTLE);
 
-    let bob_ann = announce_with_retry(&bob_node, &bob_dest, &bob_identity, Some(b"B"), &alice_rx).unwrap();
-    let _alice_ann = announce_with_retry(&alice_node, &alice_dest, &alice_identity, Some(b"A"), &bob_rx).unwrap();
+    let bob_ann =
+        announce_with_retry(&bob_node, &bob_dest, &bob_identity, Some(b"B"), &alice_rx).unwrap();
+    let _alice_ann = announce_with_retry(
+        &alice_node,
+        &alice_dest,
+        &alice_identity,
+        Some(b"A"),
+        &bob_rx,
+    )
+    .unwrap();
 
     // First send: proof_flag=true → should get proof
     let dest_to_bob = Destination::single_out(APP_NAME, &["prove", "app"], &bob_ann);
@@ -1489,9 +1726,16 @@ fn test_prove_none() {
         .set_proof_strategy(ProofStrategy::ProveNone);
 
     let (alice_tx, alice_rx) = mpsc::channel();
-    let alice_node = start_client_node(port, &alice_identity, Box::new(TestCallbacks::new(alice_tx)));
+    let alice_node = start_client_node(
+        port,
+        &alice_identity,
+        Box::new(TestCallbacks::new(alice_tx)),
+    );
     alice_node
-        .register_destination_with_proof(&alice_dest, Some(alice_identity.get_private_key().unwrap()))
+        .register_destination_with_proof(
+            &alice_dest,
+            Some(alice_identity.get_private_key().unwrap()),
+        )
         .unwrap();
 
     let (bob_tx, bob_rx) = mpsc::channel();
@@ -1502,11 +1746,21 @@ fn test_prove_none() {
 
     std::thread::sleep(SETTLE);
 
-    let bob_ann = announce_with_retry(&bob_node, &bob_dest, &bob_identity, Some(b"B"), &alice_rx).unwrap();
-    let _alice_ann = announce_with_retry(&alice_node, &alice_dest, &alice_identity, Some(b"A"), &bob_rx).unwrap();
+    let bob_ann =
+        announce_with_retry(&bob_node, &bob_dest, &bob_identity, Some(b"B"), &alice_rx).unwrap();
+    let _alice_ann = announce_with_retry(
+        &alice_node,
+        &alice_dest,
+        &alice_identity,
+        Some(b"A"),
+        &bob_rx,
+    )
+    .unwrap();
 
     let dest_to_bob = Destination::single_out(APP_NAME, &["prove", "none"], &bob_ann);
-    alice_node.send_packet(&dest_to_bob, b"no proof expected").unwrap();
+    alice_node
+        .send_packet(&dest_to_bob, b"no proof expected")
+        .unwrap();
 
     let proof = wait_for_proof(&alice_rx, Duration::from_secs(3));
     assert!(proof.is_none(), "Should NOT receive proof with ProveNone");
@@ -1523,13 +1777,25 @@ fn test_prove_none() {
 #[test]
 fn test_multihop_message_delivery() {
     // A ↔ Transport ↔ B (message crosses the transport hop)
-    let (transport, alice_node, alice_rx, bob_node, bob_rx, alice_id, bob_id, _alice_dest, _bob_dest, _alice_ann, bob_announced) =
-        setup_two_peers_announced();
+    let (
+        transport,
+        alice_node,
+        alice_rx,
+        bob_node,
+        bob_rx,
+        alice_id,
+        bob_id,
+        _alice_dest,
+        _bob_dest,
+        _alice_ann,
+        bob_announced,
+    ) = setup_two_peers_announced();
 
     let dest_to_bob = Destination::single_out(APP_NAME, &["msg", "rx"], &bob_announced);
     alice_node.send_packet(&dest_to_bob, b"multi-hop").unwrap();
 
-    let (_, raw, _) = wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive multi-hop message");
+    let (_, raw, _) =
+        wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive multi-hop message");
     let decrypted = decrypt_delivery(&raw, &bob_id).expect("Decryption failed");
     assert_eq!(decrypted, b"multi-hop");
 
@@ -1540,8 +1806,19 @@ fn test_multihop_message_delivery() {
 
 #[test]
 fn test_path_queries() {
-    let (transport, alice_node, _alice_rx, _bob_node, _bob_rx, _alice_id, _bob_id, _alice_dest, bob_dest, _alice_ann, _bob_ann) =
-        setup_two_peers_announced();
+    let (
+        transport,
+        alice_node,
+        _alice_rx,
+        _bob_node,
+        _bob_rx,
+        _alice_id,
+        _bob_id,
+        _alice_dest,
+        bob_dest,
+        _alice_ann,
+        _bob_ann,
+    ) = setup_two_peers_announced();
 
     // Alice should have a path to Bob
     let has = alice_node.has_path(&bob_dest.hash).unwrap();
@@ -1569,18 +1846,28 @@ fn test_path_queries() {
 
 #[test]
 fn test_link_establish_and_teardown() {
-    let (transport, alice_node, alice_rx, bob_node, bob_rx, alice_id, bob_id, alice_dest, bob_dest, link_id) =
-        setup_link();
+    let (
+        transport,
+        alice_node,
+        alice_rx,
+        bob_node,
+        bob_rx,
+        alice_id,
+        bob_id,
+        alice_dest,
+        bob_dest,
+        link_id,
+    ) = setup_link();
 
     // Teardown from initiator (Alice)
     alice_node.teardown_link(link_id).unwrap();
 
-    let (closed_id, _reason) = wait_for_link_closed(&alice_rx, TIMEOUT)
-        .expect("Alice did not get link closed");
+    let (closed_id, _reason) =
+        wait_for_link_closed(&alice_rx, TIMEOUT).expect("Alice did not get link closed");
     assert_eq!(closed_id, link_id);
 
-    let (closed_id_bob, _reason_bob) = wait_for_link_closed(&bob_rx, TIMEOUT)
-        .expect("Bob did not get link closed");
+    let (closed_id_bob, _reason_bob) =
+        wait_for_link_closed(&bob_rx, TIMEOUT).expect("Bob did not get link closed");
     assert_eq!(closed_id_bob, link_id);
 
     alice_node.shutdown();
@@ -1596,42 +1883,53 @@ fn test_link_callbacks_both_sides() {
     let alice_id = Identity::new(&mut OsRng);
     let bob_id = Identity::new(&mut OsRng);
 
-    let alice_dest = Destination::single_in(APP_NAME, &["link", "cb"], IdentityHash(*alice_id.hash()))
-        .set_proof_strategy(ProofStrategy::ProveAll);
+    let alice_dest =
+        Destination::single_in(APP_NAME, &["link", "cb"], IdentityHash(*alice_id.hash()))
+            .set_proof_strategy(ProofStrategy::ProveAll);
     let bob_dest = Destination::single_in(APP_NAME, &["link", "cb"], IdentityHash(*bob_id.hash()))
         .set_proof_strategy(ProofStrategy::ProveAll);
 
     let (alice_tx, alice_rx) = mpsc::channel();
     let alice_node = start_client_node(port, &alice_id, Box::new(TestCallbacks::new(alice_tx)));
-    alice_node.register_destination_with_proof(&alice_dest, Some(alice_id.get_private_key().unwrap())).unwrap();
+    alice_node
+        .register_destination_with_proof(&alice_dest, Some(alice_id.get_private_key().unwrap()))
+        .unwrap();
 
     let (bob_tx, bob_rx) = mpsc::channel();
     let bob_node = start_client_node(port, &bob_id, Box::new(TestCallbacks::new(bob_tx)));
-    bob_node.register_destination_with_proof(&bob_dest, Some(bob_id.get_private_key().unwrap())).unwrap();
+    bob_node
+        .register_destination_with_proof(&bob_dest, Some(bob_id.get_private_key().unwrap()))
+        .unwrap();
 
     std::thread::sleep(SETTLE);
 
-    let _bob_ann = announce_with_retry(&bob_node, &bob_dest, &bob_id, Some(b"B"), &alice_rx).unwrap();
-    let _alice_ann = announce_with_retry(&alice_node, &alice_dest, &alice_id, Some(b"A"), &bob_rx).unwrap();
+    let _bob_ann =
+        announce_with_retry(&bob_node, &bob_dest, &bob_id, Some(b"B"), &alice_rx).unwrap();
+    let _alice_ann =
+        announce_with_retry(&alice_node, &alice_dest, &alice_id, Some(b"A"), &bob_rx).unwrap();
 
     // Register Bob as link destination
     let (bob_sig_prv, bob_sig_pub) = extract_sig_keys(&bob_id);
-    bob_node.register_link_destination(bob_dest.hash.0, bob_sig_prv, bob_sig_pub, 0).unwrap();
+    bob_node
+        .register_link_destination(bob_dest.hash.0, bob_sig_prv, bob_sig_pub, 0)
+        .unwrap();
 
     let bob_pub = bob_id.get_public_key().unwrap();
     let mut bob_sig_pub_for_link = [0u8; 32];
     bob_sig_pub_for_link.copy_from_slice(&bob_pub[32..64]);
-    let link_id = alice_node.create_link(bob_dest.hash.0, bob_sig_pub_for_link).unwrap();
+    let link_id = alice_node
+        .create_link(bob_dest.hash.0, bob_sig_pub_for_link)
+        .unwrap();
 
     // Alice: initiator
-    let (a_lid, _, a_init) = wait_for_link_established(&alice_rx, TIMEOUT)
-        .expect("Alice link not established");
+    let (a_lid, _, a_init) =
+        wait_for_link_established(&alice_rx, TIMEOUT).expect("Alice link not established");
     assert_eq!(a_lid, link_id);
     assert!(a_init, "Alice should be initiator");
 
     // Bob: responder
-    let (b_lid, _, b_init) = wait_for_link_established(&bob_rx, TIMEOUT)
-        .expect("Bob link not established");
+    let (b_lid, _, b_init) =
+        wait_for_link_established(&bob_rx, TIMEOUT).expect("Bob link not established");
     assert_eq!(b_lid, link_id, "Both sides should see the same link_id");
     assert!(!b_init, "Bob should NOT be initiator");
 
@@ -1645,18 +1943,28 @@ fn test_link_callbacks_both_sides() {
 
 #[test]
 fn test_link_teardown_by_responder() {
-    let (transport, alice_node, alice_rx, bob_node, bob_rx, _alice_id, _bob_id, _alice_dest, _bob_dest, link_id) =
-        setup_link();
+    let (
+        transport,
+        alice_node,
+        alice_rx,
+        bob_node,
+        bob_rx,
+        _alice_id,
+        _bob_id,
+        _alice_dest,
+        _bob_dest,
+        link_id,
+    ) = setup_link();
 
     // Bob (responder) tears down
     bob_node.teardown_link(link_id).unwrap();
 
-    let (closed_bob, _) = wait_for_link_closed(&bob_rx, TIMEOUT)
-        .expect("Bob did not get link closed");
+    let (closed_bob, _) =
+        wait_for_link_closed(&bob_rx, TIMEOUT).expect("Bob did not get link closed");
     assert_eq!(closed_bob, link_id);
 
-    let (closed_alice, _) = wait_for_link_closed(&alice_rx, TIMEOUT)
-        .expect("Alice did not get link closed");
+    let (closed_alice, _) =
+        wait_for_link_closed(&alice_rx, TIMEOUT).expect("Alice did not get link closed");
     assert_eq!(closed_alice, link_id);
 
     alice_node.shutdown();
@@ -1670,15 +1978,25 @@ fn test_link_teardown_by_responder() {
 
 #[test]
 fn test_identify_on_link() {
-    let (transport, alice_node, _alice_rx, _bob_node, bob_rx, alice_id, _bob_id, _alice_dest, _bob_dest, link_id) =
-        setup_link();
+    let (
+        transport,
+        alice_node,
+        _alice_rx,
+        _bob_node,
+        bob_rx,
+        alice_id,
+        _bob_id,
+        _alice_dest,
+        _bob_dest,
+        link_id,
+    ) = setup_link();
 
     alice_node
         .identify_on_link(link_id, alice_id.get_private_key().unwrap())
         .unwrap();
 
-    let (id_link, id_hash) = wait_for_remote_identified(&bob_rx, TIMEOUT)
-        .expect("Bob did not receive identification");
+    let (id_link, id_hash) =
+        wait_for_remote_identified(&bob_rx, TIMEOUT).expect("Bob did not receive identification");
     assert_eq!(id_link, link_id);
     assert_eq!(id_hash.0, *alice_id.hash());
 
@@ -1696,8 +2014,18 @@ fn test_identify_on_link() {
 
 #[test]
 fn test_request_response_roundtrip() {
-    let (transport, alice_node, alice_rx, bob_node, _bob_rx, _alice_id, _bob_id, _alice_dest, _bob_dest, link_id) =
-        setup_link();
+    let (
+        transport,
+        alice_node,
+        alice_rx,
+        bob_node,
+        _bob_rx,
+        _alice_id,
+        _bob_id,
+        _alice_dest,
+        _bob_dest,
+        link_id,
+    ) = setup_link();
 
     // Register echo handler on Bob
     bob_node
@@ -1710,8 +2038,8 @@ fn test_request_response_roundtrip() {
 
     alice_node.send_request(link_id, "/echo", b"ping").unwrap();
 
-    let (resp_lid, _req_id, resp_data) = wait_for_response(&alice_rx, TIMEOUT)
-        .expect("Alice did not receive response");
+    let (resp_lid, _req_id, resp_data) =
+        wait_for_response(&alice_rx, TIMEOUT).expect("Alice did not receive response");
     assert_eq!(resp_lid, link_id);
     // Response data is msgpack-encoded; decode and verify inner bytes
     let resp_value = rns_core::msgpack::unpack_exact(&resp_data).unwrap();
@@ -1731,8 +2059,18 @@ fn test_request_response_roundtrip() {
 
 #[test]
 fn test_multiple_requests_same_link() {
-    let (transport, alice_node, alice_rx, bob_node, _bob_rx, _alice_id, _bob_id, _alice_dest, _bob_dest, link_id) =
-        setup_link();
+    let (
+        transport,
+        alice_node,
+        alice_rx,
+        bob_node,
+        _bob_rx,
+        _alice_id,
+        _bob_id,
+        _alice_dest,
+        _bob_dest,
+        link_id,
+    ) = setup_link();
 
     bob_node
         .register_request_handler("/echo", None, |_link_id, _path, data, _identity| {
@@ -1744,7 +2082,9 @@ fn test_multiple_requests_same_link() {
 
     for i in 0..3 {
         let msg = format!("request-{}", i);
-        alice_node.send_request(link_id, "/echo", msg.as_bytes()).unwrap();
+        alice_node
+            .send_request(link_id, "/echo", msg.as_bytes())
+            .unwrap();
 
         let (_, _, resp_data) = wait_for_response(&alice_rx, TIMEOUT)
             .unwrap_or_else(|| panic!("Did not receive response #{}", i));
@@ -1771,8 +2111,18 @@ fn test_multiple_requests_same_link() {
 
 #[test]
 fn test_resource_small_transfer() {
-    let (transport, alice_node, _alice_rx, _bob_node, bob_rx, _alice_id, _bob_id, _alice_dest, _bob_dest, link_id) =
-        setup_link();
+    let (
+        transport,
+        alice_node,
+        _alice_rx,
+        _bob_node,
+        bob_rx,
+        _alice_id,
+        _bob_id,
+        _alice_dest,
+        _bob_dest,
+        link_id,
+    ) = setup_link();
 
     let data = vec![0x42u8; 100];
     let metadata = b"test-metadata".to_vec();
@@ -1781,8 +2131,8 @@ fn test_resource_small_transfer() {
         .send_resource(link_id, data.clone(), Some(metadata.clone()))
         .unwrap();
 
-    let (r_lid, r_data, r_meta) = wait_for_resource_received(&bob_rx, TIMEOUT)
-        .expect("Bob did not receive resource");
+    let (r_lid, r_data, r_meta) =
+        wait_for_resource_received(&bob_rx, TIMEOUT).expect("Bob did not receive resource");
     assert_eq!(r_lid, link_id);
     assert_eq!(r_data, data);
     assert_eq!(r_meta.as_deref(), Some(metadata.as_slice()));
@@ -1797,13 +2147,25 @@ fn test_resource_small_transfer() {
 
 #[test]
 fn test_resource_multi_part() {
-    let (transport, alice_node, _alice_rx, _bob_node, bob_rx, _alice_id, _bob_id, _alice_dest, _bob_dest, link_id) =
-        setup_link();
+    let (
+        transport,
+        alice_node,
+        _alice_rx,
+        _bob_node,
+        bob_rx,
+        _alice_id,
+        _bob_id,
+        _alice_dest,
+        _bob_dest,
+        link_id,
+    ) = setup_link();
 
     // ~2KB data to encourage multi-part transfer
     let data = vec![0xAB; 2048];
 
-    alice_node.send_resource(link_id, data.clone(), None).unwrap();
+    alice_node
+        .send_resource(link_id, data.clone(), None)
+        .unwrap();
 
     // Check for progress callbacks (there should be at least one)
     let mut got_progress = false;
@@ -1811,7 +2173,9 @@ fn test_resource_multi_part() {
     let mut received_data = None;
 
     while Instant::now() < deadline {
-        let remaining = deadline.checked_duration_since(Instant::now()).unwrap_or(Duration::ZERO);
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .unwrap_or(Duration::ZERO);
         match bob_rx.recv_timeout(remaining) {
             Ok(TestEvent::ResourceProgress { .. }) => {
                 got_progress = true;
@@ -1845,31 +2209,42 @@ fn test_resource_accept_none() {
     let alice_id = Identity::new(&mut OsRng);
     let bob_id = Identity::new(&mut OsRng);
 
-    let alice_dest = Destination::single_in(APP_NAME, &["res", "none"], IdentityHash(*alice_id.hash()))
-        .set_proof_strategy(ProofStrategy::ProveAll);
+    let alice_dest =
+        Destination::single_in(APP_NAME, &["res", "none"], IdentityHash(*alice_id.hash()))
+            .set_proof_strategy(ProofStrategy::ProveAll);
     let bob_dest = Destination::single_in(APP_NAME, &["res", "none"], IdentityHash(*bob_id.hash()))
         .set_proof_strategy(ProofStrategy::ProveAll);
 
     let (alice_tx, alice_rx) = mpsc::channel();
     let alice_node = start_client_node(port, &alice_id, Box::new(TestCallbacks::new(alice_tx)));
-    alice_node.register_destination_with_proof(&alice_dest, Some(alice_id.get_private_key().unwrap())).unwrap();
+    alice_node
+        .register_destination_with_proof(&alice_dest, Some(alice_id.get_private_key().unwrap()))
+        .unwrap();
 
     let (bob_tx, bob_rx) = mpsc::channel();
     let bob_node = start_client_node(port, &bob_id, Box::new(TestCallbacks::new(bob_tx)));
-    bob_node.register_destination_with_proof(&bob_dest, Some(bob_id.get_private_key().unwrap())).unwrap();
+    bob_node
+        .register_destination_with_proof(&bob_dest, Some(bob_id.get_private_key().unwrap()))
+        .unwrap();
 
     std::thread::sleep(SETTLE);
 
-    let _bob_ann = announce_with_retry(&bob_node, &bob_dest, &bob_id, Some(b"B"), &alice_rx).unwrap();
-    let _alice_ann = announce_with_retry(&alice_node, &alice_dest, &alice_id, Some(b"A"), &bob_rx).unwrap();
+    let _bob_ann =
+        announce_with_retry(&bob_node, &bob_dest, &bob_id, Some(b"B"), &alice_rx).unwrap();
+    let _alice_ann =
+        announce_with_retry(&alice_node, &alice_dest, &alice_id, Some(b"A"), &bob_rx).unwrap();
 
     let (bob_sig_prv, bob_sig_pub) = extract_sig_keys(&bob_id);
-    bob_node.register_link_destination(bob_dest.hash.0, bob_sig_prv, bob_sig_pub, 0).unwrap();
+    bob_node
+        .register_link_destination(bob_dest.hash.0, bob_sig_prv, bob_sig_pub, 0)
+        .unwrap();
 
     let bob_pub = bob_id.get_public_key().unwrap();
     let mut bob_sig_pub_link = [0u8; 32];
     bob_sig_pub_link.copy_from_slice(&bob_pub[32..64]);
-    let link_id = alice_node.create_link(bob_dest.hash.0, bob_sig_pub_link).unwrap();
+    let link_id = alice_node
+        .create_link(bob_dest.hash.0, bob_sig_pub_link)
+        .unwrap();
 
     wait_for_link_established(&alice_rx, TIMEOUT).unwrap();
     wait_for_link_established(&bob_rx, TIMEOUT).unwrap();
@@ -1878,11 +2253,16 @@ fn test_resource_accept_none() {
     bob_node.set_resource_strategy(link_id, 0).unwrap();
     std::thread::sleep(Duration::from_millis(200));
 
-    alice_node.send_resource(link_id, vec![0x42; 50], None).unwrap();
+    alice_node
+        .send_resource(link_id, vec![0x42; 50], None)
+        .unwrap();
 
     // Should not receive the resource
     let received = wait_for_resource_received(&bob_rx, Duration::from_secs(3));
-    assert!(received.is_none(), "Should NOT receive resource with AcceptNone");
+    assert!(
+        received.is_none(),
+        "Should NOT receive resource with AcceptNone"
+    );
 
     // Sender may get a failure callback
     let failed = wait_for_resource_failed(&alice_rx, Duration::from_secs(3));
@@ -1904,34 +2284,45 @@ fn test_resource_accept_app() {
     let alice_id = Identity::new(&mut OsRng);
     let bob_id = Identity::new(&mut OsRng);
 
-    let alice_dest = Destination::single_in(APP_NAME, &["res", "app"], IdentityHash(*alice_id.hash()))
-        .set_proof_strategy(ProofStrategy::ProveAll);
+    let alice_dest =
+        Destination::single_in(APP_NAME, &["res", "app"], IdentityHash(*alice_id.hash()))
+            .set_proof_strategy(ProofStrategy::ProveAll);
     let bob_dest = Destination::single_in(APP_NAME, &["res", "app"], IdentityHash(*bob_id.hash()))
         .set_proof_strategy(ProofStrategy::ProveAll);
 
     let (alice_tx, alice_rx) = mpsc::channel();
     let alice_node = start_client_node(port, &alice_id, Box::new(TestCallbacks::new(alice_tx)));
-    alice_node.register_destination_with_proof(&alice_dest, Some(alice_id.get_private_key().unwrap())).unwrap();
+    alice_node
+        .register_destination_with_proof(&alice_dest, Some(alice_id.get_private_key().unwrap()))
+        .unwrap();
 
     let resource_flag = Arc::new(Mutex::new(true));
     let proof_flag = Arc::new(Mutex::new(true));
     let (bob_tx, bob_rx) = mpsc::channel();
     let bob_callbacks = TestCallbacks::with_flags(bob_tx, proof_flag, resource_flag.clone());
     let bob_node = start_client_node(port, &bob_id, Box::new(bob_callbacks));
-    bob_node.register_destination_with_proof(&bob_dest, Some(bob_id.get_private_key().unwrap())).unwrap();
+    bob_node
+        .register_destination_with_proof(&bob_dest, Some(bob_id.get_private_key().unwrap()))
+        .unwrap();
 
     std::thread::sleep(SETTLE);
 
-    let _bob_ann = announce_with_retry(&bob_node, &bob_dest, &bob_id, Some(b"B"), &alice_rx).unwrap();
-    let _alice_ann = announce_with_retry(&alice_node, &alice_dest, &alice_id, Some(b"A"), &bob_rx).unwrap();
+    let _bob_ann =
+        announce_with_retry(&bob_node, &bob_dest, &bob_id, Some(b"B"), &alice_rx).unwrap();
+    let _alice_ann =
+        announce_with_retry(&alice_node, &alice_dest, &alice_id, Some(b"A"), &bob_rx).unwrap();
 
     let (bob_sig_prv, bob_sig_pub) = extract_sig_keys(&bob_id);
-    bob_node.register_link_destination(bob_dest.hash.0, bob_sig_prv, bob_sig_pub, 0).unwrap();
+    bob_node
+        .register_link_destination(bob_dest.hash.0, bob_sig_prv, bob_sig_pub, 0)
+        .unwrap();
 
     let bob_pub = bob_id.get_public_key().unwrap();
     let mut bob_sig_pub_link = [0u8; 32];
     bob_sig_pub_link.copy_from_slice(&bob_pub[32..64]);
-    let link_id = alice_node.create_link(bob_dest.hash.0, bob_sig_pub_link).unwrap();
+    let link_id = alice_node
+        .create_link(bob_dest.hash.0, bob_sig_pub_link)
+        .unwrap();
 
     wait_for_link_established(&alice_rx, TIMEOUT).unwrap();
     wait_for_link_established(&bob_rx, TIMEOUT).unwrap();
@@ -1942,18 +2333,28 @@ fn test_resource_accept_app() {
 
     // First: accept=true
     *resource_flag.lock().unwrap() = true;
-    alice_node.send_resource(link_id, vec![0x42; 50], None).unwrap();
+    alice_node
+        .send_resource(link_id, vec![0x42; 50], None)
+        .unwrap();
 
     let received = wait_for_resource_received(&bob_rx, TIMEOUT);
-    assert!(received.is_some(), "Should receive resource when AcceptApp=true");
+    assert!(
+        received.is_some(),
+        "Should receive resource when AcceptApp=true"
+    );
 
     // Second: accept=false
     *resource_flag.lock().unwrap() = false;
     std::thread::sleep(Duration::from_millis(200));
-    alice_node.send_resource(link_id, vec![0x43; 50], None).unwrap();
+    alice_node
+        .send_resource(link_id, vec![0x43; 50], None)
+        .unwrap();
 
     let not_received = wait_for_resource_received(&bob_rx, Duration::from_secs(3));
-    assert!(not_received.is_none(), "Should NOT receive resource when AcceptApp=false");
+    assert!(
+        not_received.is_none(),
+        "Should NOT receive resource when AcceptApp=false"
+    );
 
     alice_node.teardown_link(link_id).unwrap();
     std::thread::sleep(Duration::from_millis(500));
@@ -1969,15 +2370,25 @@ fn test_resource_accept_app() {
 
 #[test]
 fn test_channel_message() {
-    let (transport, alice_node, _alice_rx, _bob_node, bob_rx, _alice_id, _bob_id, _alice_dest, _bob_dest, link_id) =
-        setup_link();
+    let (
+        transport,
+        alice_node,
+        _alice_rx,
+        _bob_node,
+        bob_rx,
+        _alice_id,
+        _bob_id,
+        _alice_dest,
+        _bob_dest,
+        link_id,
+    ) = setup_link();
 
     alice_node
         .send_channel_message(link_id, 0x1234, b"channel payload".to_vec())
         .unwrap();
 
-    let (ch_lid, ch_msgtype, ch_payload) = wait_for_channel_message(&bob_rx, TIMEOUT)
-        .expect("Bob did not receive channel message");
+    let (ch_lid, ch_msgtype, ch_payload) =
+        wait_for_channel_message(&bob_rx, TIMEOUT).expect("Bob did not receive channel message");
     assert_eq!(ch_lid, link_id);
     assert_eq!(ch_msgtype, 0x1234);
     assert_eq!(ch_payload, b"channel payload");
@@ -1992,8 +2403,18 @@ fn test_channel_message() {
 
 #[test]
 fn test_channel_bidirectional() {
-    let (transport, alice_node, alice_rx, bob_node, bob_rx, _alice_id, _bob_id, _alice_dest, _bob_dest, link_id) =
-        setup_link();
+    let (
+        transport,
+        alice_node,
+        alice_rx,
+        bob_node,
+        bob_rx,
+        _alice_id,
+        _bob_id,
+        _alice_dest,
+        _bob_dest,
+        link_id,
+    ) = setup_link();
 
     // Alice → Bob
     alice_node
@@ -2029,15 +2450,25 @@ fn test_channel_bidirectional() {
 
 #[test]
 fn test_send_on_link() {
-    let (transport, alice_node, _alice_rx, _bob_node, bob_rx, _alice_id, _bob_id, _alice_dest, _bob_dest, link_id) =
-        setup_link();
+    let (
+        transport,
+        alice_node,
+        _alice_rx,
+        _bob_node,
+        bob_rx,
+        _alice_id,
+        _bob_id,
+        _alice_dest,
+        _bob_dest,
+        link_id,
+    ) = setup_link();
 
     alice_node
         .send_on_link(link_id, b"custom data".to_vec(), 0x42)
         .unwrap();
 
-    let (ld_lid, ld_ctx, ld_data) = wait_for_link_data(&bob_rx, TIMEOUT)
-        .expect("Bob did not receive link data");
+    let (ld_lid, ld_ctx, ld_data) =
+        wait_for_link_data(&bob_rx, TIMEOUT).expect("Bob did not receive link data");
     assert_eq!(ld_lid, link_id);
     assert_eq!(ld_ctx, 0x42);
     assert_eq!(ld_data, b"custom data");
@@ -2056,13 +2487,27 @@ fn test_send_on_link() {
 
 #[test]
 fn test_query_interface_stats() {
-    let (transport, alice_node, _alice_rx, _bob_node, _bob_rx, _alice_id, _bob_id, _alice_dest, _bob_dest, _alice_ann, _bob_ann) =
-        setup_two_peers_announced();
+    let (
+        transport,
+        alice_node,
+        _alice_rx,
+        _bob_node,
+        _bob_rx,
+        _alice_id,
+        _bob_id,
+        _alice_dest,
+        _bob_dest,
+        _alice_ann,
+        _bob_ann,
+    ) = setup_two_peers_announced();
 
     let resp = alice_node.query(QueryRequest::InterfaceStats).unwrap();
     match resp {
         QueryResponse::InterfaceStats(stats) => {
-            assert!(!stats.interfaces.is_empty(), "Should have at least one interface");
+            assert!(
+                !stats.interfaces.is_empty(),
+                "Should have at least one interface"
+            );
         }
         _ => panic!("Unexpected response type"),
     }
@@ -2074,10 +2519,23 @@ fn test_query_interface_stats() {
 
 #[test]
 fn test_query_path_table() {
-    let (transport, alice_node, _alice_rx, _bob_node, _bob_rx, _alice_id, _bob_id, _alice_dest, bob_dest, _alice_ann, _bob_ann) =
-        setup_two_peers_announced();
+    let (
+        transport,
+        alice_node,
+        _alice_rx,
+        _bob_node,
+        _bob_rx,
+        _alice_id,
+        _bob_id,
+        _alice_dest,
+        bob_dest,
+        _alice_ann,
+        _bob_ann,
+    ) = setup_two_peers_announced();
 
-    let resp = alice_node.query(QueryRequest::PathTable { max_hops: None }).unwrap();
+    let resp = alice_node
+        .query(QueryRequest::PathTable { max_hops: None })
+        .unwrap();
     match resp {
         QueryResponse::PathTable(entries) => {
             let found = entries.iter().any(|e| e.hash == bob_dest.hash.0);
@@ -2093,8 +2551,18 @@ fn test_query_path_table() {
 
 #[test]
 fn test_query_local_destinations_and_links() {
-    let (transport, alice_node, alice_rx, bob_node, bob_rx, alice_id, bob_id, alice_dest, bob_dest, link_id) =
-        setup_link();
+    let (
+        transport,
+        alice_node,
+        alice_rx,
+        bob_node,
+        bob_rx,
+        alice_id,
+        bob_id,
+        alice_dest,
+        bob_dest,
+        link_id,
+    ) = setup_link();
 
     // Query local destinations on Alice
     let resp = alice_node.query(QueryRequest::LocalDestinations).unwrap();
@@ -2147,7 +2615,9 @@ fn test_udp_announce_and_message() {
     let alice_node = RnsNode::start(
         NodeConfig {
             transport_enabled: false,
-            identity: Some(Identity::from_private_key(&alice_identity.get_private_key().unwrap())),
+            identity: Some(Identity::from_private_key(
+                &alice_identity.get_private_key().unwrap(),
+            )),
             interfaces: vec![InterfaceConfig {
                 type_name: "UDPInterface".to_string(),
                 config_data: Box::new(UdpConfig {
@@ -2178,7 +2648,7 @@ fn test_udp_announce_and_message() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
-        registry: None,
+            registry: None,
         },
         Box::new(TestCallbacks::new(alice_tx)),
     )
@@ -2189,7 +2659,9 @@ fn test_udp_announce_and_message() {
     let bob_node = RnsNode::start(
         NodeConfig {
             transport_enabled: false,
-            identity: Some(Identity::from_private_key(&bob_identity.get_private_key().unwrap())),
+            identity: Some(Identity::from_private_key(
+                &bob_identity.get_private_key().unwrap(),
+            )),
             interfaces: vec![InterfaceConfig {
                 type_name: "UDPInterface".to_string(),
                 config_data: Box::new(UdpConfig {
@@ -2220,14 +2692,17 @@ fn test_udp_announce_and_message() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
-        registry: None,
+            registry: None,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
     .unwrap();
 
     alice_node
-        .register_destination_with_proof(&alice_dest, Some(alice_identity.get_private_key().unwrap()))
+        .register_destination_with_proof(
+            &alice_dest,
+            Some(alice_identity.get_private_key().unwrap()),
+        )
         .unwrap();
     bob_node
         .register_destination_with_proof(&bob_dest, Some(bob_identity.get_private_key().unwrap()))
@@ -2252,8 +2727,7 @@ fn test_udp_announce_and_message() {
     let dest_to_bob = Destination::single_out(APP_NAME, &["udp", "test"], &bob_announced);
     alice_node.send_packet(&dest_to_bob, b"UDP hello").unwrap();
 
-    let (_, raw, _) = wait_for_delivery(&bob_rx, TIMEOUT)
-        .expect("Bob did not receive UDP message");
+    let (_, raw, _) = wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive UDP message");
     let decrypted = decrypt_delivery(&raw, &bob_identity).expect("UDP decrypt failed");
     assert_eq!(decrypted, b"UDP hello");
 
@@ -2275,8 +2749,14 @@ fn test_rapid_announces() {
     let alice_dest = Destination::single_in(APP_NAME, &["rapid", "ann"], alice_ih);
 
     let (alice_tx, _alice_rx) = mpsc::channel();
-    let alice_node = start_client_node(port, &alice_identity, Box::new(TestCallbacks::new(alice_tx)));
-    alice_node.register_destination_with_proof(&alice_dest, None).unwrap();
+    let alice_node = start_client_node(
+        port,
+        &alice_identity,
+        Box::new(TestCallbacks::new(alice_tx)),
+    );
+    alice_node
+        .register_destination_with_proof(&alice_dest, None)
+        .unwrap();
 
     let bob_identity = Identity::new(&mut OsRng);
     let (bob_tx, bob_rx) = mpsc::channel();
@@ -2294,7 +2774,10 @@ fn test_rapid_announces() {
 
     // At least 1 should be received
     let received = wait_for_any_announce(&bob_rx, TIMEOUT);
-    assert!(received.is_some(), "Should receive at least one rapid announce");
+    assert!(
+        received.is_some(),
+        "Should receive at least one rapid announce"
+    );
 
     alice_node.shutdown();
     bob_node.shutdown();
@@ -2356,7 +2839,7 @@ fn discovery_announce_received_by_client() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
-        registry: None,
+            registry: None,
         },
         Box::new(TransportCallbacks),
     )
@@ -2406,7 +2889,7 @@ fn discovery_announce_received_by_client() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
-        registry: None,
+            registry: None,
         },
         Box::new(TestCallbacks::new(client_tx)),
     )
@@ -2425,12 +2908,12 @@ fn discovery_announce_received_by_client() {
     let mut found = false;
     for _ in 0..30 {
         std::thread::sleep(Duration::from_secs(1));
-        if let Ok(QueryResponse::DiscoveredInterfaces(interfaces)) = client.query(
-            QueryRequest::DiscoveredInterfaces {
+        if let Ok(QueryResponse::DiscoveredInterfaces(interfaces)) =
+            client.query(QueryRequest::DiscoveredInterfaces {
                 only_available: false,
                 only_transport: false,
-            },
-        ) {
+            })
+        {
             if !interfaces.is_empty() {
                 let iface = &interfaces[0];
                 assert_eq!(iface.name, "TestBackbone");
@@ -2444,7 +2927,10 @@ fn discovery_announce_received_by_client() {
         }
     }
 
-    assert!(found, "Client should have discovered the transport's backbone interface");
+    assert!(
+        found,
+        "Client should have discovered the transport's backbone interface"
+    );
 
     // Clean up
     client.shutdown();
@@ -2510,7 +2996,7 @@ fn discovery_announce_through_relay() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
-        registry: None,
+            registry: None,
         },
         Box::new(TransportCallbacks),
     )
@@ -2527,7 +3013,7 @@ fn discovery_announce_through_relay() {
             interfaces: vec![
                 InterfaceConfig {
                     type_name: "TCPClientInterface".to_string(),
-                config_data: Box::new(TcpClientConfig {
+                    config_data: Box::new(TcpClientConfig {
                         name: "Relay Upstream".into(),
                         target_host: "127.0.0.1".into(),
                         target_port: port_a,
@@ -2540,7 +3026,7 @@ fn discovery_announce_through_relay() {
                 },
                 InterfaceConfig {
                     type_name: "TCPServerInterface".to_string(),
-                config_data: Box::new(TcpServerConfig {
+                    config_data: Box::new(TcpServerConfig {
                         name: "Relay Downstream".into(),
                         listen_ip: "127.0.0.1".into(),
                         listen_port: port_b,
@@ -2567,7 +3053,7 @@ fn discovery_announce_through_relay() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
-        registry: None,
+            registry: None,
         },
         Box::new(TransportCallbacks),
     )
@@ -2615,7 +3101,7 @@ fn discovery_announce_through_relay() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
-        registry: None,
+            registry: None,
         },
         Box::new(TestCallbacks::new(client_tx)),
     )
@@ -2625,12 +3111,12 @@ fn discovery_announce_through_relay() {
     let mut found = false;
     for _ in 0..30 {
         std::thread::sleep(Duration::from_secs(1));
-        if let Ok(QueryResponse::DiscoveredInterfaces(interfaces)) = client.query(
-            QueryRequest::DiscoveredInterfaces {
+        if let Ok(QueryResponse::DiscoveredInterfaces(interfaces)) =
+            client.query(QueryRequest::DiscoveredInterfaces {
                 only_available: false,
                 only_transport: false,
-            },
-        ) {
+            })
+        {
             if !interfaces.is_empty() {
                 let iface = &interfaces[0];
                 assert_eq!(iface.name, "RelayedBackbone");
@@ -2643,7 +3129,10 @@ fn discovery_announce_through_relay() {
         }
     }
 
-    assert!(found, "Client should have discovered the interface through the relay");
+    assert!(
+        found,
+        "Client should have discovered the interface through the relay"
+    );
 
     // Clean up
     client.shutdown();

@@ -6,9 +6,9 @@ use std::fs;
 use std::path::Path;
 use std::sync::mpsc;
 
-use rns_net::{Callbacks, InterfaceId, RnsNode};
-use rns_net::storage;
 use crate::args::Args;
+use rns_net::storage;
+use rns_net::{Callbacks, InterfaceId, RnsNode};
 
 struct DaemonCallbacks;
 
@@ -25,7 +25,12 @@ impl Callbacks for DaemonCallbacks {
         log::debug!("Path updated for {} (hops: {})", hex(&dest_hash.0), hops);
     }
 
-    fn on_local_delivery(&mut self, dest_hash: rns_net::DestHash, _raw: Vec<u8>, _hash: rns_net::PacketHash) {
+    fn on_local_delivery(
+        &mut self,
+        dest_hash: rns_net::DestHash,
+        _raw: Vec<u8>,
+        _hash: rns_net::PacketHash,
+    ) {
         log::debug!("Local delivery for {}", hex(&dest_hash.0));
     }
 
@@ -78,9 +83,8 @@ pub fn run(args: Args) {
 
     if service_mode {
         // Service mode: log to file in config dir
-        let config_dir = storage::resolve_config_dir(
-            config_path.as_ref().map(|s| Path::new(s.as_str())),
-        );
+        let config_dir =
+            storage::resolve_config_dir(config_path.as_ref().map(|s| Path::new(s.as_str())));
         let logfile_path = config_dir.join("logfile");
         match fs::OpenOptions::new()
             .create(true)
@@ -126,8 +130,14 @@ pub fn run(args: Args) {
 
     // Handle SIGTERM/SIGINT
     unsafe {
-        libc::signal(libc::SIGINT, signal_handler as *const () as libc::sighandler_t);
-        libc::signal(libc::SIGTERM, signal_handler as *const () as libc::sighandler_t);
+        libc::signal(
+            libc::SIGINT,
+            signal_handler as *const () as libc::sighandler_t,
+        );
+        libc::signal(
+            libc::SIGTERM,
+            signal_handler as *const () as libc::sighandler_t,
+        );
     }
     // Store the channel sender in a static so the signal handler can use it
     STOP_TX.lock().unwrap().replace(stop_tx);

@@ -81,7 +81,13 @@ impl Writer for I2pWriter {
 /// Sanitize a name for use in filenames and SAM session IDs.
 fn sanitize_name(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -143,11 +149,7 @@ fn load_or_generate_keypair(
 
 /// Start the I2P interface coordinator. All peer connections are registered
 /// as dynamic interfaces via InterfaceUp events.
-pub fn start(
-    config: I2pConfig,
-    tx: EventSender,
-    next_id: Arc<AtomicU64>,
-) -> io::Result<()> {
+pub fn start(config: I2pConfig, tx: EventSender, next_id: Arc<AtomicU64>) -> io::Result<()> {
     let name = config.name.clone();
 
     thread::Builder::new()
@@ -264,10 +266,7 @@ fn outbound_peer_loop(
             match sam::naming_lookup(&sam_addr, peer_addr) {
                 Ok(dest) => dest.to_i2p_base64(),
                 Err(e) => {
-                    log::warn!(
-                        "[{}] failed to resolve {}: {}",
-                        iface_name, peer_addr, e
-                    );
+                    log::warn!("[{}] failed to resolve {}: {}", iface_name, peer_addr, e);
                     thread::sleep(RECONNECT_WAIT);
                     continue;
                 }
@@ -284,7 +283,9 @@ fn outbound_peer_loop(
 
                 log::info!(
                     "[{}] connected to I2P peer {} → id {}",
-                    iface_name, peer_addr, client_id.0
+                    iface_name,
+                    peer_addr,
+                    client_id.0
                 );
 
                 // Clone stream for writer/reader split
@@ -297,7 +298,9 @@ fn outbound_peer_loop(
                     }
                 };
 
-                let writer: Box<dyn Writer> = Box::new(I2pWriter { stream: writer_stream });
+                let writer: Box<dyn Writer> = Box::new(I2pWriter {
+                    stream: writer_stream,
+                });
 
                 let info = InterfaceInfo {
                     id: client_id,
@@ -342,7 +345,9 @@ fn outbound_peer_loop(
             Err(e) => {
                 log::warn!(
                     "[{}] failed to connect to I2P peer {}: {}",
-                    iface_name, peer_addr, e
+                    iface_name,
+                    peer_addr,
+                    e
                 );
             }
         }
@@ -367,7 +372,9 @@ fn acceptor_loop(
 
                 log::info!(
                     "[{}] accepted I2P connection from {} → id {}",
-                    iface_name, remote_b32, client_id.0
+                    iface_name,
+                    remote_b32,
+                    client_id.0
                 );
 
                 // Clone stream for writer/reader split
@@ -379,7 +386,9 @@ fn acceptor_loop(
                     }
                 };
 
-                let writer: Box<dyn Writer> = Box::new(I2pWriter { stream: writer_stream });
+                let writer: Box<dyn Writer> = Box::new(I2pWriter {
+                    stream: writer_stream,
+                });
 
                 let info = InterfaceInfo {
                     id: client_id,
@@ -468,14 +477,16 @@ fn peer_reader_loop(
 
 // --- Factory implementation ---
 
+use super::{InterfaceConfigData, InterfaceFactory, StartContext, StartResult};
 use std::collections::HashMap;
-use super::{InterfaceFactory, InterfaceConfigData, StartContext, StartResult};
 
 /// Factory for `I2PInterface`.
 pub struct I2pFactory;
 
 impl InterfaceFactory for I2pFactory {
-    fn type_name(&self) -> &str { "I2PInterface" }
+    fn type_name(&self) -> &str {
+        "I2PInterface"
+    }
 
     fn parse_config(
         &self,
@@ -483,19 +494,23 @@ impl InterfaceFactory for I2pFactory {
         id: InterfaceId,
         params: &HashMap<String, String>,
     ) -> Result<Box<dyn InterfaceConfigData>, String> {
-        let sam_host = params.get("sam_host")
+        let sam_host = params
+            .get("sam_host")
             .cloned()
             .unwrap_or_else(|| "127.0.0.1".into());
 
-        let sam_port = params.get("sam_port")
+        let sam_port = params
+            .get("sam_port")
             .and_then(|v| v.parse::<u16>().ok())
             .unwrap_or(7656);
 
-        let connectable = params.get("connectable")
+        let connectable = params
+            .get("connectable")
             .and_then(|v| crate::config::parse_bool_pub(v))
             .unwrap_or(false);
 
-        let peers = params.get("peers")
+        let peers = params
+            .get("peers")
             .map(|v| {
                 v.split(',')
                     .map(|s| s.trim().to_string())
@@ -504,7 +519,8 @@ impl InterfaceFactory for I2pFactory {
             })
             .unwrap_or_default();
 
-        let storage_dir = params.get("storage_dir")
+        let storage_dir = params
+            .get("storage_dir")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/tmp/rns-i2p"));
 
@@ -524,7 +540,9 @@ impl InterfaceFactory for I2pFactory {
         config: Box<dyn InterfaceConfigData>,
         ctx: StartContext,
     ) -> io::Result<StartResult> {
-        let cfg = *config.into_any().downcast::<I2pConfig>()
+        let cfg = *config
+            .into_any()
+            .downcast::<I2pConfig>()
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "wrong config type"))?;
         start(cfg, ctx.tx, ctx.next_dynamic_id)?;
         Ok(StartResult::Listener)

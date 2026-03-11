@@ -5,13 +5,13 @@
 use std::path::Path;
 use std::process;
 
-use rns_net::{RpcAddr, RpcClient};
+use rns_cli::args::Args;
+use rns_cli::format::{prettyfrequency, prettyhexrep, prettytime};
+use rns_net::config;
 use rns_net::pickle::PickleValue;
 use rns_net::rpc::derive_auth_key;
-use rns_net::config;
 use rns_net::storage;
-use rns_cli::args::Args;
-use rns_cli::format::{prettytime, prettyhexrep, prettyfrequency};
+use rns_net::{RpcAddr, RpcClient};
 
 const VERSION: &str = env!("FULL_VERSION");
 
@@ -59,9 +59,8 @@ fn main() {
     }
 
     // Load config
-    let config_dir = storage::resolve_config_dir(
-        config_path.as_ref().map(|s| Path::new(s.as_str())),
-    );
+    let config_dir =
+        storage::resolve_config_dir(config_path.as_ref().map(|s| Path::new(s.as_str())));
     let config_file = config_dir.join("config");
     let rns_config = if config_file.exists() {
         match config::parse_file(&config_file) {
@@ -97,9 +96,7 @@ fn main() {
         }
     };
 
-    let auth_key = derive_auth_key(
-        &identity.get_private_key().unwrap_or([0u8; 64]),
-    );
+    let auth_key = derive_auth_key(&identity.get_private_key().unwrap_or([0u8; 64]));
 
     let rpc_port = rns_config.reticulum.instance_control_port;
     let rpc_addr = RpcAddr::Tcp("127.0.0.1".into(), rpc_port);
@@ -157,7 +154,10 @@ fn show_path_table(client: &mut RpcClient, _json_output: bool, max_hops: Option<
     };
 
     let response = match client.call(&PickleValue::Dict(vec![
-        (PickleValue::String("get".into()), PickleValue::String("path_table".into())),
+        (
+            PickleValue::String("get".into()),
+            PickleValue::String("path_table".into()),
+        ),
         (PickleValue::String("max_hops".into()), max_hops_val),
     ])) {
         Ok(r) => r,
@@ -172,33 +172,42 @@ fn show_path_table(client: &mut RpcClient, _json_output: bool, max_hops: Option<
             println!("Path table is empty");
             return;
         }
-        println!("{:<34} {:>6} {:<34} {:<10} {}",
-            "Destination", "Hops", "Via", "Expires", "Interface");
+        println!(
+            "{:<34} {:>6} {:<34} {:<10} {}",
+            "Destination", "Hops", "Via", "Expires", "Interface"
+        );
         println!("{}", "-".repeat(100));
         for entry in entries {
-            let hash = entry.get("hash")
+            let hash = entry
+                .get("hash")
                 .and_then(|v| v.as_bytes())
                 .map(prettyhexrep)
                 .unwrap_or_default();
-            let hops = entry.get("hops")
-                .and_then(|v| v.as_int())
-                .unwrap_or(0);
-            let via = entry.get("via")
+            let hops = entry.get("hops").and_then(|v| v.as_int()).unwrap_or(0);
+            let via = entry
+                .get("via")
                 .and_then(|v| v.as_bytes())
                 .map(prettyhexrep)
                 .unwrap_or_default();
-            let expires = entry.get("expires")
+            let expires = entry
+                .get("expires")
                 .and_then(|v| v.as_float())
                 .map(|e| {
                     let remaining = e - rns_net::time::now();
-                    if remaining > 0.0 { prettytime(remaining) } else { "expired".into() }
+                    if remaining > 0.0 {
+                        prettytime(remaining)
+                    } else {
+                        "expired".into()
+                    }
                 })
                 .unwrap_or_default();
-            let interface = entry.get("interface")
+            let interface = entry
+                .get("interface")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
 
-            println!("{:<34} {:>6} {:<34} {:<10} {}",
+            println!(
+                "{:<34} {:>6} {:<34} {:<10} {}",
                 &hash[..hash.len().min(32)],
                 hops,
                 &via[..via.len().min(32)],
@@ -212,9 +221,10 @@ fn show_path_table(client: &mut RpcClient, _json_output: bool, max_hops: Option<
 }
 
 fn show_rate_table(client: &mut RpcClient, _json_output: bool) {
-    let response = match client.call(&PickleValue::Dict(vec![
-        (PickleValue::String("get".into()), PickleValue::String("rate_table".into())),
-    ])) {
+    let response = match client.call(&PickleValue::Dict(vec![(
+        PickleValue::String("get".into()),
+        PickleValue::String("rate_table".into()),
+    )])) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("RPC error: {}", e);
@@ -227,46 +237,55 @@ fn show_rate_table(client: &mut RpcClient, _json_output: bool) {
             println!("Rate table is empty");
             return;
         }
-        println!("{:<34} {:>12} {:>12} {:>16}",
-            "Destination", "Violations", "Frequency", "Blocked Until");
+        println!(
+            "{:<34} {:>12} {:>12} {:>16}",
+            "Destination", "Violations", "Frequency", "Blocked Until"
+        );
         println!("{}", "-".repeat(78));
         for entry in entries {
-            let hash = entry.get("hash")
+            let hash = entry
+                .get("hash")
                 .and_then(|v| v.as_bytes())
                 .map(prettyhexrep)
                 .unwrap_or_default();
-            let violations = entry.get("rate_violations")
+            let violations = entry
+                .get("rate_violations")
                 .and_then(|v| v.as_int())
                 .unwrap_or(0);
-            let blocked = entry.get("blocked_until")
+            let blocked = entry
+                .get("blocked_until")
                 .and_then(|v| v.as_float())
                 .map(|b| {
                     let remaining = b - rns_net::time::now();
-                    if remaining > 0.0 { prettytime(remaining) } else { "not blocked".into() }
+                    if remaining > 0.0 {
+                        prettytime(remaining)
+                    } else {
+                        "not blocked".into()
+                    }
                 })
                 .unwrap_or_default();
 
             // Compute hourly frequency from timestamps
-            let freq_str = if let Some(timestamps) = entry.get("timestamps").and_then(|v| v.as_list()) {
-                let ts: Vec<f64> = timestamps.iter()
-                    .filter_map(|v| v.as_float())
-                    .collect();
-                if ts.len() >= 2 {
-                    let span = ts[ts.len() - 1] - ts[0];
-                    if span > 0.0 {
-                        let freq_per_sec = (ts.len() - 1) as f64 / span;
-                        prettyfrequency(freq_per_sec)
+            let freq_str =
+                if let Some(timestamps) = entry.get("timestamps").and_then(|v| v.as_list()) {
+                    let ts: Vec<f64> = timestamps.iter().filter_map(|v| v.as_float()).collect();
+                    if ts.len() >= 2 {
+                        let span = ts[ts.len() - 1] - ts[0];
+                        if span > 0.0 {
+                            let freq_per_sec = (ts.len() - 1) as f64 / span;
+                            prettyfrequency(freq_per_sec)
+                        } else {
+                            "none".into()
+                        }
                     } else {
                         "none".into()
                     }
                 } else {
                     "none".into()
-                }
-            } else {
-                "none".into()
-            };
+                };
 
-            println!("{:<34} {:>12} {:>12} {:>16}",
+            println!(
+                "{:<34} {:>12} {:>12} {:>16}",
                 &hash[..hash.len().min(32)],
                 violations,
                 freq_str,
@@ -277,9 +296,10 @@ fn show_rate_table(client: &mut RpcClient, _json_output: bool) {
 }
 
 fn show_blackholed_list(client: &mut RpcClient) {
-    let response = match client.call(&PickleValue::Dict(vec![
-        (PickleValue::String("get".into()), PickleValue::String("blackholed".into())),
-    ])) {
+    let response = match client.call(&PickleValue::Dict(vec![(
+        PickleValue::String("get".into()),
+        PickleValue::String("blackholed".into()),
+    )])) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("RPC error: {}", e);
@@ -292,30 +312,34 @@ fn show_blackholed_list(client: &mut RpcClient) {
             println!("Blackhole list is empty");
             return;
         }
-        println!("{:<34} {:<16} {}",
-            "Identity Hash", "Expires", "Reason");
+        println!("{:<34} {:<16} {}", "Identity Hash", "Expires", "Reason");
         println!("{}", "-".repeat(70));
         for entry in entries {
-            let hash = entry.get("identity_hash")
+            let hash = entry
+                .get("identity_hash")
                 .and_then(|v| v.as_bytes())
                 .map(prettyhexrep)
                 .unwrap_or_default();
-            let expires = entry.get("expires")
+            let expires = entry
+                .get("expires")
                 .and_then(|v| v.as_float())
                 .map(|e| {
                     if e == 0.0 {
                         "never".into()
                     } else {
                         let remaining = e - rns_net::time::now();
-                        if remaining > 0.0 { prettytime(remaining) } else { "expired".into() }
+                        if remaining > 0.0 {
+                            prettytime(remaining)
+                        } else {
+                            "expired".into()
+                        }
                     }
                 })
                 .unwrap_or_default();
-            let reason = entry.get("reason")
-                .and_then(|v| v.as_str())
-                .unwrap_or("-");
+            let reason = entry.get("reason").and_then(|v| v.as_str()).unwrap_or("-");
 
-            println!("{:<34} {:<16} {}",
+            println!(
+                "{:<34} {:<16} {}",
                 &hash[..hash.len().min(32)],
                 expires,
                 reason,
@@ -326,7 +350,12 @@ fn show_blackholed_list(client: &mut RpcClient) {
     }
 }
 
-fn do_blackhole(client: &mut RpcClient, hash_str: &str, duration_hours: Option<f64>, reason: Option<String>) {
+fn do_blackhole(
+    client: &mut RpcClient,
+    hash_str: &str,
+    duration_hours: Option<f64>,
+    reason: Option<String>,
+) {
     let hash_bytes = match parse_hex_hash(hash_str) {
         Some(b) if b.len() >= 16 => b,
         _ => {
@@ -335,11 +364,15 @@ fn do_blackhole(client: &mut RpcClient, hash_str: &str, duration_hours: Option<f
         }
     };
 
-    let mut dict = vec![
-        (PickleValue::String("blackhole".into()), PickleValue::Bytes(hash_bytes[..16].to_vec())),
-    ];
+    let mut dict = vec![(
+        PickleValue::String("blackhole".into()),
+        PickleValue::Bytes(hash_bytes[..16].to_vec()),
+    )];
     if let Some(d) = duration_hours {
-        dict.push((PickleValue::String("duration".into()), PickleValue::Float(d)));
+        dict.push((
+            PickleValue::String("duration".into()),
+            PickleValue::Float(d),
+        ));
     }
     if let Some(r) = reason {
         dict.push((PickleValue::String("reason".into()), PickleValue::String(r)));
@@ -369,14 +402,21 @@ fn do_unblackhole(client: &mut RpcClient, hash_str: &str) {
         }
     };
 
-    match client.call(&PickleValue::Dict(vec![
-        (PickleValue::String("unblackhole".into()), PickleValue::Bytes(hash_bytes[..16].to_vec())),
-    ])) {
+    match client.call(&PickleValue::Dict(vec![(
+        PickleValue::String("unblackhole".into()),
+        PickleValue::Bytes(hash_bytes[..16].to_vec()),
+    )])) {
         Ok(r) => {
             if r.as_bool() == Some(true) {
-                println!("Removed {} from blackhole list", prettyhexrep(&hash_bytes[..16]));
+                println!(
+                    "Removed {} from blackhole list",
+                    prettyhexrep(&hash_bytes[..16])
+                );
             } else {
-                println!("Identity {} was not blackholed", prettyhexrep(&hash_bytes[..16]));
+                println!(
+                    "Identity {} was not blackholed",
+                    prettyhexrep(&hash_bytes[..16])
+                );
             }
         }
         Err(e) => {
@@ -400,8 +440,14 @@ fn lookup_path(client: &mut RpcClient, hash_str: &str) {
 
     // Query next hop
     let response = match client.call(&PickleValue::Dict(vec![
-        (PickleValue::String("get".into()), PickleValue::String("next_hop".into())),
-        (PickleValue::String("destination_hash".into()), PickleValue::Bytes(dest_hash.to_vec())),
+        (
+            PickleValue::String("get".into()),
+            PickleValue::String("next_hop".into()),
+        ),
+        (
+            PickleValue::String("destination_hash".into()),
+            PickleValue::Bytes(dest_hash.to_vec()),
+        ),
     ])) {
         Ok(r) => r,
         Err(e) => {
@@ -431,8 +477,14 @@ fn drop_path(client: &mut RpcClient, hash_str: &str) {
     dest_hash.copy_from_slice(&hash_bytes[..16]);
 
     let response = match client.call(&PickleValue::Dict(vec![
-        (PickleValue::String("drop".into()), PickleValue::String("path".into())),
-        (PickleValue::String("destination_hash".into()), PickleValue::Bytes(dest_hash.to_vec())),
+        (
+            PickleValue::String("drop".into()),
+            PickleValue::String("path".into()),
+        ),
+        (
+            PickleValue::String("destination_hash".into()),
+            PickleValue::Bytes(dest_hash.to_vec()),
+        ),
     ])) {
         Ok(r) => r,
         Err(e) => {
@@ -461,8 +513,14 @@ fn drop_all_via(client: &mut RpcClient, hash_str: &str) {
     transport_hash.copy_from_slice(&hash_bytes[..16]);
 
     let response = match client.call(&PickleValue::Dict(vec![
-        (PickleValue::String("drop".into()), PickleValue::String("all_via".into())),
-        (PickleValue::String("destination_hash".into()), PickleValue::Bytes(transport_hash.to_vec())),
+        (
+            PickleValue::String("drop".into()),
+            PickleValue::String("all_via".into()),
+        ),
+        (
+            PickleValue::String("destination_hash".into()),
+            PickleValue::Bytes(transport_hash.to_vec()),
+        ),
     ])) {
         Ok(r) => r,
         Err(e) => {
@@ -477,9 +535,10 @@ fn drop_all_via(client: &mut RpcClient, hash_str: &str) {
 }
 
 fn drop_announce_queues(client: &mut RpcClient) {
-    match client.call(&PickleValue::Dict(vec![
-        (PickleValue::String("drop".into()), PickleValue::String("announce_queues".into())),
-    ])) {
+    match client.call(&PickleValue::Dict(vec![(
+        PickleValue::String("drop".into()),
+        PickleValue::String("announce_queues".into()),
+    )])) {
         Ok(_) => println!("Announce queues dropped"),
         Err(e) => {
             eprintln!("RPC error: {}", e);
@@ -492,7 +551,10 @@ fn remote_path(hash_str: &str, config_path: Option<&str>) {
     let dest_hash = match rns_cli::remote::parse_hex_hash(hash_str) {
         Some(h) => h,
         None => {
-            eprintln!("Invalid destination hash: {} (expected 32 hex chars)", hash_str);
+            eprintln!(
+                "Invalid destination hash: {} (expected 32 hex chars)",
+                hash_str
+            );
             process::exit(1);
         }
     };

@@ -8,13 +8,23 @@ use rns_crypto::*;
 
 fn fixture_path(name: &str) -> PathBuf {
     let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest.join("..").join("tests").join("fixtures").join("crypto").join(name)
+    manifest
+        .join("..")
+        .join("tests")
+        .join("fixtures")
+        .join("crypto")
+        .join(name)
 }
 
 fn load_fixture(name: &str) -> serde_json::Value {
     let path = fixture_path(name);
-    let content = fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("Failed to read {}: {}. Run generate_vectors.py first.", path.display(), e));
+    let content = fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "Failed to read {}: {}. Run generate_vectors.py first.",
+            path.display(),
+            e
+        )
+    });
     serde_json::from_str(&content).unwrap()
 }
 
@@ -35,9 +45,18 @@ fn test_pkcs7_interop() {
         let expected_unpadded = hex_to_bytes(v["unpadded"].as_str().unwrap());
 
         let padded = pkcs7::pad(&input, bs);
-        assert_eq!(padded, expected_padded, "PKCS7 pad mismatch: {}", v["description"]);
+        assert_eq!(
+            padded, expected_padded,
+            "PKCS7 pad mismatch: {}",
+            v["description"]
+        );
         let unpadded = pkcs7::unpad(&padded, bs).unwrap();
-        assert_eq!(unpadded, &expected_unpadded[..], "PKCS7 unpad mismatch: {}", v["description"]);
+        assert_eq!(
+            unpadded,
+            &expected_unpadded[..],
+            "PKCS7 unpad mismatch: {}",
+            v["description"]
+        );
     }
 }
 
@@ -49,7 +68,12 @@ fn test_sha256_interop() {
         let expected = hex_to_bytes(v["digest"].as_str().unwrap());
 
         let result = sha256::sha256(&input);
-        assert_eq!(result.to_vec(), expected, "SHA256 mismatch: {}", v["description"]);
+        assert_eq!(
+            result.to_vec(),
+            expected,
+            "SHA256 mismatch: {}",
+            v["description"]
+        );
     }
 }
 
@@ -61,7 +85,12 @@ fn test_sha512_interop() {
         let expected = hex_to_bytes(v["digest"].as_str().unwrap());
 
         let result = sha512::sha512(&input);
-        assert_eq!(result.to_vec(), expected, "SHA512 mismatch: {}", v["description"]);
+        assert_eq!(
+            result.to_vec(),
+            expected,
+            "SHA512 mismatch: {}",
+            v["description"]
+        );
     }
 }
 
@@ -74,7 +103,12 @@ fn test_hmac_interop() {
         let expected = hex_to_bytes(v["digest"].as_str().unwrap());
 
         let result = hmac::hmac_sha256(&key, &data);
-        assert_eq!(result.to_vec(), expected, "HMAC mismatch: {}", v["description"]);
+        assert_eq!(
+            result.to_vec(),
+            expected,
+            "HMAC mismatch: {}",
+            v["description"]
+        );
     }
 }
 
@@ -88,12 +122,7 @@ fn test_hkdf_interop() {
         let context = v["context"].as_str().map(|s| hex_to_bytes(s));
         let expected = hex_to_bytes(v["derived"].as_str().unwrap());
 
-        let result = hkdf::hkdf(
-            length,
-            &ikm,
-            salt.as_deref(),
-            context.as_deref(),
-        ).unwrap();
+        let result = hkdf::hkdf(length, &ikm, salt.as_deref(), context.as_deref()).unwrap();
         assert_eq!(result, expected, "HKDF mismatch: {}", v["description"]);
     }
 }
@@ -112,10 +141,18 @@ fn test_aes128_interop() {
 
         let cipher = aes128::Aes128::new(&key);
         let ciphertext = cipher.encrypt_cbc(&plaintext, &iv);
-        assert_eq!(ciphertext, expected_ct, "AES128 encrypt mismatch: {}", v["description"]);
+        assert_eq!(
+            ciphertext, expected_ct,
+            "AES128 encrypt mismatch: {}",
+            v["description"]
+        );
 
         let decrypted = cipher.decrypt_cbc(&ciphertext, &iv);
-        assert_eq!(decrypted, plaintext, "AES128 decrypt mismatch: {}", v["description"]);
+        assert_eq!(
+            decrypted, plaintext,
+            "AES128 decrypt mismatch: {}",
+            v["description"]
+        );
     }
 }
 
@@ -133,10 +170,18 @@ fn test_aes256_interop() {
 
         let cipher = aes256::Aes256::new(&key);
         let ciphertext = cipher.encrypt_cbc(&plaintext, &iv);
-        assert_eq!(ciphertext, expected_ct, "AES256 encrypt mismatch: {}", v["description"]);
+        assert_eq!(
+            ciphertext, expected_ct,
+            "AES256 encrypt mismatch: {}",
+            v["description"]
+        );
 
         let decrypted = cipher.decrypt_cbc(&ciphertext, &iv);
-        assert_eq!(decrypted, plaintext, "AES256 decrypt mismatch: {}", v["description"]);
+        assert_eq!(
+            decrypted, plaintext,
+            "AES256 decrypt mismatch: {}",
+            v["description"]
+        );
     }
 }
 
@@ -153,14 +198,26 @@ fn test_token_interop() {
 
         let token = token::Token::new(&key).unwrap();
         let ciphertext = token.encrypt_with_iv(&plaintext, &iv);
-        assert_eq!(ciphertext, expected_ct, "Token encrypt mismatch: {}", v["description"]);
+        assert_eq!(
+            ciphertext, expected_ct,
+            "Token encrypt mismatch: {}",
+            v["description"]
+        );
 
         let decrypted = token.decrypt(&ciphertext).unwrap();
-        assert_eq!(decrypted, plaintext, "Token decrypt mismatch: {}", v["description"]);
+        assert_eq!(
+            decrypted, plaintext,
+            "Token decrypt mismatch: {}",
+            v["description"]
+        );
 
         // Also test decrypting Python-generated ciphertext directly
         let decrypted2 = token.decrypt(&expected_ct).unwrap();
-        assert_eq!(decrypted2, plaintext, "Token decrypt Python ciphertext mismatch: {}", v["description"]);
+        assert_eq!(
+            decrypted2, plaintext,
+            "Token decrypt Python ciphertext mismatch: {}",
+            v["description"]
+        );
     }
 }
 
@@ -177,7 +234,12 @@ fn test_x25519_interop() {
             let prv_arr: [u8; 32] = prv_bytes.try_into().unwrap();
             let key = x25519::X25519PrivateKey::from_bytes(&prv_arr);
             let pub_key = key.public_key();
-            assert_eq!(pub_key.public_bytes().to_vec(), expected_pub, "X25519 pubkey mismatch: {}", desc);
+            assert_eq!(
+                pub_key.public_bytes().to_vec(),
+                expected_pub,
+                "X25519 pubkey mismatch: {}",
+                desc
+            );
         } else if desc == "exchange_ab" {
             // Key exchange test
             let prv_a = hex_to_bytes(v["private_a"].as_str().unwrap());
@@ -208,14 +270,28 @@ fn test_ed25519_interop() {
         let key = ed25519::Ed25519PrivateKey::from_bytes(&seed_arr);
 
         let pub_key = key.public_key();
-        assert_eq!(pub_key.public_bytes().to_vec(), expected_pub, "Ed25519 pubkey mismatch: {}", v["description"]);
+        assert_eq!(
+            pub_key.public_bytes().to_vec(),
+            expected_pub,
+            "Ed25519 pubkey mismatch: {}",
+            v["description"]
+        );
 
         let sig = key.sign(&message);
-        assert_eq!(sig.to_vec(), expected_sig, "Ed25519 sign mismatch: {}", v["description"]);
+        assert_eq!(
+            sig.to_vec(),
+            expected_sig,
+            "Ed25519 sign mismatch: {}",
+            v["description"]
+        );
 
         // Verify Python signature
         let sig_arr: [u8; 64] = expected_sig.try_into().unwrap();
-        assert!(pub_key.verify(&sig_arr, &message), "Ed25519 verify Python sig failed: {}", v["description"]);
+        assert!(
+            pub_key.verify(&sig_arr, &message),
+            "Ed25519 verify Python sig failed: {}",
+            v["description"]
+        );
     }
 }
 
@@ -237,14 +313,21 @@ fn test_identity_interop() {
 
     // Verify public key matches
     let pub_key = id.get_public_key().unwrap();
-    assert_eq!(pub_key.to_vec(), expected_pub, "Identity public key mismatch");
+    assert_eq!(
+        pub_key.to_vec(),
+        expected_pub,
+        "Identity public key mismatch"
+    );
 
     // Verify hash matches
     assert_eq!(id.hash().to_vec(), expected_hash, "Identity hash mismatch");
 
     // THE MILESTONE: Decrypt Python-generated ciphertext
     let decrypted = id.decrypt(&python_ciphertext).unwrap();
-    assert_eq!(decrypted, plaintext, "MILESTONE FAILED: Cannot decrypt Python ciphertext in Rust!");
+    assert_eq!(
+        decrypted, plaintext,
+        "MILESTONE FAILED: Cannot decrypt Python ciphertext in Rust!"
+    );
 
     // Verify deterministic encryption matches Python
     let ephemeral_prv = hex_to_bytes(v["ephemeral_private"].as_str().unwrap());
@@ -252,16 +335,28 @@ fn test_identity_interop() {
     let eph_arr: [u8; 32] = ephemeral_prv.try_into().unwrap();
     let iv_arr: [u8; 16] = fixed_iv.try_into().unwrap();
 
-    let rust_ciphertext = id.encrypt_deterministic(&plaintext, &eph_arr, &iv_arr).unwrap();
-    assert_eq!(rust_ciphertext, python_ciphertext, "Rust encrypt doesn't match Python encrypt");
+    let rust_ciphertext = id
+        .encrypt_deterministic(&plaintext, &eph_arr, &iv_arr)
+        .unwrap();
+    assert_eq!(
+        rust_ciphertext, python_ciphertext,
+        "Rust encrypt doesn't match Python encrypt"
+    );
 
     // Verify Python signature
     let sig_arr: [u8; 64] = python_signature.clone().try_into().unwrap();
-    assert!(id.verify(&sig_arr, &sign_message), "Cannot verify Python signature in Rust!");
+    assert!(
+        id.verify(&sig_arr, &sign_message),
+        "Cannot verify Python signature in Rust!"
+    );
 
     // Sign in Rust and verify the round-trip
     let rust_sig = id.sign(&sign_message).unwrap();
-    assert_eq!(rust_sig.to_vec(), python_signature, "Rust signature doesn't match Python signature");
+    assert_eq!(
+        rust_sig.to_vec(),
+        python_signature,
+        "Rust signature doesn't match Python signature"
+    );
 
     println!("=== MILESTONE ACHIEVED ===");
     println!("Python Token.encrypt() -> Rust decrypt(): OK");

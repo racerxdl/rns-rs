@@ -85,10 +85,7 @@ pub enum TransportAction {
         exclude: Option<InterfaceId>,
     },
     /// Cache an announce packet to disk.
-    CacheAnnounce {
-        packet_hash: [u8; 32],
-        raw: Vec<u8>,
-    },
+    CacheAnnounce { packet_hash: [u8; 32], raw: Vec<u8> },
     /// Tunnel synthesis: send synthesis data on an interface.
     TunnelSynthesize {
         interface: InterfaceId,
@@ -118,9 +115,7 @@ pub enum TransportAction {
         interface: InterfaceId,
     },
     /// A link entry expired and was removed from the link table.
-    LinkClosed {
-        link_id: [u8; 16],
-    },
+    LinkClosed { link_id: [u8; 16] },
 }
 
 /// A blackholed identity entry.

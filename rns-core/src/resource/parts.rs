@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use crate::constants::{RESOURCE_MAPHASH_LEN, RESOURCE_COLLISION_GUARD_SIZE};
+use crate::constants::{RESOURCE_COLLISION_GUARD_SIZE, RESOURCE_MAPHASH_LEN};
 use crate::hash::full_hash;
 
 /// Compute map hash for a part: SHA-256(part_data + random_hash)[:4]
@@ -108,9 +108,8 @@ pub fn extract_metadata(assembled: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
     if assembled.len() < 3 {
         return None;
     }
-    let size = ((assembled[0] as usize) << 16)
-        | ((assembled[1] as usize) << 8)
-        | (assembled[2] as usize);
+    let size =
+        ((assembled[0] as usize) << 16) | ((assembled[1] as usize) << 8) | (assembled[2] as usize);
     if assembled.len() < 3 + size {
         return None;
     }
@@ -191,7 +190,10 @@ mod tests {
     fn test_build_hashmap() {
         let hashes = vec![[0x11, 0x22, 0x33, 0x44], [0xAA, 0xBB, 0xCC, 0xDD]];
         let hashmap = build_hashmap(&hashes);
-        assert_eq!(hashmap, vec![0x11, 0x22, 0x33, 0x44, 0xAA, 0xBB, 0xCC, 0xDD]);
+        assert_eq!(
+            hashmap,
+            vec![0x11, 0x22, 0x33, 0x44, 0xAA, 0xBB, 0xCC, 0xDD]
+        );
     }
 
     #[test]
@@ -222,10 +224,19 @@ mod tests {
             Some([0x55, 0x66, 0x77, 0x88]),
             None,
         ];
-        assert_eq!(find_part_by_hash(&hashmap, &[0xAA, 0xBB, 0xCC, 0xDD], 0, 4), Some(1));
-        assert_eq!(find_part_by_hash(&hashmap, &[0xFF, 0xFF, 0xFF, 0xFF], 0, 4), None);
+        assert_eq!(
+            find_part_by_hash(&hashmap, &[0xAA, 0xBB, 0xCC, 0xDD], 0, 4),
+            Some(1)
+        );
+        assert_eq!(
+            find_part_by_hash(&hashmap, &[0xFF, 0xFF, 0xFF, 0xFF], 0, 4),
+            None
+        );
         // Outside window
-        assert_eq!(find_part_by_hash(&hashmap, &[0x55, 0x66, 0x77, 0x88], 0, 2), None);
+        assert_eq!(
+            find_part_by_hash(&hashmap, &[0x55, 0x66, 0x77, 0x88], 0, 2),
+            None
+        );
     }
 
     #[test]

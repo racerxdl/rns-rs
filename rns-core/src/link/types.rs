@@ -115,8 +115,14 @@ mod tests {
 
     #[test]
     fn test_link_mode_byte_roundtrip() {
-        assert_eq!(LinkMode::from_byte(LinkMode::Aes128Cbc.mode_byte()).unwrap(), LinkMode::Aes128Cbc);
-        assert_eq!(LinkMode::from_byte(LinkMode::Aes256Cbc.mode_byte()).unwrap(), LinkMode::Aes256Cbc);
+        assert_eq!(
+            LinkMode::from_byte(LinkMode::Aes128Cbc.mode_byte()).unwrap(),
+            LinkMode::Aes128Cbc
+        );
+        assert_eq!(
+            LinkMode::from_byte(LinkMode::Aes256Cbc.mode_byte()).unwrap(),
+            LinkMode::Aes256Cbc
+        );
     }
 
     #[test]

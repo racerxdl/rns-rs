@@ -4,9 +4,9 @@ use rns_crypto::ed25519::{Ed25519PrivateKey, Ed25519PublicKey};
 use rns_crypto::hkdf::hkdf;
 use rns_crypto::x25519::{X25519PrivateKey, X25519PublicKey};
 
-use crate::constants::{LINK_ECPUBSIZE, LINK_MTU_BYTEMASK, LINK_MTU_SIZE, LINK_MODE_BYTEMASK};
-use crate::hash::truncated_hash;
 use super::types::{LinkError, LinkId, LinkMode};
+use crate::constants::{LINK_ECPUBSIZE, LINK_MODE_BYTEMASK, LINK_MTU_BYTEMASK, LINK_MTU_SIZE};
+use crate::hash::truncated_hash;
 
 /// Compute link_id from a LINKREQUEST packet's hashable part.
 ///
@@ -127,7 +127,9 @@ pub fn validate_lrproof(
     let sig_len = 64;
     let pub_len = 32;
 
-    if proof_data.len() != sig_len + pub_len && proof_data.len() != sig_len + pub_len + LINK_MTU_SIZE {
+    if proof_data.len() != sig_len + pub_len
+        && proof_data.len() != sig_len + pub_len + LINK_MTU_SIZE
+    {
         return Err(LinkError::InvalidData);
     }
 
@@ -172,8 +174,7 @@ pub fn derive_session_key(
     mode: LinkMode,
 ) -> Result<Vec<u8>, LinkError> {
     let length = mode.derived_key_length();
-    hkdf(length, shared_key, Some(link_id), None)
-        .map_err(|_| LinkError::CryptoError)
+    hkdf(length, shared_key, Some(link_id), None).map_err(|_| LinkError::CryptoError)
 }
 
 /// Perform ECDH key exchange and derive session key.
@@ -246,7 +247,8 @@ mod tests {
     fn test_linkrequest_data_roundtrip() {
         let pub_bytes = [0xAAu8; 32];
         let sig_pub_bytes = [0xBBu8; 32];
-        let data = build_linkrequest_data(&pub_bytes, &sig_pub_bytes, Some(500), LinkMode::Aes256Cbc);
+        let data =
+            build_linkrequest_data(&pub_bytes, &sig_pub_bytes, Some(500), LinkMode::Aes256Cbc);
         assert_eq!(data.len(), LINK_ECPUBSIZE + LINK_MTU_SIZE);
 
         let (p, s, mtu, mode) = parse_linkrequest_data(&data).unwrap();
@@ -327,7 +329,14 @@ mod tests {
         let link_id: LinkId = [0xAA; 16];
         let wrong_id: LinkId = [0xBB; 16];
 
-        let proof = build_lrproof(&link_id, &pub_bytes, &sig_pub_bytes, &sig_prv, None, LinkMode::Aes256Cbc);
+        let proof = build_lrproof(
+            &link_id,
+            &pub_bytes,
+            &sig_pub_bytes,
+            &sig_prv,
+            None,
+            LinkMode::Aes256Cbc,
+        );
         let result = validate_lrproof(&proof, &wrong_id, &sig_pub, &sig_pub_bytes);
         assert_eq!(result, Err(LinkError::InvalidSignature));
     }

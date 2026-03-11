@@ -1,13 +1,9 @@
 //! Event types for the driver loop — concrete sync instantiation.
 
 pub use crate::common::event::{
-    HolePunchPolicy,
-    HookInfo,
-    QueryRequest, QueryResponse,
-    InterfaceStatsResponse, SingleInterfaceStat,
-    LocalDestinationEntry, LinkInfoEntry, ResourceInfoEntry,
-    PathTableEntry, RateTableEntry,
-    BlackholeInfo, NextHopResponse,
+    BlackholeInfo, HolePunchPolicy, HookInfo, InterfaceStatsResponse, LinkInfoEntry,
+    LocalDestinationEntry, NextHopResponse, PathTableEntry, QueryRequest, QueryResponse,
+    RateTableEntry, ResourceInfoEntry, SingleInterfaceStat,
 };
 
 /// Concrete Event type using boxed sync Writer.

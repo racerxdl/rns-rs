@@ -42,10 +42,7 @@ impl AnnounceCache {
             Some(name) => Value::Str(name.into()),
             None => Value::Nil,
         };
-        let data = msgpack::pack(&Value::Array(vec![
-            Value::Bin(raw.to_vec()),
-            iface_val,
-        ]));
+        let data = msgpack::pack(&Value::Array(vec![Value::Bin(raw.to_vec()), iface_val]));
 
         fs::write(path, data)
     }
@@ -66,17 +63,17 @@ impl AnnounceCache {
             io::Error::new(io::ErrorKind::InvalidData, format!("msgpack error: {}", e))
         })?;
 
-        let arr = value.as_array().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "Expected msgpack array")
-        })?;
+        let arr = value
+            .as_array()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Expected msgpack array"))?;
 
         if arr.is_empty() {
             return Ok(None);
         }
 
-        let raw = arr[0].as_bin().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "Expected bin raw bytes")
-        })?;
+        let raw = arr[0]
+            .as_bin()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Expected bin raw bytes"))?;
 
         let iface_name = if arr.len() > 1 {
             arr[1].as_str().map(|s| s.to_string())
@@ -148,8 +145,7 @@ fn hex_encode(bytes: &[u8; 32]) -> String {
 }
 
 const HEX_CHARS: [char; 16] = [
-    '0', '1', '2', '3', '4', '5', '6', '7',
-    '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
+    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
 ];
 
 /// Decode a 64-char hex string back to 32 bytes.
@@ -184,11 +180,8 @@ mod tests {
 
     fn temp_dir() -> PathBuf {
         let id = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "rns-announce-cache-{}-{}",
-            std::process::id(),
-            id,
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("rns-announce-cache-{}-{}", std::process::id(), id,));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir

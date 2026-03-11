@@ -60,7 +60,8 @@ impl StreamDataMessage {
         let mut data = raw[2..].to_vec();
 
         if compressed {
-            data = compressor.decompress(&data)
+            data = compressor
+                .decompress(&data)
                 .ok_or(BufferError::DecompressionFailed)?;
         }
 
@@ -263,7 +264,10 @@ mod tests {
 
     #[test]
     fn test_unpack_too_short() {
-        assert_eq!(StreamDataMessage::unpack(&[0x00], &NoopCompressor), Err(BufferError::InvalidData));
+        assert_eq!(
+            StreamDataMessage::unpack(&[0x00], &NoopCompressor),
+            Err(BufferError::InvalidData)
+        );
     }
 
     #[test]

@@ -18,8 +18,8 @@ use rns_crypto::OsRng;
 
 use rns_net::{
     AnnouncedIdentity, Callbacks, DestHash, Destination, IdentityHash, InterfaceConfig,
-    InterfaceId, NodeConfig, PacketHash, ProofStrategy, RnsNode,
-    TcpClientConfig, TcpServerConfig, MODE_FULL,
+    InterfaceId, NodeConfig, PacketHash, ProofStrategy, RnsNode, TcpClientConfig, TcpServerConfig,
+    MODE_FULL,
 };
 
 const APP_NAME: &str = "example_utilities";
@@ -54,7 +54,12 @@ impl Callbacks for PeerCallbacks {
     }
 
     fn on_path_updated(&mut self, dest_hash: DestHash, hops: u8) {
-        log::debug!("[{}] Path updated: dest={} hops={}", self.name, dest_hash, hops);
+        log::debug!(
+            "[{}] Path updated: dest={} hops={}",
+            self.name,
+            dest_hash,
+            hops
+        );
     }
 
     fn on_local_delivery(&mut self, dest_hash: DestHash, raw: Vec<u8>, packet_hash: PacketHash) {
@@ -309,10 +314,7 @@ fn main() {
     .expect("Failed to start Bob");
 
     bob_node
-        .register_destination_with_proof(
-            &bob_dest,
-            Some(bob_identity.get_private_key().unwrap()),
-        )
+        .register_destination_with_proof(&bob_dest, Some(bob_identity.get_private_key().unwrap()))
         .expect("Failed to register Bob's destination");
 
     // ─── Wait for TCP connections ────────────────────────────────────────
@@ -362,7 +364,10 @@ fn main() {
     // Alice → Bob
     let dest_to_bob = Destination::single_out(APP_NAME, &["message", "rx"], &bob_announced);
     let alice_msg = b"Hello Bob!";
-    println!("Alice sending: {:?}", std::str::from_utf8(alice_msg).unwrap());
+    println!(
+        "Alice sending: {:?}",
+        std::str::from_utf8(alice_msg).unwrap()
+    );
     let alice_pkt = alice_node
         .send_packet(&dest_to_bob, alice_msg)
         .expect("Alice send failed");

@@ -113,10 +113,7 @@ impl RawPacket {
             return Err(PacketError::ExceedsMtu);
         }
 
-        let packet_hash = hash::full_hash(&Self::compute_hashable_part(
-            flags.header_type,
-            &raw,
-        ));
+        let packet_hash = hash::full_hash(&Self::compute_hashable_part(flags.header_type, &raw));
 
         Ok(RawPacket {
             flags,
@@ -157,10 +154,7 @@ impl RawPacket {
             let context = raw[2 + 2 * dst_len];
             let data = raw[2 + 2 * dst_len + 1..].to_vec();
 
-            let packet_hash = hash::full_hash(&Self::compute_hashable_part(
-                flags.header_type,
-                raw,
-            ));
+            let packet_hash = hash::full_hash(&Self::compute_hashable_part(flags.header_type, raw));
 
             Ok(RawPacket {
                 flags,
@@ -185,10 +179,7 @@ impl RawPacket {
             let context = raw[2 + dst_len];
             let data = raw[2 + dst_len + 1..].to_vec();
 
-            let packet_hash = hash::full_hash(&Self::compute_hashable_part(
-                flags.header_type,
-                raw,
-            ));
+            let packet_hash = hash::full_hash(&Self::compute_hashable_part(flags.header_type, raw));
 
             Ok(RawPacket {
                 flags,
@@ -289,7 +280,8 @@ mod tests {
             packet_type: constants::PACKET_TYPE_DATA,
         };
 
-        let pkt = RawPacket::pack(flags, 0, &dest_hash, None, constants::CONTEXT_NONE, data).unwrap();
+        let pkt =
+            RawPacket::pack(flags, 0, &dest_hash, None, constants::CONTEXT_NONE, data).unwrap();
 
         // Verify layout: [flags:1][hops:1][dest:16][context:1][data:5] = 24 bytes
         assert_eq!(pkt.raw.len(), 24);
@@ -313,7 +305,15 @@ mod tests {
             packet_type: constants::PACKET_TYPE_ANNOUNCE,
         };
 
-        let pkt = RawPacket::pack(flags, 3, &dest_hash, Some(&transport_id), constants::CONTEXT_NONE, data).unwrap();
+        let pkt = RawPacket::pack(
+            flags,
+            3,
+            &dest_hash,
+            Some(&transport_id),
+            constants::CONTEXT_NONE,
+            data,
+        )
+        .unwrap();
 
         // Layout: [flags:1][hops:1][transport:16][dest:16][context:1][data:5] = 40 bytes
         assert_eq!(pkt.raw.len(), 40);
@@ -337,7 +337,15 @@ mod tests {
             packet_type: constants::PACKET_TYPE_DATA,
         };
 
-        let pkt = RawPacket::pack(flags, 5, &dest_hash, None, constants::CONTEXT_RESOURCE, data).unwrap();
+        let pkt = RawPacket::pack(
+            flags,
+            5,
+            &dest_hash,
+            None,
+            constants::CONTEXT_RESOURCE,
+            data,
+        )
+        .unwrap();
         let unpacked = RawPacket::unpack(&pkt.raw).unwrap();
 
         assert_eq!(unpacked.flags, flags);
@@ -362,7 +370,15 @@ mod tests {
             packet_type: constants::PACKET_TYPE_ANNOUNCE,
         };
 
-        let pkt = RawPacket::pack(flags, 2, &dest_hash, Some(&transport_id), constants::CONTEXT_NONE, data).unwrap();
+        let pkt = RawPacket::pack(
+            flags,
+            2,
+            &dest_hash,
+            Some(&transport_id),
+            constants::CONTEXT_NONE,
+            data,
+        )
+        .unwrap();
         let unpacked = RawPacket::unpack(&pkt.raw).unwrap();
 
         assert_eq!(unpacked.flags, flags);
@@ -417,7 +433,8 @@ mod tests {
             packet_type: constants::PACKET_TYPE_DATA,
         };
 
-        let pkt = RawPacket::pack(flags, 0, &dest_hash, None, constants::CONTEXT_NONE, b"test").unwrap();
+        let pkt =
+            RawPacket::pack(flags, 0, &dest_hash, None, constants::CONTEXT_NONE, b"test").unwrap();
         let hashable = pkt.get_hashable_part();
 
         // First byte should have upper 4 bits masked out
@@ -438,7 +455,15 @@ mod tests {
             packet_type: constants::PACKET_TYPE_ANNOUNCE,
         };
 
-        let pkt = RawPacket::pack(flags, 0, &dest_hash, Some(&transport_id), constants::CONTEXT_NONE, b"data").unwrap();
+        let pkt = RawPacket::pack(
+            flags,
+            0,
+            &dest_hash,
+            Some(&transport_id),
+            constants::CONTEXT_NONE,
+            b"data",
+        )
+        .unwrap();
         let hashable = pkt.get_hashable_part();
 
         // First byte: flags masked

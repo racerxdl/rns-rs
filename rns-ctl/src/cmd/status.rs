@@ -5,13 +5,13 @@
 use std::path::Path;
 use std::process;
 
-use rns_net::{RpcAddr, RpcClient};
+use crate::args::Args;
+use crate::format::{prettyfrequency, prettyhexrep, prettytime, size_str, speed_str};
+use rns_net::config;
 use rns_net::pickle::PickleValue;
 use rns_net::rpc::derive_auth_key;
-use rns_net::config;
 use rns_net::storage;
-use crate::args::Args;
-use crate::format::{size_str, speed_str, prettytime, prettyhexrep, prettyfrequency};
+use rns_net::{RpcAddr, RpcClient};
 
 pub fn run(args: Args) {
     if args.has("version") {
@@ -43,9 +43,7 @@ pub fn run(args: Args) {
     let show_links = args.has("l");
     let show_announces = args.has("A");
     let monitor_mode = args.has("m");
-    let monitor_interval: f64 = args.get("I")
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1.0);
+    let monitor_interval: f64 = args.get("I").and_then(|s| s.parse().ok()).unwrap_or(1.0);
     let remote_hash = args.get("R").map(|s| s.to_string());
     let filter = args.positional.first().cloned();
 
@@ -56,9 +54,8 @@ pub fn run(args: Args) {
     }
 
     // Load config to get RPC address and auth key
-    let config_dir = storage::resolve_config_dir(
-        config_path.as_ref().map(|s| Path::new(s.as_str())),
-    );
+    let config_dir =
+        storage::resolve_config_dir(config_path.as_ref().map(|s| Path::new(s.as_str())));
     let config_file = config_dir.join("config");
     let rns_config = if config_file.exists() {
         match config::parse_file(&config_file) {
@@ -95,9 +92,7 @@ pub fn run(args: Args) {
         }
     };
 
-    let auth_key = derive_auth_key(
-        &identity.get_private_key().unwrap_or([0u8; 64]),
-    );
+    let auth_key = derive_auth_key(&identity.get_private_key().unwrap_or([0u8; 64]));
 
     let rpc_port = rns_config.reticulum.instance_control_port;
     let rpc_addr = RpcAddr::Tcp("127.0.0.1".into(), rpc_port);
@@ -119,9 +114,10 @@ pub fn run(args: Args) {
         };
 
         // Request interface stats
-        let response = match client.call(&PickleValue::Dict(vec![
-            (PickleValue::String("get".into()), PickleValue::String("interface_stats".into())),
-        ])) {
+        let response = match client.call(&PickleValue::Dict(vec![(
+            PickleValue::String("get".into()),
+            PickleValue::String("interface_stats".into()),
+        )])) {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("RPC error: {}", e);
@@ -135,9 +131,10 @@ pub fn run(args: Args) {
 
         // Query link count if requested
         let link_count = if show_links {
-            match client.call(&PickleValue::Dict(vec![
-                (PickleValue::String("get".into()), PickleValue::String("link_count".into())),
-            ])) {
+            match client.call(&PickleValue::Dict(vec![(
+                PickleValue::String("get".into()),
+                PickleValue::String("link_count".into()),
+            )])) {
                 Ok(r) => r.as_int(),
                 Err(_) => None,
             }
@@ -244,18 +241,34 @@ fn print_status(
                         na.cmp(nb)
                     }
                 };
-                if reverse { cmp.reverse() } else { cmp }
+                if reverse {
+                    cmp.reverse()
+                } else {
+                    cmp
+                }
             });
         }
 
         for iface in &iface_list {
-            let name = iface.get("name").and_then(|v| v.as_str()).unwrap_or("Unknown");
-            let status = iface.get("status").and_then(|v| v.as_bool()).unwrap_or(false);
+            let name = iface
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown");
+            let status = iface
+                .get("status")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let rxb = iface.get("rxb").and_then(|v| v.as_int()).unwrap_or(0) as u64;
             let txb = iface.get("txb").and_then(|v| v.as_int()).unwrap_or(0) as u64;
-            let bitrate = iface.get("bitrate").and_then(|v| v.as_int()).map(|n| n as u64);
+            let bitrate = iface
+                .get("bitrate")
+                .and_then(|v| v.as_int())
+                .map(|n| n as u64);
             let mode = iface.get("mode").and_then(|v| v.as_int()).unwrap_or(0) as u8;
-            let started = iface.get("started").and_then(|v| v.as_float()).unwrap_or(0.0);
+            let started = iface
+                .get("started")
+                .and_then(|v| v.as_float())
+                .unwrap_or(0.0);
 
             let mode_str = match mode {
                 rns_net::MODE_FULL => "Full",
@@ -285,8 +298,14 @@ fn print_status(
                 }
             }
             if show_announces {
-                let ia_freq = iface.get("ia_freq").and_then(|v| v.as_float()).unwrap_or(0.0);
-                let oa_freq = iface.get("oa_freq").and_then(|v| v.as_float()).unwrap_or(0.0);
+                let ia_freq = iface
+                    .get("ia_freq")
+                    .and_then(|v| v.as_float())
+                    .unwrap_or(0.0);
+                let oa_freq = iface
+                    .get("oa_freq")
+                    .and_then(|v| v.as_float())
+                    .unwrap_or(0.0);
                 println!(
                     "    Announces : {} in  {} out",
                     prettyfrequency(ia_freq),
@@ -342,7 +361,10 @@ fn remote_status(hash_str: &str, config_path: Option<&str>) {
     let dest_hash = match crate::remote::parse_hex_hash(hash_str) {
         Some(h) => h,
         None => {
-            eprintln!("Invalid destination hash: {} (expected 32 hex chars)", hash_str);
+            eprintln!(
+                "Invalid destination hash: {} (expected 32 hex chars)",
+                hash_str
+            );
             process::exit(1);
         }
     };

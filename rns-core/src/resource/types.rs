@@ -98,10 +98,7 @@ pub enum ResourceAction {
     /// Transfer failed.
     Failed(ResourceError),
     /// Progress update: (received_parts, total_parts).
-    ProgressUpdate {
-        received: usize,
-        total: usize,
-    },
+    ProgressUpdate { received: usize, total: usize },
 }
 
 /// Resource errors.

@@ -9,19 +9,17 @@ use rns_core::transport::TransportEngine;
 use rns_crypto::{OsRng, Rng};
 
 #[cfg(feature = "rns-hooks")]
-use rns_hooks::{
-    create_hook_slots, EngineAccess, HookContext, HookManager, HookPoint, HookSlot,
-};
+use rns_hooks::{create_hook_slots, EngineAccess, HookContext, HookManager, HookPoint, HookSlot};
 
 use crate::event::{
-    BlackholeInfo, Event, EventReceiver, InterfaceStatsResponse,
-    LocalDestinationEntry, NextHopResponse, PathTableEntry, QueryRequest, QueryResponse,
-    RateTableEntry, SingleInterfaceStat,
+    BlackholeInfo, Event, EventReceiver, InterfaceStatsResponse, LocalDestinationEntry,
+    NextHopResponse, PathTableEntry, QueryRequest, QueryResponse, RateTableEntry,
+    SingleInterfaceStat,
 };
+use crate::holepunch::orchestrator::{HolePunchManager, HolePunchManagerAction};
 use crate::ifac;
 use crate::interface::{InterfaceEntry, InterfaceStats};
 use crate::link_manager::{LinkManager, LinkManagerAction};
-use crate::holepunch::orchestrator::{HolePunchManager, HolePunchManagerAction};
 use crate::time;
 
 /// Thin wrapper providing `EngineAccess` for a `TransportEngine` + Driver interfaces.
@@ -53,9 +51,7 @@ impl<'a> EngineAccess for EngineRef<'a> {
             .map(|e| e.info.name.clone())
     }
     fn interface_mode(&self, id: u64) -> Option<u8> {
-        self.interfaces
-            .get(&InterfaceId(id))
-            .map(|e| e.info.mode)
+        self.interfaces.get(&InterfaceId(id)).map(|e| e.info.mode)
     }
     fn identity_hash(&self) -> Option<[u8; 16]> {
         self.engine.identity_hash().copied()
@@ -126,72 +122,104 @@ fn convert_injected_actions(actions: Vec<rns_hooks::ActionWire>) -> Vec<Transpor
                         raw,
                     }
                 }
-                ActionWire::BroadcastOnAllInterfaces { raw, exclude, has_exclude } => {
-                    TransportAction::BroadcastOnAllInterfaces {
-                        raw,
-                        exclude: if has_exclude != 0 { Some(InterfaceId(exclude)) } else { None },
-                    }
-                }
-                ActionWire::DeliverLocal { destination_hash, raw, packet_hash, receiving_interface } => {
-                    TransportAction::DeliverLocal {
-                        destination_hash,
-                        raw,
-                        packet_hash,
-                        receiving_interface: InterfaceId(receiving_interface),
-                    }
-                }
-                ActionWire::PathUpdated { destination_hash, hops, next_hop, interface } => {
-                    TransportAction::PathUpdated {
-                        destination_hash,
-                        hops,
-                        next_hop,
-                        interface: InterfaceId(interface),
-                    }
-                }
+                ActionWire::BroadcastOnAllInterfaces {
+                    raw,
+                    exclude,
+                    has_exclude,
+                } => TransportAction::BroadcastOnAllInterfaces {
+                    raw,
+                    exclude: if has_exclude != 0 {
+                        Some(InterfaceId(exclude))
+                    } else {
+                        None
+                    },
+                },
+                ActionWire::DeliverLocal {
+                    destination_hash,
+                    raw,
+                    packet_hash,
+                    receiving_interface,
+                } => TransportAction::DeliverLocal {
+                    destination_hash,
+                    raw,
+                    packet_hash,
+                    receiving_interface: InterfaceId(receiving_interface),
+                },
+                ActionWire::PathUpdated {
+                    destination_hash,
+                    hops,
+                    next_hop,
+                    interface,
+                } => TransportAction::PathUpdated {
+                    destination_hash,
+                    hops,
+                    next_hop,
+                    interface: InterfaceId(interface),
+                },
                 ActionWire::CacheAnnounce { packet_hash, raw } => {
                     TransportAction::CacheAnnounce { packet_hash, raw }
                 }
-                ActionWire::TunnelEstablished { tunnel_id, interface } => {
-                    TransportAction::TunnelEstablished {
-                        tunnel_id,
-                        interface: InterfaceId(interface),
-                    }
-                }
-                ActionWire::TunnelSynthesize { interface, data, dest_hash } => {
-                    TransportAction::TunnelSynthesize {
-                        interface: InterfaceId(interface),
-                        data,
-                        dest_hash,
-                    }
-                }
-                ActionWire::ForwardToLocalClients { raw, exclude, has_exclude } => {
-                    TransportAction::ForwardToLocalClients {
-                        raw,
-                        exclude: if has_exclude != 0 { Some(InterfaceId(exclude)) } else { None },
-                    }
-                }
-                ActionWire::ForwardPlainBroadcast { raw, to_local, exclude, has_exclude } => {
-                    TransportAction::ForwardPlainBroadcast {
-                        raw,
-                        to_local: to_local != 0,
-                        exclude: if has_exclude != 0 { Some(InterfaceId(exclude)) } else { None },
-                    }
-                }
+                ActionWire::TunnelEstablished {
+                    tunnel_id,
+                    interface,
+                } => TransportAction::TunnelEstablished {
+                    tunnel_id,
+                    interface: InterfaceId(interface),
+                },
+                ActionWire::TunnelSynthesize {
+                    interface,
+                    data,
+                    dest_hash,
+                } => TransportAction::TunnelSynthesize {
+                    interface: InterfaceId(interface),
+                    data,
+                    dest_hash,
+                },
+                ActionWire::ForwardToLocalClients {
+                    raw,
+                    exclude,
+                    has_exclude,
+                } => TransportAction::ForwardToLocalClients {
+                    raw,
+                    exclude: if has_exclude != 0 {
+                        Some(InterfaceId(exclude))
+                    } else {
+                        None
+                    },
+                },
+                ActionWire::ForwardPlainBroadcast {
+                    raw,
+                    to_local,
+                    exclude,
+                    has_exclude,
+                } => TransportAction::ForwardPlainBroadcast {
+                    raw,
+                    to_local: to_local != 0,
+                    exclude: if has_exclude != 0 {
+                        Some(InterfaceId(exclude))
+                    } else {
+                        None
+                    },
+                },
                 ActionWire::AnnounceReceived {
-                    destination_hash, identity_hash, public_key,
-                    name_hash, random_hash, app_data, hops, receiving_interface,
-                } => {
-                    TransportAction::AnnounceReceived {
-                        destination_hash,
-                        identity_hash,
-                        public_key,
-                        name_hash,
-                        random_hash,
-                        app_data,
-                        hops,
-                        receiving_interface: InterfaceId(receiving_interface),
-                    }
-                }
+                    destination_hash,
+                    identity_hash,
+                    public_key,
+                    name_hash,
+                    random_hash,
+                    app_data,
+                    hops,
+                    receiving_interface,
+                } => TransportAction::AnnounceReceived {
+                    destination_hash,
+                    identity_hash,
+                    public_key,
+                    name_hash,
+                    random_hash,
+                    app_data,
+                    hops,
+                    receiving_interface: InterfaceId(receiving_interface),
+                },
             }
         })
         .collect()
@@ -243,7 +271,13 @@ pub struct Driver {
     pub(crate) path_request_dest: [u8; 16],
     /// Proof strategies per destination hash.
     /// Maps dest_hash → (strategy, optional signing identity for generating proofs).
-    pub(crate) proof_strategies: HashMap<[u8; 16], (rns_core::types::ProofStrategy, Option<rns_crypto::identity::Identity>)>,
+    pub(crate) proof_strategies: HashMap<
+        [u8; 16],
+        (
+            rns_core::types::ProofStrategy,
+            Option<rns_crypto::identity::Identity>,
+        ),
+    >,
     /// Tracked sent packets for proof matching: packet_hash → (dest_hash, sent_time).
     pub(crate) sent_packets: HashMap<[u8; 32], ([u8; 16], f64)>,
     /// Completed proofs for probe polling: packet_hash → (rtt_seconds, received_time).
@@ -289,11 +323,8 @@ impl Driver {
             &["tunnel", "synthesize"],
             None,
         );
-        let path_request_dest = rns_core::destination::destination_hash(
-            "rnstransport",
-            &["path", "request"],
-            None,
-        );
+        let path_request_dest =
+            rns_core::destination::destination_hash("rnstransport", &["path", "request"], None);
         let discovery_name_hash = crate::discovery::discovery_name_hash();
         let mut engine = TransportEngine::new(config);
         engine.register_destination(tunnel_synth_dest, rns_core::constants::DESTINATION_PLAIN);
@@ -324,10 +355,14 @@ impl Driver {
             sent_packets: HashMap::new(),
             completed_proofs: HashMap::new(),
             local_destinations,
-            holepunch_manager: HolePunchManager::new(vec![], rns_core::holepunch::ProbeProtocol::Rnsp, None),
+            holepunch_manager: HolePunchManager::new(
+                vec![],
+                rns_core::holepunch::ProbeProtocol::Rnsp,
+                None,
+            ),
             event_tx: tx,
             discovered_interfaces: crate::discovery::DiscoveredInterfaceStorage::new(
-                std::env::temp_dir().join("rns-discovered-interfaces")
+                std::env::temp_dir().join("rns-discovered-interfaces"),
             ),
             discovery_required_value: crate::discovery::DEFAULT_STAMP_VALUE,
             discovery_name_hash,
@@ -343,7 +378,12 @@ impl Driver {
     }
 
     /// Set the probe addresses, protocol, and optional device for hole punching.
-    pub fn set_probe_config(&mut self, addrs: Vec<std::net::SocketAddr>, protocol: rns_core::holepunch::ProbeProtocol, device: Option<String>) {
+    pub fn set_probe_config(
+        &mut self,
+        addrs: Vec<std::net::SocketAddr>,
+        protocol: rns_core::holepunch::ProbeProtocol,
+        device: Option<String>,
+    ) {
         self.holepunch_manager = HolePunchManager::new(addrs, protocol, device);
     }
 
@@ -359,8 +399,12 @@ impl Driver {
                 Event::Frame { interface_id, data } => {
                     // Log incoming announces
                     if data.len() > 2 && (data[0] & 0x03) == 0x01 {
-                        log::debug!("Announce:frame from iface {} (len={}, flags=0x{:02x})",
-                            interface_id.0, data.len(), data[0]);
+                        log::debug!(
+                            "Announce:frame from iface {} (len={}, flags=0x{:02x})",
+                            interface_id.0,
+                            data.len(),
+                            data[0]
+                        );
                     }
                     // Update rx stats
                     if let Some(entry) = self.interfaces.get_mut(&interface_id) {
@@ -382,7 +426,10 @@ impl Driver {
                         } else {
                             // No IFAC — drop if IFAC flag is set
                             if data.len() > 2 && data[0] & 0x80 == 0x80 {
-                                log::debug!("[{}] dropping packet with IFAC flag on non-IFAC interface", interface_id.0);
+                                log::debug!(
+                                    "[{}] dropping packet with IFAC flag on non-IFAC interface",
+                                    interface_id.0
+                                );
                                 continue;
                             }
                             data
@@ -404,14 +451,29 @@ impl Driver {
                             data_offset: 0,
                             data_len: packet.len() as u32,
                         };
-                        let ctx = HookContext::Packet { ctx: &pkt_ctx, raw: &packet };
+                        let ctx = HookContext::Packet {
+                            ctx: &pkt_ctx,
+                            raw: &packet,
+                        };
                         let now = time::now();
-                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
+                        let engine_ref = EngineRef {
+                            engine: &self.engine,
+                            interfaces: &self.interfaces,
+                            link_manager: &self.link_manager,
+                            now,
+                        };
                         {
-                            let exec = run_hook_inner(&mut self.hook_slots[HookPoint::PreIngress as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                            let exec = run_hook_inner(
+                                &mut self.hook_slots[HookPoint::PreIngress as usize].programs,
+                                &self.hook_manager,
+                                &engine_ref,
+                                &ctx,
+                                now,
+                            );
                             if let Some(ref e) = exec {
                                 if !e.injected_actions.is_empty() {
-                                    let extra = convert_injected_actions(e.injected_actions.clone());
+                                    let extra =
+                                        convert_injected_actions(e.injected_actions.clone());
                                     self.dispatch_all(extra);
                                 }
                                 if e.hook_result.as_ref().map_or(false, |r| r.is_drop()) {
@@ -431,7 +493,10 @@ impl Driver {
 
                     // Sync announce frequency to engine before processing
                     if let Some(entry) = self.interfaces.get(&interface_id) {
-                        self.engine.update_interface_freq(interface_id, entry.stats.incoming_announce_freq());
+                        self.engine.update_interface_freq(
+                            interface_id,
+                            entry.stats.incoming_announce_freq(),
+                        );
                     }
 
                     let actions = self.engine.handle_inbound(
@@ -454,11 +519,29 @@ impl Driver {
                             data_offset: 0,
                             data_len: packet.len() as u32,
                         };
-                        let ctx = HookContext::Packet { ctx: &pkt_ctx2, raw: &packet };
+                        let ctx = HookContext::Packet {
+                            ctx: &pkt_ctx2,
+                            raw: &packet,
+                        };
                         let now = time::now();
-                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
-                        if let Some(ref e) = run_hook_inner(&mut self.hook_slots[HookPoint::PreDispatch as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
-                            if !e.injected_actions.is_empty() { self.dispatch_all(convert_injected_actions(e.injected_actions.clone())); }
+                        let engine_ref = EngineRef {
+                            engine: &self.engine,
+                            interfaces: &self.interfaces,
+                            link_manager: &self.link_manager,
+                            now,
+                        };
+                        if let Some(ref e) = run_hook_inner(
+                            &mut self.hook_slots[HookPoint::PreDispatch as usize].programs,
+                            &self.hook_manager,
+                            &engine_ref,
+                            &ctx,
+                            now,
+                        ) {
+                            if !e.injected_actions.is_empty() {
+                                self.dispatch_all(convert_injected_actions(
+                                    e.injected_actions.clone(),
+                                ));
+                            }
                         }
                     }
 
@@ -470,16 +553,32 @@ impl Driver {
                     {
                         let ctx = HookContext::Tick;
                         let now = time::now();
-                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
-                        if let Some(ref e) = run_hook_inner(&mut self.hook_slots[HookPoint::Tick as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
-                            if !e.injected_actions.is_empty() { self.dispatch_all(convert_injected_actions(e.injected_actions.clone())); }
+                        let engine_ref = EngineRef {
+                            engine: &self.engine,
+                            interfaces: &self.interfaces,
+                            link_manager: &self.link_manager,
+                            now,
+                        };
+                        if let Some(ref e) = run_hook_inner(
+                            &mut self.hook_slots[HookPoint::Tick as usize].programs,
+                            &self.hook_manager,
+                            &engine_ref,
+                            &ctx,
+                            now,
+                        ) {
+                            if !e.injected_actions.is_empty() {
+                                self.dispatch_all(convert_injected_actions(
+                                    e.injected_actions.clone(),
+                                ));
+                            }
                         }
                     }
 
                     let now = time::now();
                     // Sync announce frequency to engine for all interfaces before tick
                     for (id, entry) in &self.interfaces {
-                        self.engine.update_interface_freq(*id, entry.stats.incoming_announce_freq());
+                        self.engine
+                            .update_interface_freq(*id, entry.stats.incoming_announce_freq());
                     }
                     let actions = self.engine.tick(now, &mut self.rng);
                     self.dispatch_all(actions);
@@ -495,9 +594,11 @@ impl Driver {
                     // Emit management announces
                     self.tick_management_announces(now);
                     // Cull expired sent packet tracking entries (no proof received within 60s)
-                    self.sent_packets.retain(|_, (_, sent_time)| now - *sent_time < 60.0);
+                    self.sent_packets
+                        .retain(|_, (_, sent_time)| now - *sent_time < 60.0);
                     // Cull old completed proof entries (older than 120s)
-                    self.completed_proofs.retain(|_, (_, received)| now - *received < 120.0);
+                    self.completed_proofs
+                        .retain(|_, (_, received)| now - *received < 120.0);
 
                     self.tick_discovery_announcer(now);
 
@@ -508,7 +609,10 @@ impl Driver {
                             self.discovery_cleanup_counter = 0;
                             if let Ok(removed) = self.discovered_interfaces.cleanup() {
                                 if removed > 0 {
-                                    log::info!("Discovery cleanup: removed {} stale entries", removed);
+                                    log::info!(
+                                        "Discovery cleanup: removed {} stale entries",
+                                        removed
+                                    );
                                 }
                             }
                         }
@@ -547,9 +651,24 @@ impl Driver {
                         {
                             let ctx = HookContext::Interface { interface_id: id.0 };
                             let now = time::now();
-                            let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
-                            if let Some(ref e) = run_hook_inner(&mut self.hook_slots[HookPoint::InterfaceUp as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
-                                if !e.injected_actions.is_empty() { self.dispatch_all(convert_injected_actions(e.injected_actions.clone())); }
+                            let engine_ref = EngineRef {
+                                engine: &self.engine,
+                                interfaces: &self.interfaces,
+                                link_manager: &self.link_manager,
+                                now,
+                            };
+                            if let Some(ref e) = run_hook_inner(
+                                &mut self.hook_slots[HookPoint::InterfaceUp as usize].programs,
+                                &self.hook_manager,
+                                &engine_ref,
+                                &ctx,
+                                now,
+                            ) {
+                                if !e.injected_actions.is_empty() {
+                                    self.dispatch_all(convert_injected_actions(
+                                        e.injected_actions.clone(),
+                                    ));
+                                }
                             }
                         }
                     } else if let Some(entry) = self.interfaces.get_mut(&id) {
@@ -566,9 +685,24 @@ impl Driver {
                         {
                             let ctx = HookContext::Interface { interface_id: id.0 };
                             let now = time::now();
-                            let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
-                            if let Some(ref e) = run_hook_inner(&mut self.hook_slots[HookPoint::InterfaceUp as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
-                                if !e.injected_actions.is_empty() { self.dispatch_all(convert_injected_actions(e.injected_actions.clone())); }
+                            let engine_ref = EngineRef {
+                                engine: &self.engine,
+                                interfaces: &self.interfaces,
+                                link_manager: &self.link_manager,
+                                now,
+                            };
+                            if let Some(ref e) = run_hook_inner(
+                                &mut self.hook_slots[HookPoint::InterfaceUp as usize].programs,
+                                &self.hook_manager,
+                                &engine_ref,
+                                &ctx,
+                                now,
+                            ) {
+                                if !e.injected_actions.is_empty() {
+                                    self.dispatch_all(convert_injected_actions(
+                                        e.injected_actions.clone(),
+                                    ));
+                                }
                             }
                         }
                     } else {
@@ -604,17 +738,37 @@ impl Driver {
                         {
                             let ctx = HookContext::Interface { interface_id: id.0 };
                             let now = time::now();
-                            let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
-                            if let Some(ref e) = run_hook_inner(&mut self.hook_slots[HookPoint::InterfaceDown as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
-                                if !e.injected_actions.is_empty() { self.dispatch_all(convert_injected_actions(e.injected_actions.clone())); }
+                            let engine_ref = EngineRef {
+                                engine: &self.engine,
+                                interfaces: &self.interfaces,
+                                link_manager: &self.link_manager,
+                                now,
+                            };
+                            if let Some(ref e) = run_hook_inner(
+                                &mut self.hook_slots[HookPoint::InterfaceDown as usize].programs,
+                                &self.hook_manager,
+                                &engine_ref,
+                                &ctx,
+                                now,
+                            ) {
+                                if !e.injected_actions.is_empty() {
+                                    self.dispatch_all(convert_injected_actions(
+                                        e.injected_actions.clone(),
+                                    ));
+                                }
                             }
                         }
                     }
                 }
-                Event::SendOutbound { raw, dest_type, attached_interface } => {
+                Event::SendOutbound {
+                    raw,
+                    dest_type,
+                    attached_interface,
+                } => {
                     match RawPacket::unpack(&raw) {
                         Ok(packet) => {
-                            let is_announce = packet.flags.packet_type == rns_core::constants::PACKET_TYPE_ANNOUNCE;
+                            let is_announce = packet.flags.packet_type
+                                == rns_core::constants::PACKET_TYPE_ANNOUNCE;
                             if is_announce {
                                 log::debug!("SendOutbound: ANNOUNCE for {:02x?} (len={}, dest_type={}, attached={:?})",
                                     &packet.destination_hash[..4], raw.len(), dest_type, attached_interface);
@@ -633,13 +787,22 @@ impl Driver {
                                 time::now(),
                             );
                             if is_announce {
-                                log::debug!("SendOutbound: announce routed to {} actions: {:?}",
+                                log::debug!(
+                                    "SendOutbound: announce routed to {} actions: {:?}",
                                     actions.len(),
-                                    actions.iter().map(|a| match a {
-                                        TransportAction::SendOnInterface { interface, .. } => format!("SendOn({})", interface.0),
-                                        TransportAction::BroadcastOnAllInterfaces { .. } => "BroadcastAll".to_string(),
-                                        _ => "other".to_string(),
-                                    }).collect::<Vec<_>>());
+                                    actions
+                                        .iter()
+                                        .map(|a| match a {
+                                            TransportAction::SendOnInterface {
+                                                interface, ..
+                                            } => format!("SendOn({})", interface.0),
+                                            TransportAction::BroadcastOnAllInterfaces {
+                                                ..
+                                            } => "BroadcastAll".to_string(),
+                                            _ => "other".to_string(),
+                                        })
+                                        .collect::<Vec<_>>()
+                                );
                             }
                             self.dispatch_all(actions);
                         }
@@ -648,7 +811,10 @@ impl Driver {
                         }
                     }
                 }
-                Event::RegisterDestination { dest_hash, dest_type } => {
+                Event::RegisterDestination {
+                    dest_hash,
+                    dest_type,
+                } => {
                     self.engine.register_destination(dest_hash, dest_type);
                     self.local_destinations.insert(dest_hash, dest_type);
                 }
@@ -663,53 +829,99 @@ impl Driver {
                 Event::DeregisterLinkDestination { dest_hash } => {
                     self.link_manager.deregister_link_destination(&dest_hash);
                 }
-                Event::RegisterLinkDestination { dest_hash, sig_prv_bytes, sig_pub_bytes, resource_strategy } => {
-                    let sig_prv = rns_crypto::ed25519::Ed25519PrivateKey::from_bytes(&sig_prv_bytes);
+                Event::RegisterLinkDestination {
+                    dest_hash,
+                    sig_prv_bytes,
+                    sig_pub_bytes,
+                    resource_strategy,
+                } => {
+                    let sig_prv =
+                        rns_crypto::ed25519::Ed25519PrivateKey::from_bytes(&sig_prv_bytes);
                     let strat = match resource_strategy {
                         1 => crate::link_manager::ResourceStrategy::AcceptAll,
                         2 => crate::link_manager::ResourceStrategy::AcceptApp,
                         _ => crate::link_manager::ResourceStrategy::AcceptNone,
                     };
-                    self.link_manager.register_link_destination(dest_hash, sig_prv, sig_pub_bytes, strat);
+                    self.link_manager.register_link_destination(
+                        dest_hash,
+                        sig_prv,
+                        sig_pub_bytes,
+                        strat,
+                    );
                     // Also register in transport engine so inbound packets are delivered locally
-                    self.engine.register_destination(dest_hash, rns_core::constants::DESTINATION_SINGLE);
-                    self.local_destinations.insert(dest_hash, rns_core::constants::DESTINATION_SINGLE);
+                    self.engine
+                        .register_destination(dest_hash, rns_core::constants::DESTINATION_SINGLE);
+                    self.local_destinations
+                        .insert(dest_hash, rns_core::constants::DESTINATION_SINGLE);
                 }
-                Event::RegisterRequestHandler { path, allowed_list, handler } => {
-                    self.link_manager.register_request_handler(&path, allowed_list, move |link_id, p, data, remote| {
-                        handler(link_id, p, data, remote)
-                    });
+                Event::RegisterRequestHandler {
+                    path,
+                    allowed_list,
+                    handler,
+                } => {
+                    self.link_manager.register_request_handler(
+                        &path,
+                        allowed_list,
+                        move |link_id, p, data, remote| handler(link_id, p, data, remote),
+                    );
                 }
-                Event::CreateLink { dest_hash, dest_sig_pub_bytes, response_tx } => {
+                Event::CreateLink {
+                    dest_hash,
+                    dest_sig_pub_bytes,
+                    response_tx,
+                } => {
                     let hops = self.engine.hops_to(&dest_hash).unwrap_or(0);
-                    let mtu = self.engine.next_hop_interface(&dest_hash)
+                    let mtu = self
+                        .engine
+                        .next_hop_interface(&dest_hash)
                         .and_then(|iface_id| self.interfaces.get(&iface_id))
                         .map(|entry| entry.info.mtu)
                         .unwrap_or(rns_core::constants::MTU as u32);
                     let (link_id, link_actions) = self.link_manager.create_link(
-                        &dest_hash, &dest_sig_pub_bytes, hops, mtu, &mut self.rng,
+                        &dest_hash,
+                        &dest_sig_pub_bytes,
+                        hops,
+                        mtu,
+                        &mut self.rng,
                     );
                     let _ = response_tx.send(link_id);
                     self.dispatch_link_actions(link_actions);
                 }
-                Event::SendRequest { link_id, path, data } => {
-                    let link_actions = self.link_manager.send_request(
-                        &link_id, &path, &data, &mut self.rng,
-                    );
+                Event::SendRequest {
+                    link_id,
+                    path,
+                    data,
+                } => {
+                    let link_actions =
+                        self.link_manager
+                            .send_request(&link_id, &path, &data, &mut self.rng);
                     self.dispatch_link_actions(link_actions);
                 }
-                Event::IdentifyOnLink { link_id, identity_prv_key } => {
-                    let identity = rns_crypto::identity::Identity::from_private_key(&identity_prv_key);
-                    let link_actions = self.link_manager.identify(&link_id, &identity, &mut self.rng);
+                Event::IdentifyOnLink {
+                    link_id,
+                    identity_prv_key,
+                } => {
+                    let identity =
+                        rns_crypto::identity::Identity::from_private_key(&identity_prv_key);
+                    let link_actions =
+                        self.link_manager
+                            .identify(&link_id, &identity, &mut self.rng);
                     self.dispatch_link_actions(link_actions);
                 }
                 Event::TeardownLink { link_id } => {
                     let link_actions = self.link_manager.teardown_link(&link_id);
                     self.dispatch_link_actions(link_actions);
                 }
-                Event::SendResource { link_id, data, metadata } => {
+                Event::SendResource {
+                    link_id,
+                    data,
+                    metadata,
+                } => {
                     let link_actions = self.link_manager.send_resource(
-                        &link_id, &data, metadata.as_deref(), &mut self.rng,
+                        &link_id,
+                        &data,
+                        metadata.as_deref(),
+                        &mut self.rng,
                     );
                     self.dispatch_link_actions(link_actions);
                 }
@@ -723,72 +935,124 @@ impl Driver {
                     };
                     self.link_manager.set_resource_strategy(&link_id, strat);
                 }
-                Event::AcceptResource { link_id, resource_hash, accept } => {
+                Event::AcceptResource {
+                    link_id,
+                    resource_hash,
+                    accept,
+                } => {
                     let link_actions = self.link_manager.accept_resource(
-                        &link_id, &resource_hash, accept, &mut self.rng,
+                        &link_id,
+                        &resource_hash,
+                        accept,
+                        &mut self.rng,
                     );
                     self.dispatch_link_actions(link_actions);
                 }
-                Event::SendChannelMessage { link_id, msgtype, payload } => {
+                Event::SendChannelMessage {
+                    link_id,
+                    msgtype,
+                    payload,
+                } => {
                     let link_actions = self.link_manager.send_channel_message(
-                        &link_id, msgtype, &payload, &mut self.rng,
+                        &link_id,
+                        msgtype,
+                        &payload,
+                        &mut self.rng,
                     );
                     self.dispatch_link_actions(link_actions);
                 }
-                Event::SendOnLink { link_id, data, context } => {
-                    let link_actions = self.link_manager.send_on_link(
-                        &link_id, &data, context, &mut self.rng,
-                    );
+                Event::SendOnLink {
+                    link_id,
+                    data,
+                    context,
+                } => {
+                    let link_actions =
+                        self.link_manager
+                            .send_on_link(&link_id, &data, context, &mut self.rng);
                     self.dispatch_link_actions(link_actions);
                 }
                 Event::RequestPath { dest_hash } => {
                     self.handle_request_path(dest_hash);
                 }
-                Event::RegisterProofStrategy { dest_hash, strategy, signing_key } => {
-                    let identity = signing_key.map(|key| {
-                        rns_crypto::identity::Identity::from_private_key(&key)
-                    });
-                    self.proof_strategies.insert(dest_hash, (strategy, identity));
+                Event::RegisterProofStrategy {
+                    dest_hash,
+                    strategy,
+                    signing_key,
+                } => {
+                    let identity = signing_key
+                        .map(|key| rns_crypto::identity::Identity::from_private_key(&key));
+                    self.proof_strategies
+                        .insert(dest_hash, (strategy, identity));
                 }
                 Event::ProposeDirectConnect { link_id } => {
                     let derived_key = self.link_manager.get_derived_key(&link_id);
                     if let Some(dk) = derived_key {
                         let tx = self.get_event_sender();
-                        let hp_actions = self.holepunch_manager.propose(
-                            link_id, &dk, &mut self.rng, &tx,
-                        );
+                        let hp_actions =
+                            self.holepunch_manager
+                                .propose(link_id, &dk, &mut self.rng, &tx);
                         self.dispatch_holepunch_actions(hp_actions);
                     } else {
-                        log::warn!("Cannot propose direct connect: no derived key for link {:02x?}", &link_id[..4]);
+                        log::warn!(
+                            "Cannot propose direct connect: no derived key for link {:02x?}",
+                            &link_id[..4]
+                        );
                     }
                 }
                 Event::SetDirectConnectPolicy { policy } => {
                     self.holepunch_manager.set_policy(policy);
                 }
-                Event::HolePunchProbeResult { link_id, session_id, observed_addr, socket, probe_server } => {
+                Event::HolePunchProbeResult {
+                    link_id,
+                    session_id,
+                    observed_addr,
+                    socket,
+                    probe_server,
+                } => {
                     let hp_actions = self.holepunch_manager.handle_probe_result(
-                        link_id, session_id, observed_addr, socket, probe_server,
+                        link_id,
+                        session_id,
+                        observed_addr,
+                        socket,
+                        probe_server,
                     );
                     self.dispatch_holepunch_actions(hp_actions);
                 }
-                Event::HolePunchProbeFailed { link_id, session_id } => {
-                    let hp_actions = self.holepunch_manager.handle_probe_failed(
-                        link_id, session_id,
-                    );
+                Event::HolePunchProbeFailed {
+                    link_id,
+                    session_id,
+                } => {
+                    let hp_actions = self
+                        .holepunch_manager
+                        .handle_probe_failed(link_id, session_id);
                     self.dispatch_holepunch_actions(hp_actions);
                 }
-                Event::LoadHook { name, wasm_bytes, attach_point, priority, response_tx } => {
+                Event::LoadHook {
+                    name,
+                    wasm_bytes,
+                    attach_point,
+                    priority,
+                    response_tx,
+                } => {
                     #[cfg(feature = "rns-hooks")]
                     {
                         let result = (|| -> Result<(), String> {
                             let point_idx = crate::config::parse_hook_point(&attach_point)
                                 .ok_or_else(|| format!("unknown hook point '{}'", attach_point))?;
-                            let mgr = self.hook_manager.as_ref()
+                            let mgr = self
+                                .hook_manager
+                                .as_ref()
                                 .ok_or_else(|| "hook manager not available".to_string())?;
-                            let program = mgr.compile(name.clone(), &wasm_bytes, priority)
+                            let program = mgr
+                                .compile(name.clone(), &wasm_bytes, priority)
                                 .map_err(|e| format!("compile error: {}", e))?;
                             self.hook_slots[point_idx].attach(program);
-                            log::info!("Loaded hook '{}' at point {} (priority {})", name, attach_point, priority);
+                            log::info!(
+                                "Loaded hook '{}' at point {} (priority {})",
+                                name,
+                                attach_point,
+                                priority
+                            );
                             Ok(())
                         })();
                         let _ = response_tx.send(result);
@@ -799,7 +1063,11 @@ impl Driver {
                         let _ = response_tx.send(Err("hooks not enabled".to_string()));
                     }
                 }
-                Event::UnloadHook { name, attach_point, response_tx } => {
+                Event::UnloadHook {
+                    name,
+                    attach_point,
+                    response_tx,
+                } => {
                     #[cfg(feature = "rns-hooks")]
                     {
                         let result = (|| -> Result<(), String> {
@@ -807,10 +1075,17 @@ impl Driver {
                                 .ok_or_else(|| format!("unknown hook point '{}'", attach_point))?;
                             match self.hook_slots[point_idx].detach(&name) {
                                 Some(_) => {
-                                    log::info!("Unloaded hook '{}' from point {}", name, attach_point);
+                                    log::info!(
+                                        "Unloaded hook '{}' from point {}",
+                                        name,
+                                        attach_point
+                                    );
                                     Ok(())
                                 }
-                                None => Err(format!("hook '{}' not found at point '{}'", name, attach_point)),
+                                None => Err(format!(
+                                    "hook '{}' not found at point '{}'",
+                                    name, attach_point
+                                )),
                             }
                         })();
                         let _ = response_tx.send(result);
@@ -821,14 +1096,21 @@ impl Driver {
                         let _ = response_tx.send(Err("hooks not enabled".to_string()));
                     }
                 }
-                Event::ReloadHook { name, attach_point, wasm_bytes, response_tx } => {
+                Event::ReloadHook {
+                    name,
+                    attach_point,
+                    wasm_bytes,
+                    response_tx,
+                } => {
                     #[cfg(feature = "rns-hooks")]
                     {
                         let result = (|| -> Result<(), String> {
                             let point_idx = crate::config::parse_hook_point(&attach_point)
                                 .ok_or_else(|| format!("unknown hook point '{}'", attach_point))?;
-                            let old = self.hook_slots[point_idx].detach(&name)
-                                .ok_or_else(|| format!("hook '{}' not found at point '{}'", name, attach_point))?;
+                            let old =
+                                self.hook_slots[point_idx].detach(&name).ok_or_else(|| {
+                                    format!("hook '{}' not found at point '{}'", name, attach_point)
+                                })?;
                             let priority = old.priority;
                             let mgr = match self.hook_manager.as_ref() {
                                 Some(m) => m,
@@ -840,7 +1122,12 @@ impl Driver {
                             match mgr.compile(name.clone(), &wasm_bytes, priority) {
                                 Ok(program) => {
                                     self.hook_slots[point_idx].attach(program);
-                                    log::info!("Reloaded hook '{}' at point {} (priority {})", name, attach_point, priority);
+                                    log::info!(
+                                        "Reloaded hook '{}' at point {} (priority {})",
+                                        name,
+                                        attach_point,
+                                        priority
+                                    );
                                     Ok(())
                                 }
                                 Err(e) => {
@@ -861,11 +1148,22 @@ impl Driver {
                     #[cfg(feature = "rns-hooks")]
                     {
                         let hook_point_names = [
-                            "PreIngress", "PreDispatch", "AnnounceReceived", "PathUpdated",
-                            "AnnounceRetransmit", "LinkRequestReceived", "LinkEstablished",
-                            "LinkClosed", "InterfaceUp", "InterfaceDown", "InterfaceConfigChanged",
-                            "SendOnInterface", "BroadcastOnAllInterfaces", "DeliverLocal",
-                            "TunnelSynthesize", "Tick",
+                            "PreIngress",
+                            "PreDispatch",
+                            "AnnounceReceived",
+                            "PathUpdated",
+                            "AnnounceRetransmit",
+                            "LinkRequestReceived",
+                            "LinkEstablished",
+                            "LinkClosed",
+                            "InterfaceUp",
+                            "InterfaceDown",
+                            "InterfaceConfigChanged",
+                            "SendOnInterface",
+                            "BroadcastOnAllInterfaces",
+                            "DeliverLocal",
+                            "TunnelSynthesize",
+                            "Tick",
                         ];
                         let mut infos = Vec::new();
                         for (idx, slot) in self.hook_slots.iter().enumerate() {
@@ -892,9 +1190,25 @@ impl Driver {
                     {
                         let ctx = HookContext::Interface { interface_id: id.0 };
                         let now = time::now();
-                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
-                        if let Some(ref e) = run_hook_inner(&mut self.hook_slots[HookPoint::InterfaceConfigChanged as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
-                            if !e.injected_actions.is_empty() { self.dispatch_all(convert_injected_actions(e.injected_actions.clone())); }
+                        let engine_ref = EngineRef {
+                            engine: &self.engine,
+                            interfaces: &self.interfaces,
+                            link_manager: &self.link_manager,
+                            now,
+                        };
+                        if let Some(ref e) = run_hook_inner(
+                            &mut self.hook_slots[HookPoint::InterfaceConfigChanged as usize]
+                                .programs,
+                            &self.hook_manager,
+                            &engine_ref,
+                            &ctx,
+                            now,
+                        ) {
+                            if !e.injected_actions.is_empty() {
+                                self.dispatch_all(convert_injected_actions(
+                                    e.injected_actions.clone(),
+                                ));
+                            }
                         }
                     }
                     #[cfg(not(feature = "rns-hooks"))]
@@ -947,14 +1261,17 @@ impl Driver {
                 let entries: Vec<PathTableEntry> = self
                     .engine
                     .path_table_entries()
-                    .filter(|(_, entry)| {
-                        max_hops.map_or(true, |max| entry.hops <= max)
-                    })
+                    .filter(|(_, entry)| max_hops.map_or(true, |max| entry.hops <= max))
                     .map(|(hash, entry)| {
-                        let iface_name = self.interfaces.get(&entry.receiving_interface)
+                        let iface_name = self
+                            .interfaces
+                            .get(&entry.receiving_interface)
                             .map(|e| e.info.name.clone())
-                            .or_else(|| self.engine.interface_info(&entry.receiving_interface)
-                                .map(|i| i.name.clone()))
+                            .or_else(|| {
+                                self.engine
+                                    .interface_info(&entry.receiving_interface)
+                                    .map(|i| i.name.clone())
+                            })
                             .unwrap_or_default();
                         PathTableEntry {
                             hash: *hash,
@@ -985,13 +1302,17 @@ impl Driver {
                 QueryResponse::RateTable(entries)
             }
             QueryRequest::NextHop { dest_hash } => {
-                let resp = self.engine.next_hop(&dest_hash).map(|next_hop| {
-                    NextHopResponse {
+                let resp = self
+                    .engine
+                    .next_hop(&dest_hash)
+                    .map(|next_hop| NextHopResponse {
                         next_hop,
                         hops: self.engine.hops_to(&dest_hash).unwrap_or(0),
-                        interface: self.engine.next_hop_interface(&dest_hash).unwrap_or(InterfaceId(0)),
-                    }
-                });
+                        interface: self
+                            .engine
+                            .next_hop_interface(&dest_hash)
+                            .unwrap_or(InterfaceId(0)),
+                    });
                 QueryResponse::NextHop(resp)
             }
             QueryRequest::NextHopIfName { dest_hash } => {
@@ -1002,25 +1323,23 @@ impl Driver {
                     .map(|entry| entry.info.name.clone());
                 QueryResponse::NextHopIfName(name)
             }
-            QueryRequest::LinkCount => {
-                QueryResponse::LinkCount(self.engine.link_table_count() + self.link_manager.link_count())
-            }
+            QueryRequest::LinkCount => QueryResponse::LinkCount(
+                self.engine.link_table_count() + self.link_manager.link_count(),
+            ),
             QueryRequest::DropPath { .. } => {
                 // Mutating queries are handled by handle_query_mut
                 QueryResponse::DropPath(false)
             }
-            QueryRequest::DropAllVia { .. } => {
-                QueryResponse::DropAllVia(0)
-            }
-            QueryRequest::DropAnnounceQueues => {
-                QueryResponse::DropAnnounceQueues
-            }
+            QueryRequest::DropAllVia { .. } => QueryResponse::DropAllVia(0),
+            QueryRequest::DropAnnounceQueues => QueryResponse::DropAnnounceQueues,
             QueryRequest::TransportIdentity => {
                 QueryResponse::TransportIdentity(self.engine.identity_hash().copied())
             }
             QueryRequest::GetBlackholed => {
                 let now = time::now();
-                let entries: Vec<BlackholeInfo> = self.engine.blackholed_entries()
+                let entries: Vec<BlackholeInfo> = self
+                    .engine
+                    .blackholed_entries()
                     .filter(|(_, e)| e.expires == 0.0 || e.expires > now)
                     .map(|(hash, entry)| BlackholeInfo {
                         identity_hash: *hash,
@@ -1031,8 +1350,7 @@ impl Driver {
                     .collect();
                 QueryResponse::Blackholed(entries)
             }
-            QueryRequest::BlackholeIdentity { .. }
-            | QueryRequest::UnblackholeIdentity { .. } => {
+            QueryRequest::BlackholeIdentity { .. } | QueryRequest::UnblackholeIdentity { .. } => {
                 // Mutating queries handled by handle_query_mut
                 QueryResponse::BlackholeResult(false)
             }
@@ -1064,16 +1382,19 @@ impl Driver {
                     .collect();
                 QueryResponse::LocalDestinations(entries)
             }
-            QueryRequest::Links => {
-                QueryResponse::Links(self.link_manager.link_entries())
-            }
+            QueryRequest::Links => QueryResponse::Links(self.link_manager.link_entries()),
             QueryRequest::Resources => {
                 QueryResponse::Resources(self.link_manager.resource_entries())
             }
-            QueryRequest::DiscoveredInterfaces { only_available, only_transport } => {
+            QueryRequest::DiscoveredInterfaces {
+                only_available,
+                only_transport,
+            } => {
                 let mut interfaces = self.discovered_interfaces.list().unwrap_or_default();
                 crate::discovery::filter_and_sort_interfaces(
-                    &mut interfaces, only_available, only_transport,
+                    &mut interfaces,
+                    only_available,
+                    only_transport,
                 );
                 QueryResponse::DiscoveredInterfaces(interfaces)
             }
@@ -1086,9 +1407,14 @@ impl Driver {
     /// Handle a mutating query request.
     fn handle_query_mut(&mut self, request: QueryRequest) -> QueryResponse {
         match request {
-            QueryRequest::BlackholeIdentity { identity_hash, duration_hours, reason } => {
+            QueryRequest::BlackholeIdentity {
+                identity_hash,
+                duration_hours,
+                reason,
+            } => {
                 let now = time::now();
-                self.engine.blackhole_identity(identity_hash, now, duration_hours, reason);
+                self.engine
+                    .blackhole_identity(identity_hash, now, duration_hours, reason);
                 QueryResponse::BlackholeResult(true)
             }
             QueryRequest::UnblackholeIdentity { identity_hash } => {
@@ -1159,13 +1485,17 @@ impl Driver {
                 );
                 QueryResponse::InjectIdentity(true)
             }
-            QueryRequest::SendProbe { dest_hash, payload_size } => {
+            QueryRequest::SendProbe {
+                dest_hash,
+                payload_size,
+            } => {
                 // Look up the identity for this destination hash
                 let announced = self.known_destinations.get(&dest_hash).cloned();
                 match announced {
                     Some(recalled) => {
                         // Encrypt random payload with remote public key
-                        let remote_id = rns_crypto::identity::Identity::from_public_key(&recalled.public_key);
+                        let remote_id =
+                            rns_crypto::identity::Identity::from_public_key(&recalled.public_key);
                         let mut payload = vec![0u8; payload_size];
                         self.rng.fill_bytes(&mut payload);
                         match remote_id.encrypt(&payload, &mut self.rng) {
@@ -1179,17 +1509,19 @@ impl Driver {
                                     packet_type: rns_core::constants::PACKET_TYPE_DATA,
                                 };
                                 match RawPacket::pack(
-                                    flags, 0, &dest_hash, None,
-                                    rns_core::constants::CONTEXT_NONE, &ciphertext,
+                                    flags,
+                                    0,
+                                    &dest_hash,
+                                    None,
+                                    rns_core::constants::CONTEXT_NONE,
+                                    &ciphertext,
                                 ) {
                                     Ok(packet) => {
                                         let packet_hash = packet.packet_hash;
                                         let hops = self.engine.hops_to(&dest_hash).unwrap_or(0);
                                         // Track for proof matching
-                                        self.sent_packets.insert(
-                                            packet_hash,
-                                            (dest_hash, time::now()),
-                                        );
+                                        self.sent_packets
+                                            .insert(packet_hash, (dest_hash, time::now()));
                                         // Send via engine
                                         let actions = self.engine.handle_outbound(
                                             &packet,
@@ -1200,7 +1532,8 @@ impl Driver {
                                         self.dispatch_all(actions);
                                         log::debug!(
                                             "Sent probe ({} bytes) to {:02x?}",
-                                            payload_size, &dest_hash[..4],
+                                            payload_size,
+                                            &dest_hash[..4],
                                         );
                                         QueryResponse::SendProbe(Some((packet_hash, hops)))
                                     }
@@ -1252,8 +1585,7 @@ impl Driver {
 
                 if let Some(iface) = iface_id {
                     let now = time::now();
-                    let tunnel_actions =
-                        self.engine.handle_tunnel(validated.tunnel_id, iface, now);
+                    let tunnel_actions = self.engine.handle_tunnel(validated.tunnel_id, iface, now);
                     self.dispatch_all(tunnel_actions);
                 }
             }
@@ -1268,7 +1600,9 @@ impl Driver {
     /// Called when an interface with `wants_tunnel` comes up.
     fn synthesize_tunnel_for_interface(&mut self, interface: InterfaceId) {
         if let Some(ref identity) = self.transport_identity {
-            let actions = self.engine.synthesize_tunnel(identity, interface, &mut self.rng);
+            let actions = self
+                .engine
+                .synthesize_tunnel(identity, interface, &mut self.rng);
             self.dispatch_all(actions);
         }
     }
@@ -1300,8 +1634,12 @@ impl Driver {
         };
 
         if let Ok(packet) = RawPacket::pack(
-            flags, 0, &self.path_request_dest, None,
-            rns_core::constants::CONTEXT_NONE, &data,
+            flags,
+            0,
+            &self.path_request_dest,
+            None,
+            rns_core::constants::CONTEXT_NONE,
+            &data,
         ) {
             let actions = self.engine.handle_outbound(
                 &packet,
@@ -1325,12 +1663,10 @@ impl Driver {
 
         let should_prove = match strategy {
             ProofStrategy::ProveAll => true,
-            ProofStrategy::ProveApp => {
-                self.callbacks.on_proof_requested(
-                    rns_core::types::DestHash(dest_hash),
-                    rns_core::types::PacketHash(*packet_hash),
-                )
-            }
+            ProofStrategy::ProveApp => self.callbacks.on_proof_requested(
+                rns_core::types::DestHash(dest_hash),
+                rns_core::types::PacketHash(*packet_hash),
+            ),
             ProofStrategy::ProveNone => false,
         };
 
@@ -1341,7 +1677,10 @@ impl Driver {
         let identity = match identity {
             Some(id) => id,
             None => {
-                log::warn!("Cannot generate proof for {:02x?}: no signing key", &dest_hash[..4]);
+                log::warn!(
+                    "Cannot generate proof for {:02x?}: no signing key",
+                    &dest_hash[..4]
+                );
                 return;
             }
         };
@@ -1377,8 +1716,12 @@ impl Driver {
         };
 
         if let Ok(packet) = RawPacket::pack(
-            flags, 0, &proof_dest, None,
-            rns_core::constants::CONTEXT_NONE, &proof_data,
+            flags,
+            0,
+            &proof_dest,
+            None,
+            rns_core::constants::CONTEXT_NONE,
+            &proof_data,
         ) {
             let actions = self.engine.handle_outbound(
                 &packet,
@@ -1387,15 +1730,26 @@ impl Driver {
                 time::now(),
             );
             self.dispatch_all(actions);
-            log::debug!("Generated proof for packet on dest {:02x?}", &dest_hash[..4]);
+            log::debug!(
+                "Generated proof for packet on dest {:02x?}",
+                &dest_hash[..4]
+            );
         }
     }
 
     /// Handle an inbound proof packet: validate and fire on_proof callback.
-    fn handle_inbound_proof(&mut self, dest_hash: [u8; 16], proof_data: &[u8], _raw_packet_hash: &[u8; 32]) {
+    fn handle_inbound_proof(
+        &mut self,
+        dest_hash: [u8; 16],
+        proof_data: &[u8],
+        _raw_packet_hash: &[u8; 32],
+    ) {
         // Explicit proof format: [packet_hash:32][signature:64] = 96 bytes
         if proof_data.len() < 96 {
-            log::debug!("Proof too short for explicit proof: {} bytes", proof_data.len());
+            log::debug!(
+                "Proof too short for explicit proof: {} bytes",
+                proof_data.len()
+            );
             return;
         }
 
@@ -1409,14 +1763,12 @@ impl Driver {
             // Validate the proof signature using the destination's public key
             // (matches Python's PacketReceipt.validate_proof behavior)
             if let Some(announced) = self.known_destinations.get(&tracked_dest) {
-                let identity = rns_crypto::identity::Identity::from_public_key(&announced.public_key);
+                let identity =
+                    rns_crypto::identity::Identity::from_public_key(&announced.public_key);
                 let mut sig = [0u8; 64];
                 sig.copy_from_slice(signature);
                 if !identity.verify(&sig, &tracked_hash) {
-                    log::debug!(
-                        "Proof signature invalid for {:02x?}",
-                        &tracked_hash[..4],
-                    );
+                    log::debug!("Proof signature invalid for {:02x?}", &tracked_hash[..4],);
                     return;
                 }
             } else {
@@ -1430,7 +1782,8 @@ impl Driver {
             let rtt = now - sent_time;
             log::debug!(
                 "Proof received for {:02x?} rtt={:.3}s",
-                &tracked_hash[..4], rtt,
+                &tracked_hash[..4],
+                rtt,
             );
             self.completed_proofs.insert(tracked_hash, (rtt, now));
             self.callbacks.on_proof(
@@ -1441,7 +1794,8 @@ impl Driver {
         } else {
             log::debug!(
                 "Proof for unknown packet {:02x?} on dest {:02x?}",
-                &tracked_hash[..4], &dest_hash[..4],
+                &tracked_hash[..4],
+                &dest_hash[..4],
             );
         }
     }
@@ -1466,22 +1820,48 @@ impl Driver {
                             data_offset: 0,
                             data_len: raw.len() as u32,
                         };
-                        let ctx = HookContext::Packet { ctx: &pkt_ctx, raw: &raw };
+                        let ctx = HookContext::Packet {
+                            ctx: &pkt_ctx,
+                            raw: &raw,
+                        };
                         let now = time::now();
-                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
+                        let engine_ref = EngineRef {
+                            engine: &self.engine,
+                            interfaces: &self.interfaces,
+                            link_manager: &self.link_manager,
+                            now,
+                        };
                         {
-                            let exec = run_hook_inner(&mut self.hook_slots[HookPoint::SendOnInterface as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                            let exec = run_hook_inner(
+                                &mut self.hook_slots[HookPoint::SendOnInterface as usize].programs,
+                                &self.hook_manager,
+                                &engine_ref,
+                                &ctx,
+                                now,
+                            );
                             if let Some(ref e) = exec {
-                                if !e.injected_actions.is_empty() { hook_injected.extend(convert_injected_actions(e.injected_actions.clone())); }
-                                if e.hook_result.as_ref().map_or(false, |r| r.is_drop()) { continue; }
+                                if !e.injected_actions.is_empty() {
+                                    hook_injected.extend(convert_injected_actions(
+                                        e.injected_actions.clone(),
+                                    ));
+                                }
+                                if e.hook_result.as_ref().map_or(false, |r| r.is_drop()) {
+                                    continue;
+                                }
                             }
                         }
                     }
                     let is_announce = raw.len() > 2 && (raw[0] & 0x03) == 0x01;
                     if is_announce {
-                        log::debug!("Announce:dispatching to iface {} (len={}, online={})",
-                            interface.0, raw.len(),
-                            self.interfaces.get(&interface).map(|e| e.online).unwrap_or(false));
+                        log::debug!(
+                            "Announce:dispatching to iface {} (len={}, online={})",
+                            interface.0,
+                            raw.len(),
+                            self.interfaces
+                                .get(&interface)
+                                .map(|e| e.online)
+                                .unwrap_or(false)
+                        );
                     }
                     if let Some(entry) = self.interfaces.get_mut(&interface) {
                         if entry.online {
@@ -1504,12 +1884,17 @@ impl Driver {
                                 let header_type = (data[0] >> 6) & 0x03;
                                 let dest_start = if header_type == 1 { 18usize } else { 2usize };
                                 let dest_preview = if data.len() >= dest_start + 4 {
-                                    format!("{:02x?}", &data[dest_start..dest_start+4])
+                                    format!("{:02x?}", &data[dest_start..dest_start + 4])
                                 } else {
                                     "??".into()
                                 };
-                                log::debug!("Announce:SENT on iface {} (len={}, h={}, dest=[{}])",
-                                    interface.0, data.len(), header_type, dest_preview);
+                                log::debug!(
+                                    "Announce:SENT on iface {} (len={}, h={}, dest=[{}])",
+                                    interface.0,
+                                    data.len(),
+                                    header_type,
+                                    dest_preview
+                                );
                             }
                         }
                     }
@@ -1527,14 +1912,35 @@ impl Driver {
                             data_offset: 0,
                             data_len: raw.len() as u32,
                         };
-                        let ctx = HookContext::Packet { ctx: &pkt_ctx, raw: &raw };
+                        let ctx = HookContext::Packet {
+                            ctx: &pkt_ctx,
+                            raw: &raw,
+                        };
                         let now = time::now();
-                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
+                        let engine_ref = EngineRef {
+                            engine: &self.engine,
+                            interfaces: &self.interfaces,
+                            link_manager: &self.link_manager,
+                            now,
+                        };
                         {
-                            let exec = run_hook_inner(&mut self.hook_slots[HookPoint::BroadcastOnAllInterfaces as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                            let exec = run_hook_inner(
+                                &mut self.hook_slots[HookPoint::BroadcastOnAllInterfaces as usize]
+                                    .programs,
+                                &self.hook_manager,
+                                &engine_ref,
+                                &ctx,
+                                now,
+                            );
                             if let Some(ref e) = exec {
-                                if !e.injected_actions.is_empty() { hook_injected.extend(convert_injected_actions(e.injected_actions.clone())); }
-                                if e.hook_result.as_ref().map_or(false, |r| r.is_drop()) { continue; }
+                                if !e.injected_actions.is_empty() {
+                                    hook_injected.extend(convert_injected_actions(
+                                        e.injected_actions.clone(),
+                                    ));
+                                }
+                                if e.hook_result.as_ref().map_or(false, |r| r.is_drop()) {
+                                    continue;
+                                }
                             }
                         }
                     }
@@ -1576,14 +1982,34 @@ impl Driver {
                             data_offset: 0,
                             data_len: raw.len() as u32,
                         };
-                        let ctx = HookContext::Packet { ctx: &pkt_ctx, raw: &raw };
+                        let ctx = HookContext::Packet {
+                            ctx: &pkt_ctx,
+                            raw: &raw,
+                        };
                         let now = time::now();
-                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
+                        let engine_ref = EngineRef {
+                            engine: &self.engine,
+                            interfaces: &self.interfaces,
+                            link_manager: &self.link_manager,
+                            now,
+                        };
                         {
-                            let exec = run_hook_inner(&mut self.hook_slots[HookPoint::DeliverLocal as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                            let exec = run_hook_inner(
+                                &mut self.hook_slots[HookPoint::DeliverLocal as usize].programs,
+                                &self.hook_manager,
+                                &engine_ref,
+                                &ctx,
+                                now,
+                            );
                             if let Some(ref e) = exec {
-                                if !e.injected_actions.is_empty() { hook_injected.extend(convert_injected_actions(e.injected_actions.clone())); }
-                                if e.hook_result.as_ref().map_or(false, |r| r.is_drop()) { continue; }
+                                if !e.injected_actions.is_empty() {
+                                    hook_injected.extend(convert_injected_actions(
+                                        e.injected_actions.clone(),
+                                    ));
+                                }
+                                if e.hook_result.as_ref().map_or(false, |r| r.is_drop()) {
+                                    continue;
+                                }
                             }
                         }
                     }
@@ -1603,15 +2029,25 @@ impl Driver {
                     } else if self.link_manager.is_link_destination(&destination_hash) {
                         // Link-related packet — route to link manager
                         let link_actions = self.link_manager.handle_local_delivery(
-                            destination_hash, &raw, packet_hash, receiving_interface, &mut self.rng,
+                            destination_hash,
+                            &raw,
+                            packet_hash,
+                            receiving_interface,
+                            &mut self.rng,
                         );
                         if link_actions.is_empty() {
                             // Link manager couldn't handle (e.g. opportunistic DATA
                             // for a registered link destination). Fall back to
                             // regular delivery.
                             if let Ok(packet) = RawPacket::unpack(&raw) {
-                                if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_PROOF {
-                                    self.handle_inbound_proof(destination_hash, &packet.data, &packet_hash);
+                                if packet.flags.packet_type
+                                    == rns_core::constants::PACKET_TYPE_PROOF
+                                {
+                                    self.handle_inbound_proof(
+                                        destination_hash,
+                                        &packet.data,
+                                        &packet_hash,
+                                    );
                                     continue;
                                 }
                             }
@@ -1628,7 +2064,11 @@ impl Driver {
                         // Check if this is a PROOF packet for a packet we sent
                         if let Ok(packet) = RawPacket::unpack(&raw) {
                             if packet.flags.packet_type == rns_core::constants::PACKET_TYPE_PROOF {
-                                self.handle_inbound_proof(destination_hash, &packet.data, &packet_hash);
+                                self.handle_inbound_proof(
+                                    destination_hash,
+                                    &packet.data,
+                                    &packet_hash,
+                                );
                                 continue;
                             }
                         }
@@ -1636,12 +2076,11 @@ impl Driver {
                         // Check if destination has a proof strategy — generate proof if needed
                         self.maybe_generate_proof(destination_hash, &packet_hash);
 
-                        self.callbacks
-                            .on_local_delivery(
-                                rns_core::types::DestHash(destination_hash),
-                                raw,
-                                rns_core::types::PacketHash(packet_hash),
-                            );
+                        self.callbacks.on_local_delivery(
+                            rns_core::types::DestHash(destination_hash),
+                            raw,
+                            rns_core::types::PacketHash(packet_hash),
+                        );
                     }
                 }
                 TransportAction::AnnounceReceived {
@@ -1662,12 +2101,29 @@ impl Driver {
                             interface_id: receiving_interface.0,
                         };
                         let now = time::now();
-                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
+                        let engine_ref = EngineRef {
+                            engine: &self.engine,
+                            interfaces: &self.interfaces,
+                            link_manager: &self.link_manager,
+                            now,
+                        };
                         {
-                            let exec = run_hook_inner(&mut self.hook_slots[HookPoint::AnnounceReceived as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                            let exec = run_hook_inner(
+                                &mut self.hook_slots[HookPoint::AnnounceReceived as usize].programs,
+                                &self.hook_manager,
+                                &engine_ref,
+                                &ctx,
+                                now,
+                            );
                             if let Some(ref e) = exec {
-                                if !e.injected_actions.is_empty() { hook_injected.extend(convert_injected_actions(e.injected_actions.clone())); }
-                                if e.hook_result.as_ref().map_or(false, |r| r.is_drop()) { continue; }
+                                if !e.injected_actions.is_empty() {
+                                    hook_injected.extend(convert_injected_actions(
+                                        e.injected_actions.clone(),
+                                    ));
+                                }
+                                if e.hook_result.as_ref().map_or(false, |r| r.is_drop()) {
+                                    continue;
+                                }
                             }
                         }
                     }
@@ -1678,14 +2134,18 @@ impl Driver {
                     if name_hash == self.discovery_name_hash {
                         if self.discover_interfaces {
                             if let Some(ref app_data) = app_data {
-                                if let Some(mut discovered) = crate::discovery::parse_interface_announce(
-                                    app_data,
-                                    &identity_hash,
-                                    hops,
-                                    self.discovery_required_value,
-                                ) {
+                                if let Some(mut discovered) =
+                                    crate::discovery::parse_interface_announce(
+                                        app_data,
+                                        &identity_hash,
+                                        hops,
+                                        self.discovery_required_value,
+                                    )
+                                {
                                     // Check if we already have this interface
-                                    if let Ok(Some(existing)) = self.discovered_interfaces.load(&discovered.discovery_hash) {
+                                    if let Ok(Some(existing)) =
+                                        self.discovered_interfaces.load(&discovered.discovery_hash)
+                                    {
                                         discovered.discovered = existing.discovered;
                                         discovered.heard_count = existing.heard_count + 1;
                                     }
@@ -1697,7 +2157,10 @@ impl Driver {
                                             discovered.name,
                                             discovered.interface_type,
                                             discovered.reachable_on.as_deref().unwrap_or("?"),
-                                            discovered.port.map(|p| p.to_string()).unwrap_or_else(|| "?".into()),
+                                            discovered
+                                                .port
+                                                .map(|p| p.to_string())
+                                                .unwrap_or_else(|| "?".into()),
                                             discovered.stamp_value,
                                         );
                                     }
@@ -1717,10 +2180,14 @@ impl Driver {
                         received_at: time::now(),
                         receiving_interface,
                     };
-                    self.known_destinations.insert(destination_hash, announced.clone());
+                    self.known_destinations
+                        .insert(destination_hash, announced.clone());
                     log::info!(
                         "Announce:validated dest={:02x}{:02x}{:02x}{:02x}.. hops={}",
-                        destination_hash[0], destination_hash[1], destination_hash[2], destination_hash[3],
+                        destination_hash[0],
+                        destination_hash[1],
+                        destination_hash[2],
+                        destination_hash[3],
                         hops,
                     );
                     self.callbacks.on_announce(announced);
@@ -1739,22 +2206,34 @@ impl Driver {
                             interface_id: interface.0,
                         };
                         let now = time::now();
-                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
-                        if let Some(ref e) = run_hook_inner(&mut self.hook_slots[HookPoint::PathUpdated as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
-                            if !e.injected_actions.is_empty() { hook_injected.extend(convert_injected_actions(e.injected_actions.clone())); }
+                        let engine_ref = EngineRef {
+                            engine: &self.engine,
+                            interfaces: &self.interfaces,
+                            link_manager: &self.link_manager,
+                            now,
+                        };
+                        if let Some(ref e) = run_hook_inner(
+                            &mut self.hook_slots[HookPoint::PathUpdated as usize].programs,
+                            &self.hook_manager,
+                            &engine_ref,
+                            &ctx,
+                            now,
+                        ) {
+                            if !e.injected_actions.is_empty() {
+                                hook_injected
+                                    .extend(convert_injected_actions(e.injected_actions.clone()));
+                            }
                         }
                     }
                     #[cfg(not(feature = "rns-hooks"))]
                     let _ = interface;
 
-                    self.callbacks.on_path_updated(rns_core::types::DestHash(destination_hash), hops);
+                    self.callbacks
+                        .on_path_updated(rns_core::types::DestHash(destination_hash), hops);
                 }
                 TransportAction::ForwardToLocalClients { raw, exclude } => {
                     for entry in self.interfaces.values_mut() {
-                        if entry.online
-                            && entry.info.is_local_client
-                            && Some(entry.id) != exclude
-                        {
+                        if entry.online && entry.info.is_local_client && Some(entry.id) != exclude {
                             let data = if let Some(ref ifac_state) = entry.ifac {
                                 ifac::mask_outbound(&raw, ifac_state)
                             } else {
@@ -1763,12 +2242,20 @@ impl Driver {
                             entry.stats.txb += data.len() as u64;
                             entry.stats.tx_packets += 1;
                             if let Err(e) = entry.writer.send_frame(&data) {
-                                log::warn!("[{}] forward to local client failed: {}", entry.info.id.0, e);
+                                log::warn!(
+                                    "[{}] forward to local client failed: {}",
+                                    entry.info.id.0,
+                                    e
+                                );
                             }
                         }
                     }
                 }
-                TransportAction::ForwardPlainBroadcast { raw, to_local, exclude } => {
+                TransportAction::ForwardPlainBroadcast {
+                    raw,
+                    to_local,
+                    exclude,
+                } => {
                     for entry in self.interfaces.values_mut() {
                         if entry.online
                             && entry.info.is_local_client == to_local
@@ -1782,7 +2269,11 @@ impl Driver {
                             entry.stats.txb += data.len() as u64;
                             entry.stats.tx_packets += 1;
                             if let Err(e) = entry.writer.send_frame(&data) {
-                                log::warn!("[{}] forward plain broadcast failed: {}", entry.info.id.0, e);
+                                log::warn!(
+                                    "[{}] forward plain broadcast failed: {}",
+                                    entry.info.id.0,
+                                    e
+                                );
                             }
                         }
                     }
@@ -1794,7 +2285,11 @@ impl Driver {
                         }
                     }
                 }
-                TransportAction::TunnelSynthesize { interface, data, dest_hash } => {
+                TransportAction::TunnelSynthesize {
+                    interface,
+                    data,
+                    dest_hash,
+                } => {
                     #[cfg(feature = "rns-hooks")]
                     {
                         let pkt_ctx = rns_hooks::PacketContext {
@@ -1807,14 +2302,34 @@ impl Driver {
                             data_offset: 0,
                             data_len: data.len() as u32,
                         };
-                        let ctx = HookContext::Packet { ctx: &pkt_ctx, raw: &data };
+                        let ctx = HookContext::Packet {
+                            ctx: &pkt_ctx,
+                            raw: &data,
+                        };
                         let now = time::now();
-                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
+                        let engine_ref = EngineRef {
+                            engine: &self.engine,
+                            interfaces: &self.interfaces,
+                            link_manager: &self.link_manager,
+                            now,
+                        };
                         {
-                            let exec = run_hook_inner(&mut self.hook_slots[HookPoint::TunnelSynthesize as usize].programs, &self.hook_manager, &engine_ref, &ctx, now);
+                            let exec = run_hook_inner(
+                                &mut self.hook_slots[HookPoint::TunnelSynthesize as usize].programs,
+                                &self.hook_manager,
+                                &engine_ref,
+                                &ctx,
+                                now,
+                            );
                             if let Some(ref e) = exec {
-                                if !e.injected_actions.is_empty() { hook_injected.extend(convert_injected_actions(e.injected_actions.clone())); }
-                                if e.hook_result.as_ref().map_or(false, |r| r.is_drop()) { continue; }
+                                if !e.injected_actions.is_empty() {
+                                    hook_injected.extend(convert_injected_actions(
+                                        e.injected_actions.clone(),
+                                    ));
+                                }
+                                if e.hook_result.as_ref().map_or(false, |r| r.is_drop()) {
+                                    continue;
+                                }
                             }
                         }
                     }
@@ -1827,8 +2342,12 @@ impl Driver {
                         packet_type: rns_core::constants::PACKET_TYPE_DATA,
                     };
                     if let Ok(packet) = rns_core::packet::RawPacket::pack(
-                        flags, 0, &dest_hash, None,
-                        rns_core::constants::CONTEXT_NONE, &data,
+                        flags,
+                        0,
+                        &dest_hash,
+                        None,
+                        rns_core::constants::CONTEXT_NONE,
+                        &data,
                     ) {
                         if let Some(entry) = self.interfaces.get_mut(&interface) {
                             if entry.online {
@@ -1840,16 +2359,31 @@ impl Driver {
                                 entry.stats.txb += raw.len() as u64;
                                 entry.stats.tx_packets += 1;
                                 if let Err(e) = entry.writer.send_frame(&raw) {
-                                    log::warn!("[{}] tunnel synthesize send failed: {}", entry.info.id.0, e);
+                                    log::warn!(
+                                        "[{}] tunnel synthesize send failed: {}",
+                                        entry.info.id.0,
+                                        e
+                                    );
                                 }
                             }
                         }
                     }
                 }
-                TransportAction::TunnelEstablished { tunnel_id, interface } => {
-                    log::info!("Tunnel established: {:02x?} on interface {}", &tunnel_id[..4], interface.0);
+                TransportAction::TunnelEstablished {
+                    tunnel_id,
+                    interface,
+                } => {
+                    log::info!(
+                        "Tunnel established: {:02x?} on interface {}",
+                        &tunnel_id[..4],
+                        interface.0
+                    );
                 }
-                TransportAction::AnnounceRetransmit { destination_hash, hops, interface } => {
+                TransportAction::AnnounceRetransmit {
+                    destination_hash,
+                    hops,
+                    interface,
+                } => {
                     #[cfg(feature = "rns-hooks")]
                     {
                         let ctx = HookContext::Announce {
@@ -1858,9 +2392,23 @@ impl Driver {
                             interface_id: interface.map(|i| i.0).unwrap_or(0),
                         };
                         let now = time::now();
-                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
-                        if let Some(ref e) = run_hook_inner(&mut self.hook_slots[HookPoint::AnnounceRetransmit as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
-                            if !e.injected_actions.is_empty() { hook_injected.extend(convert_injected_actions(e.injected_actions.clone())); }
+                        let engine_ref = EngineRef {
+                            engine: &self.engine,
+                            interfaces: &self.interfaces,
+                            link_manager: &self.link_manager,
+                            now,
+                        };
+                        if let Some(ref e) = run_hook_inner(
+                            &mut self.hook_slots[HookPoint::AnnounceRetransmit as usize].programs,
+                            &self.hook_manager,
+                            &engine_ref,
+                            &ctx,
+                            now,
+                        ) {
+                            if !e.injected_actions.is_empty() {
+                                hook_injected
+                                    .extend(convert_injected_actions(e.injected_actions.clone()));
+                            }
                         }
                     }
                     #[cfg(not(feature = "rns-hooks"))]
@@ -1868,14 +2416,35 @@ impl Driver {
                         let _ = (destination_hash, hops, interface);
                     }
                 }
-                TransportAction::LinkRequestReceived { link_id, destination_hash: _, receiving_interface } => {
+                TransportAction::LinkRequestReceived {
+                    link_id,
+                    destination_hash: _,
+                    receiving_interface,
+                } => {
                     #[cfg(feature = "rns-hooks")]
                     {
-                        let ctx = HookContext::Link { link_id, interface_id: receiving_interface.0 };
+                        let ctx = HookContext::Link {
+                            link_id,
+                            interface_id: receiving_interface.0,
+                        };
                         let now = time::now();
-                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
-                        if let Some(ref e) = run_hook_inner(&mut self.hook_slots[HookPoint::LinkRequestReceived as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
-                            if !e.injected_actions.is_empty() { hook_injected.extend(convert_injected_actions(e.injected_actions.clone())); }
+                        let engine_ref = EngineRef {
+                            engine: &self.engine,
+                            interfaces: &self.interfaces,
+                            link_manager: &self.link_manager,
+                            now,
+                        };
+                        if let Some(ref e) = run_hook_inner(
+                            &mut self.hook_slots[HookPoint::LinkRequestReceived as usize].programs,
+                            &self.hook_manager,
+                            &engine_ref,
+                            &ctx,
+                            now,
+                        ) {
+                            if !e.injected_actions.is_empty() {
+                                hook_injected
+                                    .extend(convert_injected_actions(e.injected_actions.clone()));
+                            }
                         }
                     }
                     #[cfg(not(feature = "rns-hooks"))]
@@ -1886,11 +2455,28 @@ impl Driver {
                 TransportAction::LinkEstablished { link_id, interface } => {
                     #[cfg(feature = "rns-hooks")]
                     {
-                        let ctx = HookContext::Link { link_id, interface_id: interface.0 };
+                        let ctx = HookContext::Link {
+                            link_id,
+                            interface_id: interface.0,
+                        };
                         let now = time::now();
-                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
-                        if let Some(ref e) = run_hook_inner(&mut self.hook_slots[HookPoint::LinkEstablished as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
-                            if !e.injected_actions.is_empty() { hook_injected.extend(convert_injected_actions(e.injected_actions.clone())); }
+                        let engine_ref = EngineRef {
+                            engine: &self.engine,
+                            interfaces: &self.interfaces,
+                            link_manager: &self.link_manager,
+                            now,
+                        };
+                        if let Some(ref e) = run_hook_inner(
+                            &mut self.hook_slots[HookPoint::LinkEstablished as usize].programs,
+                            &self.hook_manager,
+                            &engine_ref,
+                            &ctx,
+                            now,
+                        ) {
+                            if !e.injected_actions.is_empty() {
+                                hook_injected
+                                    .extend(convert_injected_actions(e.injected_actions.clone()));
+                            }
                         }
                     }
                     #[cfg(not(feature = "rns-hooks"))]
@@ -1901,11 +2487,28 @@ impl Driver {
                 TransportAction::LinkClosed { link_id } => {
                     #[cfg(feature = "rns-hooks")]
                     {
-                        let ctx = HookContext::Link { link_id, interface_id: 0 };
+                        let ctx = HookContext::Link {
+                            link_id,
+                            interface_id: 0,
+                        };
                         let now = time::now();
-                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
-                        if let Some(ref e) = run_hook_inner(&mut self.hook_slots[HookPoint::LinkClosed as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
-                            if !e.injected_actions.is_empty() { hook_injected.extend(convert_injected_actions(e.injected_actions.clone())); }
+                        let engine_ref = EngineRef {
+                            engine: &self.engine,
+                            interfaces: &self.interfaces,
+                            link_manager: &self.link_manager,
+                            now,
+                        };
+                        if let Some(ref e) = run_hook_inner(
+                            &mut self.hook_slots[HookPoint::LinkClosed as usize].programs,
+                            &self.hook_manager,
+                            &engine_ref,
+                            &ctx,
+                            now,
+                        ) {
+                            if !e.injected_actions.is_empty() {
+                                hook_injected
+                                    .extend(convert_injected_actions(e.injected_actions.clone()));
+                            }
                         }
                     }
                     #[cfg(not(feature = "rns-hooks"))]
@@ -1930,7 +2533,11 @@ impl Driver {
 
         for action in actions {
             match action {
-                LinkManagerAction::SendPacket { raw, dest_type, attached_interface } => {
+                LinkManagerAction::SendPacket {
+                    raw,
+                    dest_type,
+                    attached_interface,
+                } => {
                     // Route through the transport engine's outbound path
                     match RawPacket::unpack(&raw) {
                         Ok(packet) => {
@@ -1947,19 +2554,43 @@ impl Driver {
                         }
                     }
                 }
-                LinkManagerAction::LinkEstablished { link_id, dest_hash, rtt, is_initiator } => {
+                LinkManagerAction::LinkEstablished {
+                    link_id,
+                    dest_hash,
+                    rtt,
+                    is_initiator,
+                } => {
                     #[cfg(feature = "rns-hooks")]
                     {
-                        let ctx = HookContext::Link { link_id, interface_id: 0 };
+                        let ctx = HookContext::Link {
+                            link_id,
+                            interface_id: 0,
+                        };
                         let now = time::now();
-                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
-                        if let Some(ref e) = run_hook_inner(&mut self.hook_slots[HookPoint::LinkEstablished as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
-                            if !e.injected_actions.is_empty() { hook_injected.extend(convert_injected_actions(e.injected_actions.clone())); }
+                        let engine_ref = EngineRef {
+                            engine: &self.engine,
+                            interfaces: &self.interfaces,
+                            link_manager: &self.link_manager,
+                            now,
+                        };
+                        if let Some(ref e) = run_hook_inner(
+                            &mut self.hook_slots[HookPoint::LinkEstablished as usize].programs,
+                            &self.hook_manager,
+                            &engine_ref,
+                            &ctx,
+                            now,
+                        ) {
+                            if !e.injected_actions.is_empty() {
+                                hook_injected
+                                    .extend(convert_injected_actions(e.injected_actions.clone()));
+                            }
                         }
                     }
                     log::info!(
                         "Link established: {:02x?} rtt={:.3}s initiator={}",
-                        &link_id[..4], rtt, is_initiator,
+                        &link_id[..4],
+                        rtt,
+                        is_initiator,
                     );
                     self.callbacks.on_link_established(
                         rns_core::types::LinkId(link_id),
@@ -1971,21 +2602,44 @@ impl Driver {
                 LinkManagerAction::LinkClosed { link_id, reason } => {
                     #[cfg(feature = "rns-hooks")]
                     {
-                        let ctx = HookContext::Link { link_id, interface_id: 0 };
+                        let ctx = HookContext::Link {
+                            link_id,
+                            interface_id: 0,
+                        };
                         let now = time::now();
-                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
-                        if let Some(ref e) = run_hook_inner(&mut self.hook_slots[HookPoint::LinkClosed as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
-                            if !e.injected_actions.is_empty() { hook_injected.extend(convert_injected_actions(e.injected_actions.clone())); }
+                        let engine_ref = EngineRef {
+                            engine: &self.engine,
+                            interfaces: &self.interfaces,
+                            link_manager: &self.link_manager,
+                            now,
+                        };
+                        if let Some(ref e) = run_hook_inner(
+                            &mut self.hook_slots[HookPoint::LinkClosed as usize].programs,
+                            &self.hook_manager,
+                            &engine_ref,
+                            &ctx,
+                            now,
+                        ) {
+                            if !e.injected_actions.is_empty() {
+                                hook_injected
+                                    .extend(convert_injected_actions(e.injected_actions.clone()));
+                            }
                         }
                     }
                     log::info!("Link closed: {:02x?} reason={:?}", &link_id[..4], reason);
                     self.holepunch_manager.link_closed(&link_id);
-                    self.callbacks.on_link_closed(rns_core::types::LinkId(link_id), reason);
+                    self.callbacks
+                        .on_link_closed(rns_core::types::LinkId(link_id), reason);
                 }
-                LinkManagerAction::RemoteIdentified { link_id, identity_hash, public_key } => {
+                LinkManagerAction::RemoteIdentified {
+                    link_id,
+                    identity_hash,
+                    public_key,
+                } => {
                     log::debug!(
                         "Remote identified on link {:02x?}: {:02x?}",
-                        &link_id[..4], &identity_hash[..4],
+                        &link_id[..4],
+                        &identity_hash[..4],
                     );
                     self.callbacks.on_remote_identified(
                         rns_core::types::LinkId(link_id),
@@ -1995,74 +2649,156 @@ impl Driver {
                 }
                 LinkManagerAction::RegisterLinkDest { link_id } => {
                     // Register the link_id as a LINK destination in the transport engine
-                    self.engine.register_destination(link_id, rns_core::constants::DESTINATION_LINK);
+                    self.engine
+                        .register_destination(link_id, rns_core::constants::DESTINATION_LINK);
                 }
                 LinkManagerAction::DeregisterLinkDest { link_id } => {
                     self.engine.deregister_destination(&link_id);
                 }
                 LinkManagerAction::ManagementRequest {
-                    link_id, path_hash, data, request_id, remote_identity,
+                    link_id,
+                    path_hash,
+                    data,
+                    request_id,
+                    remote_identity,
                 } => {
                     self.handle_management_request(
-                        link_id, path_hash, data, request_id, remote_identity,
+                        link_id,
+                        path_hash,
+                        data,
+                        request_id,
+                        remote_identity,
                     );
                 }
-                LinkManagerAction::ResourceReceived { link_id, data, metadata } => {
-                    self.callbacks.on_resource_received(rns_core::types::LinkId(link_id), data, metadata);
+                LinkManagerAction::ResourceReceived {
+                    link_id,
+                    data,
+                    metadata,
+                } => {
+                    self.callbacks.on_resource_received(
+                        rns_core::types::LinkId(link_id),
+                        data,
+                        metadata,
+                    );
                 }
                 LinkManagerAction::ResourceCompleted { link_id } => {
-                    self.callbacks.on_resource_completed(rns_core::types::LinkId(link_id));
+                    self.callbacks
+                        .on_resource_completed(rns_core::types::LinkId(link_id));
                 }
                 LinkManagerAction::ResourceFailed { link_id, error } => {
                     log::debug!("Resource failed on link {:02x?}: {}", &link_id[..4], error);
-                    self.callbacks.on_resource_failed(rns_core::types::LinkId(link_id), error);
+                    self.callbacks
+                        .on_resource_failed(rns_core::types::LinkId(link_id), error);
                 }
-                LinkManagerAction::ResourceProgress { link_id, received, total } => {
-                    self.callbacks.on_resource_progress(rns_core::types::LinkId(link_id), received, total);
+                LinkManagerAction::ResourceProgress {
+                    link_id,
+                    received,
+                    total,
+                } => {
+                    self.callbacks.on_resource_progress(
+                        rns_core::types::LinkId(link_id),
+                        received,
+                        total,
+                    );
                 }
-                LinkManagerAction::ResourceAcceptQuery { link_id, resource_hash, transfer_size, has_metadata } => {
+                LinkManagerAction::ResourceAcceptQuery {
+                    link_id,
+                    resource_hash,
+                    transfer_size,
+                    has_metadata,
+                } => {
                     let accept = self.callbacks.on_resource_accept_query(
-                        rns_core::types::LinkId(link_id), resource_hash.clone(), transfer_size, has_metadata,
+                        rns_core::types::LinkId(link_id),
+                        resource_hash.clone(),
+                        transfer_size,
+                        has_metadata,
                     );
                     let accept_actions = self.link_manager.accept_resource(
-                        &link_id, &resource_hash, accept, &mut self.rng,
+                        &link_id,
+                        &resource_hash,
+                        accept,
+                        &mut self.rng,
                     );
                     // Re-dispatch (recursive but bounded: accept_resource won't produce more AcceptQuery)
                     self.dispatch_link_actions(accept_actions);
                 }
-                LinkManagerAction::ChannelMessageReceived { link_id, msgtype, payload } => {
+                LinkManagerAction::ChannelMessageReceived {
+                    link_id,
+                    msgtype,
+                    payload,
+                } => {
                     // Intercept hole-punch signaling messages (0xFE00..=0xFE04)
                     if HolePunchManager::is_holepunch_message(msgtype) {
                         let derived_key = self.link_manager.get_derived_key(&link_id);
                         let tx = self.get_event_sender();
                         let (handled, hp_actions) = self.holepunch_manager.handle_signal(
-                            link_id, msgtype, payload, derived_key.as_deref(), &tx,
+                            link_id,
+                            msgtype,
+                            payload,
+                            derived_key.as_deref(),
+                            &tx,
                         );
                         if handled {
                             self.dispatch_holepunch_actions(hp_actions);
                         }
                     } else {
-                        self.callbacks.on_channel_message(rns_core::types::LinkId(link_id), msgtype, payload);
+                        self.callbacks.on_channel_message(
+                            rns_core::types::LinkId(link_id),
+                            msgtype,
+                            payload,
+                        );
                     }
                 }
-                LinkManagerAction::LinkDataReceived { link_id, context, data } => {
-                    self.callbacks.on_link_data(rns_core::types::LinkId(link_id), context, data);
+                LinkManagerAction::LinkDataReceived {
+                    link_id,
+                    context,
+                    data,
+                } => {
+                    self.callbacks
+                        .on_link_data(rns_core::types::LinkId(link_id), context, data);
                 }
-                LinkManagerAction::ResponseReceived { link_id, request_id, data } => {
-                    self.callbacks.on_response(rns_core::types::LinkId(link_id), request_id, data);
+                LinkManagerAction::ResponseReceived {
+                    link_id,
+                    request_id,
+                    data,
+                } => {
+                    self.callbacks
+                        .on_response(rns_core::types::LinkId(link_id), request_id, data);
                 }
-                LinkManagerAction::LinkRequestReceived { link_id, receiving_interface } => {
+                LinkManagerAction::LinkRequestReceived {
+                    link_id,
+                    receiving_interface,
+                } => {
                     #[cfg(feature = "rns-hooks")]
                     {
-                        let ctx = HookContext::Link { link_id, interface_id: receiving_interface.0 };
+                        let ctx = HookContext::Link {
+                            link_id,
+                            interface_id: receiving_interface.0,
+                        };
                         let now = time::now();
-                        let engine_ref = EngineRef { engine: &self.engine, interfaces: &self.interfaces, link_manager: &self.link_manager, now };
-                        if let Some(ref e) = run_hook_inner(&mut self.hook_slots[HookPoint::LinkRequestReceived as usize].programs, &self.hook_manager, &engine_ref, &ctx, now) {
-                            if !e.injected_actions.is_empty() { hook_injected.extend(convert_injected_actions(e.injected_actions.clone())); }
+                        let engine_ref = EngineRef {
+                            engine: &self.engine,
+                            interfaces: &self.interfaces,
+                            link_manager: &self.link_manager,
+                            now,
+                        };
+                        if let Some(ref e) = run_hook_inner(
+                            &mut self.hook_slots[HookPoint::LinkRequestReceived as usize].programs,
+                            &self.hook_manager,
+                            &engine_ref,
+                            &ctx,
+                            now,
+                        ) {
+                            if !e.injected_actions.is_empty() {
+                                hook_injected
+                                    .extend(convert_injected_actions(e.injected_actions.clone()));
+                            }
                         }
                     }
                     #[cfg(not(feature = "rns-hooks"))]
-                    { let _ = (link_id, receiving_interface); }
+                    {
+                        let _ = (link_id, receiving_interface);
+                    }
                 }
             }
         }
@@ -2078,19 +2814,33 @@ impl Driver {
     fn dispatch_holepunch_actions(&mut self, actions: Vec<HolePunchManagerAction>) {
         for action in actions {
             match action {
-                HolePunchManagerAction::SendChannelMessage { link_id, msgtype, payload } => {
+                HolePunchManagerAction::SendChannelMessage {
+                    link_id,
+                    msgtype,
+                    payload,
+                } => {
                     let link_actions = self.link_manager.send_channel_message(
-                        &link_id, msgtype, &payload, &mut self.rng,
+                        &link_id,
+                        msgtype,
+                        &payload,
+                        &mut self.rng,
                     );
                     self.dispatch_link_actions(link_actions);
                 }
-                HolePunchManagerAction::DirectConnectEstablished { link_id, session_id, interface_id, rtt, mtu } => {
+                HolePunchManagerAction::DirectConnectEstablished {
+                    link_id,
+                    session_id,
+                    interface_id,
+                    rtt,
+                    mtu,
+                } => {
                     log::info!(
                         "Direct connection established for link {:02x?} session {:02x?} iface {} rtt={:.1}ms mtu={}",
                         &link_id[..4], &session_id[..4], interface_id.0, rtt * 1000.0, mtu
                     );
                     // Redirect the link's path to use the direct interface
-                    self.engine.redirect_path(&link_id, interface_id, time::now());
+                    self.engine
+                        .redirect_path(&link_id, interface_id, time::now());
                     // Update the link's RTT and MTU to reflect the direct path
                     self.link_manager.set_link_rtt(&link_id, rtt);
                     self.link_manager.set_link_mtu(&link_id, mtu);
@@ -2104,15 +2854,19 @@ impl Driver {
                         interface_id,
                     );
                 }
-                HolePunchManagerAction::DirectConnectFailed { link_id, session_id, reason } => {
+                HolePunchManagerAction::DirectConnectFailed {
+                    link_id,
+                    session_id,
+                    reason,
+                } => {
                     log::debug!(
                         "Direct connection failed for link {:02x?} session {:02x?} reason={}",
-                        &link_id[..4], &session_id[..4], reason
+                        &link_id[..4],
+                        &session_id[..4],
+                        reason
                     );
-                    self.callbacks.on_direct_connect_failed(
-                        rns_core::types::LinkId(link_id),
-                        reason,
-                    );
+                    self.callbacks
+                        .on_direct_connect_failed(rns_core::types::LinkId(link_id), reason);
                 }
             }
         }
@@ -2169,8 +2923,12 @@ impl Driver {
         self.rng.fill_bytes(&mut random_hash);
 
         let (announce_data, _) = match rns_core::announce::AnnounceData::pack(
-            identity, &disc_dest, &name_hash, &random_hash,
-            None, Some(&stamp_result.app_data),
+            identity,
+            &disc_dest,
+            &name_hash,
+            &random_hash,
+            None,
+            Some(&stamp_result.app_data),
         ) {
             Ok(v) => v,
             Err(e) => {
@@ -2188,8 +2946,12 @@ impl Driver {
         };
 
         let packet = match RawPacket::pack(
-            flags, 0, &disc_dest, None,
-            rns_core::constants::CONTEXT_NONE, &announce_data,
+            flags,
+            0,
+            &disc_dest,
+            None,
+            rns_core::constants::CONTEXT_NONE,
+            &announce_data,
         ) {
             Ok(p) => p,
             Err(e) => {
@@ -2199,11 +2961,16 @@ impl Driver {
         };
 
         let outbound_actions = self.engine.handle_outbound(
-            &packet, rns_core::constants::DESTINATION_SINGLE, None, now,
+            &packet,
+            rns_core::constants::DESTINATION_SINGLE,
+            None,
+            now,
         );
         log::debug!(
             "Discovery announce sent for interface #{} ({} actions, dest={:02x?})",
-            stamp_result.index, outbound_actions.len(), &disc_dest[..4],
+            stamp_result.index,
+            outbound_actions.len(),
+            &disc_dest[..4],
         );
         self.dispatch_all(outbound_actions);
     }
@@ -2320,7 +3087,11 @@ impl Driver {
         if is_restricted && !self.management_config.remote_management_allowed.is_empty() {
             match remote_identity {
                 Some((identity_hash, _)) => {
-                    if !self.management_config.remote_management_allowed.contains(&identity_hash) {
+                    if !self
+                        .management_config
+                        .remote_management_allowed
+                        .contains(&identity_hash)
+                    {
                         log::debug!("Management request denied: identity not in allowed list");
                         return;
                     }
@@ -2334,8 +3105,18 @@ impl Driver {
 
         let response_data = if path_hash == management::status_path_hash() {
             {
-                let views: Vec<&dyn management::InterfaceStatusView> = self.interfaces.values().map(|e| e as &dyn management::InterfaceStatusView).collect();
-                management::handle_status_request(&data, &self.engine, &views, self.started, self.probe_responder_hash)
+                let views: Vec<&dyn management::InterfaceStatusView> = self
+                    .interfaces
+                    .values()
+                    .map(|e| e as &dyn management::InterfaceStatusView)
+                    .collect();
+                management::handle_status_request(
+                    &data,
+                    &self.engine,
+                    &views,
+                    self.started,
+                    self.probe_responder_hash,
+                )
             }
         } else if path_hash == management::path_path_hash() {
             management::handle_path_request(&data, &self.engine)
@@ -2348,7 +3129,10 @@ impl Driver {
 
         if let Some(response) = response_data {
             let actions = self.link_manager.send_management_response(
-                &link_id, &request_id, &response, &mut self.rng,
+                &link_id,
+                &request_id,
+                &response,
+                &mut self.rng,
             );
             self.dispatch_link_actions(actions);
         }
@@ -2486,14 +3270,22 @@ mod tests {
 
     impl Callbacks for MockCallbacks {
         fn on_announce(&mut self, announced: crate::destination::AnnouncedIdentity) {
-            self.announces.lock().unwrap().push((announced.dest_hash, announced.hops));
+            self.announces
+                .lock()
+                .unwrap()
+                .push((announced.dest_hash, announced.hops));
         }
 
         fn on_path_updated(&mut self, dest_hash: DestHash, hops: u8) {
             self.paths.lock().unwrap().push((dest_hash, hops));
         }
 
-        fn on_local_delivery(&mut self, dest_hash: DestHash, _raw: Vec<u8>, _packet_hash: PacketHash) {
+        fn on_local_delivery(
+            &mut self,
+            dest_hash: DestHash,
+            _raw: Vec<u8>,
+            _packet_hash: PacketHash,
+        ) {
             self.deliveries.lock().unwrap().push(dest_hash);
         }
 
@@ -2505,20 +3297,49 @@ mod tests {
             self.iface_downs.lock().unwrap().push(id);
         }
 
-        fn on_link_established(&mut self, link_id: TypedLinkId, _dest_hash: DestHash, rtt: f64, is_initiator: bool) {
-            self.link_established.lock().unwrap().push((link_id, rtt, is_initiator));
+        fn on_link_established(
+            &mut self,
+            link_id: TypedLinkId,
+            _dest_hash: DestHash,
+            rtt: f64,
+            is_initiator: bool,
+        ) {
+            self.link_established
+                .lock()
+                .unwrap()
+                .push((link_id, rtt, is_initiator));
         }
 
-        fn on_link_closed(&mut self, link_id: TypedLinkId, _reason: Option<rns_core::link::TeardownReason>) {
+        fn on_link_closed(
+            &mut self,
+            link_id: TypedLinkId,
+            _reason: Option<rns_core::link::TeardownReason>,
+        ) {
             self.link_closed.lock().unwrap().push(link_id);
         }
 
-        fn on_remote_identified(&mut self, link_id: TypedLinkId, identity_hash: IdentityHash, _public_key: [u8; 64]) {
-            self.remote_identified.lock().unwrap().push((link_id, identity_hash));
+        fn on_remote_identified(
+            &mut self,
+            link_id: TypedLinkId,
+            identity_hash: IdentityHash,
+            _public_key: [u8; 64],
+        ) {
+            self.remote_identified
+                .lock()
+                .unwrap()
+                .push((link_id, identity_hash));
         }
 
-        fn on_resource_received(&mut self, link_id: TypedLinkId, data: Vec<u8>, _metadata: Option<Vec<u8>>) {
-            self.resources_received.lock().unwrap().push((link_id, data));
+        fn on_resource_received(
+            &mut self,
+            link_id: TypedLinkId,
+            data: Vec<u8>,
+            _metadata: Option<Vec<u8>>,
+        ) {
+            self.resources_received
+                .lock()
+                .unwrap()
+                .push((link_id, data));
         }
 
         fn on_resource_completed(&mut self, link_id: TypedLinkId) {
@@ -2530,23 +3351,38 @@ mod tests {
         }
 
         fn on_channel_message(&mut self, link_id: TypedLinkId, msgtype: u16, payload: Vec<u8>) {
-            self.channel_messages.lock().unwrap().push((link_id, msgtype, payload));
+            self.channel_messages
+                .lock()
+                .unwrap()
+                .push((link_id, msgtype, payload));
         }
 
         fn on_link_data(&mut self, link_id: TypedLinkId, context: u8, data: Vec<u8>) {
-            self.link_data.lock().unwrap().push((link_id, context, data));
+            self.link_data
+                .lock()
+                .unwrap()
+                .push((link_id, context, data));
         }
 
         fn on_response(&mut self, link_id: TypedLinkId, request_id: [u8; 16], data: Vec<u8>) {
-            self.responses.lock().unwrap().push((link_id, request_id, data));
+            self.responses
+                .lock()
+                .unwrap()
+                .push((link_id, request_id, data));
         }
 
         fn on_proof(&mut self, dest_hash: DestHash, packet_hash: PacketHash, rtt: f64) {
-            self.proofs.lock().unwrap().push((dest_hash, packet_hash, rtt));
+            self.proofs
+                .lock()
+                .unwrap()
+                .push((dest_hash, packet_hash, rtt));
         }
 
         fn on_proof_requested(&mut self, dest_hash: DestHash, packet_hash: PacketHash) -> bool {
-            self.proof_requested.lock().unwrap().push((dest_hash, packet_hash));
+            self.proof_requested
+                .lock()
+                .unwrap()
+                .push((dest_hash, packet_hash));
             true
         }
     }
@@ -2588,23 +3424,13 @@ mod tests {
 
     /// Build a valid announce packet that the engine will accept.
     fn build_announce_packet(identity: &Identity) -> Vec<u8> {
-        let dest_hash = rns_core::destination::destination_hash(
-            "test",
-            &["app"],
-            Some(identity.hash()),
-        );
+        let dest_hash =
+            rns_core::destination::destination_hash("test", &["app"], Some(identity.hash()));
         let name_hash = rns_core::destination::name_hash("test", &["app"]);
         let random_hash = [0x42u8; 10];
 
-        let (announce_data, _has_ratchet) = AnnounceData::pack(
-            identity,
-            &dest_hash,
-            &name_hash,
-            &random_hash,
-            None,
-            None,
-        )
-        .unwrap();
+        let (announce_data, _has_ratchet) =
+            AnnounceData::pack(identity, &dest_hash, &name_hash, &random_hash, None, None).unwrap();
 
         let flags = PacketFlags {
             header_type: constants::HEADER_1,
@@ -2614,7 +3440,15 @@ mod tests {
             packet_type: constants::PACKET_TYPE_ANNOUNCE,
         };
 
-        let packet = RawPacket::pack(flags, 0, &dest_hash, None, constants::CONTEXT_NONE, &announce_data).unwrap();
+        let packet = RawPacket::pack(
+            flags,
+            0,
+            &dest_hash,
+            None,
+            constants::CONTEXT_NONE,
+            &announce_data,
+        )
+        .unwrap();
         packet.raw
     }
 
@@ -2623,7 +3457,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, announces, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -2631,13 +3470,19 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info.clone());
         let (writer, _sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         let identity = Identity::new(&mut OsRng);
         let announce_raw = build_announce_packet(&identity);
 
         // Send frame then shutdown
-        tx.send(Event::Frame { interface_id: InterfaceId(1), data: announce_raw }).unwrap();
+        tx.send(Event::Frame {
+            interface_id: InterfaceId(1),
+            data: announce_raw,
+        })
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -2649,13 +3494,20 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
         );
         let (writer, sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         driver.dispatch_all(vec![TransportAction::SendOnInterface {
             interface: InterfaceId(1),
@@ -2673,7 +3525,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -2681,8 +3538,12 @@ mod tests {
 
         let (w1, sent1) = MockWriter::new();
         let (w2, sent2) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(w1), true));
-        driver.interfaces.insert(InterfaceId(2), make_entry(2, Box::new(w2), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(w1), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(2), make_entry(2, Box::new(w2), true));
 
         driver.dispatch_all(vec![TransportAction::BroadcastOnAllInterfaces {
             raw: vec![0xAA],
@@ -2700,7 +3561,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -2708,8 +3574,12 @@ mod tests {
 
         let (w1, sent1) = MockWriter::new();
         let (w2, sent2) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(w1), true));
-        driver.interfaces.insert(InterfaceId(2), make_entry(2, Box::new(w2), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(w1), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(2), make_entry(2, Box::new(w2), true));
 
         driver.dispatch_all(vec![TransportAction::BroadcastOnAllInterfaces {
             raw: vec![0xBB],
@@ -2727,7 +3597,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: true, identity_hash: Some([0x42; 16]), prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: true,
+                identity_hash: Some([0x42; 16]),
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -2735,7 +3610,9 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info.clone());
         let (writer, _sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         // Send Tick then Shutdown
         tx.send(Event::Tick).unwrap();
@@ -2749,7 +3626,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -2764,7 +3646,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, announces, paths, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -2772,12 +3659,18 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info.clone());
         let (writer, _sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         let identity = Identity::new(&mut OsRng);
         let announce_raw = build_announce_packet(&identity);
 
-        tx.send(Event::Frame { interface_id: InterfaceId(1), data: announce_raw }).unwrap();
+        tx.send(Event::Frame {
+            interface_id: InterfaceId(1),
+            data: announce_raw,
+        })
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -2795,7 +3688,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -2803,8 +3701,12 @@ mod tests {
 
         let (w1, sent1) = MockWriter::new();
         let (w2, sent2) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(w1), false)); // offline
-        driver.interfaces.insert(InterfaceId(2), make_entry(2, Box::new(w2), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(w1), false)); // offline
+        driver
+            .interfaces
+            .insert(InterfaceId(2), make_entry(2, Box::new(w2), true));
 
         // Direct send to offline interface: should be skipped
         driver.dispatch_all(vec![TransportAction::SendOnInterface {
@@ -2829,18 +3731,30 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
         );
 
         let (w_old, sent_old) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(w_old), false));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(w_old), false));
 
         // Simulate reconnect: InterfaceUp with new writer
         let (w_new, sent_new) = MockWriter::new();
-        tx.send(Event::InterfaceUp(InterfaceId(1), Some(Box::new(w_new)), None)).unwrap();
+        tx.send(Event::InterfaceUp(
+            InterfaceId(1),
+            Some(Box::new(w_new)),
+            None,
+        ))
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -2867,7 +3781,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, iface_ups, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -2910,7 +3829,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, iface_downs) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -2920,16 +3844,19 @@ mod tests {
         let info = make_interface_info(200);
         driver.engine.register_interface(info.clone());
         let (writer, _sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(200), InterfaceEntry {
-            id: InterfaceId(200),
-            info,
-            writer: Box::new(writer),
-            online: true,
-            dynamic: true,
-            ifac: None,
-            stats: InterfaceStats::default(),
-            interface_type: String::new(),
-        });
+        driver.interfaces.insert(
+            InterfaceId(200),
+            InterfaceEntry {
+                id: InterfaceId(200),
+                info,
+                writer: Box::new(writer),
+                online: true,
+                dynamic: true,
+                ifac: None,
+                stats: InterfaceStats::default(),
+                interface_type: String::new(),
+            },
+        );
 
         // InterfaceDown for dynamic → should be removed entirely
         tx.send(Event::InterfaceDown(InterfaceId(200))).unwrap();
@@ -2946,7 +3873,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, iface_ups, iface_downs) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -2954,9 +3886,12 @@ mod tests {
 
         // Static interface
         let (writer, _) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), false));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), false));
 
-        tx.send(Event::InterfaceUp(InterfaceId(1), None, None)).unwrap();
+        tx.send(Event::InterfaceUp(InterfaceId(1), None, None))
+            .unwrap();
         tx.send(Event::InterfaceDown(InterfaceId(1))).unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
@@ -2977,7 +3912,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -2985,13 +3925,19 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info.clone());
         let (writer, _sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         let identity = Identity::new(&mut OsRng);
         let announce_raw = build_announce_packet(&identity);
         let announce_len = announce_raw.len() as u64;
 
-        tx.send(Event::Frame { interface_id: InterfaceId(1), data: announce_raw }).unwrap();
+        tx.send(Event::Frame {
+            interface_id: InterfaceId(1),
+            data: announce_raw,
+        })
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -3005,13 +3951,20 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
         );
         let (writer, _sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         driver.dispatch_all(vec![TransportAction::SendOnInterface {
             interface: InterfaceId(1),
@@ -3030,15 +3983,24 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
         );
         let (w1, _s1) = MockWriter::new();
         let (w2, _s2) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(w1), true));
-        driver.interfaces.insert(InterfaceId(2), make_entry(2, Box::new(w2), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(w1), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(2), make_entry(2, Box::new(w2), true));
 
         driver.dispatch_all(vec![TransportAction::BroadcastOnAllInterfaces {
             raw: vec![0xAA, 0xBB],
@@ -3059,16 +4021,24 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: true, identity_hash: Some([0x42; 16]), prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: true,
+                identity_hash: Some([0x42; 16]),
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
         );
         let (writer, _sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         let (resp_tx, resp_rx) = mpsc::channel();
-        tx.send(Event::Query(QueryRequest::InterfaceStats, resp_tx)).unwrap();
+        tx.send(Event::Query(QueryRequest::InterfaceStats, resp_tx))
+            .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -3090,7 +4060,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3098,15 +4073,25 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info);
         let (writer, _sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         // Feed an announce to create a path entry
         let identity = Identity::new(&mut OsRng);
         let announce_raw = build_announce_packet(&identity);
-        tx.send(Event::Frame { interface_id: InterfaceId(1), data: announce_raw }).unwrap();
+        tx.send(Event::Frame {
+            interface_id: InterfaceId(1),
+            data: announce_raw,
+        })
+        .unwrap();
 
         let (resp_tx, resp_rx) = mpsc::channel();
-        tx.send(Event::Query(QueryRequest::PathTable { max_hops: None }, resp_tx)).unwrap();
+        tx.send(Event::Query(
+            QueryRequest::PathTable { max_hops: None },
+            resp_tx,
+        ))
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -3125,7 +4110,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3133,19 +4123,25 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info);
         let (writer, _sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         // Feed an announce to create a path entry
         let identity = Identity::new(&mut OsRng);
         let announce_raw = build_announce_packet(&identity);
-        let dest_hash = rns_core::destination::destination_hash(
-            "test", &["app"], Some(identity.hash()),
-        );
+        let dest_hash =
+            rns_core::destination::destination_hash("test", &["app"], Some(identity.hash()));
 
-        tx.send(Event::Frame { interface_id: InterfaceId(1), data: announce_raw }).unwrap();
+        tx.send(Event::Frame {
+            interface_id: InterfaceId(1),
+            data: announce_raw,
+        })
+        .unwrap();
 
         let (resp_tx, resp_rx) = mpsc::channel();
-        tx.send(Event::Query(QueryRequest::DropPath { dest_hash }, resp_tx)).unwrap();
+        tx.send(Event::Query(QueryRequest::DropPath { dest_hash }, resp_tx))
+            .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -3163,7 +4159,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3171,7 +4172,9 @@ mod tests {
         let (writer, sent) = MockWriter::new();
         let info = make_interface_info(1);
         driver.engine.register_interface(info);
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         // Build a DATA packet to a destination
         let dest = [0xAA; 16];
@@ -3182,13 +4185,15 @@ mod tests {
             destination_type: constants::DESTINATION_PLAIN,
             packet_type: constants::PACKET_TYPE_DATA,
         };
-        let packet = RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"hello").unwrap();
+        let packet =
+            RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"hello").unwrap();
 
         tx.send(Event::SendOutbound {
             raw: packet.raw,
             dest_type: constants::DESTINATION_PLAIN,
             attached_interface: None,
-        }).unwrap();
+        })
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -3201,7 +4206,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, deliveries, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3209,7 +4219,9 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info);
         let (writer, _sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         let dest = [0xBB; 16];
 
@@ -3217,7 +4229,8 @@ mod tests {
         tx.send(Event::RegisterDestination {
             dest_hash: dest,
             dest_type: constants::DESTINATION_SINGLE,
-        }).unwrap();
+        })
+        .unwrap();
 
         let flags = PacketFlags {
             header_type: constants::HEADER_1,
@@ -3226,8 +4239,13 @@ mod tests {
             destination_type: constants::DESTINATION_SINGLE,
             packet_type: constants::PACKET_TYPE_DATA,
         };
-        let packet = RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"data").unwrap();
-        tx.send(Event::Frame { interface_id: InterfaceId(1), data: packet.raw }).unwrap();
+        let packet =
+            RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"data").unwrap();
+        tx.send(Event::Frame {
+            interface_id: InterfaceId(1),
+            data: packet.raw,
+        })
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -3240,14 +4258,20 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: true, identity_hash: Some([0xAA; 16]), prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: true,
+                identity_hash: Some([0xAA; 16]),
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
         );
 
         let (resp_tx, resp_rx) = mpsc::channel();
-        tx.send(Event::Query(QueryRequest::TransportIdentity, resp_tx)).unwrap();
+        tx.send(Event::Query(QueryRequest::TransportIdentity, resp_tx))
+            .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -3264,14 +4288,20 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
         );
 
         let (resp_tx, resp_rx) = mpsc::channel();
-        tx.send(Event::Query(QueryRequest::LinkCount, resp_tx)).unwrap();
+        tx.send(Event::Query(QueryRequest::LinkCount, resp_tx))
+            .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -3286,14 +4316,20 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
         );
 
         let (resp_tx, resp_rx) = mpsc::channel();
-        tx.send(Event::Query(QueryRequest::RateTable, resp_tx)).unwrap();
+        tx.send(Event::Query(QueryRequest::RateTable, resp_tx))
+            .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -3308,7 +4344,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3316,7 +4357,11 @@ mod tests {
 
         let dest = [0xBB; 16];
         let (resp_tx, resp_rx) = mpsc::channel();
-        tx.send(Event::Query(QueryRequest::NextHop { dest_hash: dest }, resp_tx)).unwrap();
+        tx.send(Event::Query(
+            QueryRequest::NextHop { dest_hash: dest },
+            resp_tx,
+        ))
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -3331,7 +4376,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3339,7 +4389,11 @@ mod tests {
 
         let dest = [0xCC; 16];
         let (resp_tx, resp_rx) = mpsc::channel();
-        tx.send(Event::Query(QueryRequest::NextHopIfName { dest_hash: dest }, resp_tx)).unwrap();
+        tx.send(Event::Query(
+            QueryRequest::NextHopIfName { dest_hash: dest },
+            resp_tx,
+        ))
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -3354,7 +4408,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3363,9 +4422,12 @@ mod tests {
         let transport = [0xDD; 16];
         let (resp_tx, resp_rx) = mpsc::channel();
         tx.send(Event::Query(
-            QueryRequest::DropAllVia { transport_hash: transport },
+            QueryRequest::DropAllVia {
+                transport_hash: transport,
+            },
             resp_tx,
-        )).unwrap();
+        ))
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -3380,14 +4442,20 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
         );
 
         let (resp_tx, resp_rx) = mpsc::channel();
-        tx.send(Event::Query(QueryRequest::DropAnnounceQueues, resp_tx)).unwrap();
+        tx.send(Event::Query(QueryRequest::DropAnnounceQueues, resp_tx))
+            .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -3406,7 +4474,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3414,7 +4487,9 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info);
         let (writer, _sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         let mut rng = OsRng;
         let sig_prv = rns_crypto::ed25519::Ed25519PrivateKey::generate(&mut rng);
@@ -3427,7 +4502,8 @@ mod tests {
             sig_prv_bytes,
             sig_pub_bytes,
             resource_strategy: 0,
-        }).unwrap();
+        })
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -3440,7 +4516,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _link_established, _, _) = MockCallbacks::with_link_tracking();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3448,7 +4529,9 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info);
         let (writer, _sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         let dest_hash = [0xDD; 16];
         let dummy_sig_pub = [0xAA; 32];
@@ -3458,7 +4541,8 @@ mod tests {
             dest_hash,
             dest_sig_pub_bytes: dummy_sig_pub,
             response_tx: resp_tx,
-        }).unwrap();
+        })
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -3482,7 +4566,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3490,14 +4579,21 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info);
         let (writer, _sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         // Register a link destination
         let mut rng = OsRng;
         let sig_prv = rns_crypto::ed25519::Ed25519PrivateKey::generate(&mut rng);
         let sig_pub_bytes = sig_prv.public_key().public_bytes();
         let dest_hash = [0xEE; 16];
-        driver.link_manager.register_link_destination(dest_hash, sig_prv, sig_pub_bytes, crate::link_manager::ResourceStrategy::AcceptNone);
+        driver.link_manager.register_link_destination(
+            dest_hash,
+            sig_prv,
+            sig_pub_bytes,
+            crate::link_manager::ResourceStrategy::AcceptNone,
+        );
 
         // dispatch_all with a DeliverLocal for that dest should route to link_manager
         // (not to callbacks). We can't easily test this via run() since we need
@@ -3515,7 +4611,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, link_closed, _) = MockCallbacks::with_link_tracking();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3523,7 +4624,9 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info);
         let (writer, _sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         // Create a link first
         let (resp_tx, resp_rx) = mpsc::channel();
@@ -3531,7 +4634,8 @@ mod tests {
             dest_hash: [0xDD; 16],
             dest_sig_pub_bytes: [0xAA; 32],
             response_tx: resp_tx,
-        }).unwrap();
+        })
+        .unwrap();
         // Then tear it down
         // We can't receive resp_rx yet since driver.run() hasn't started,
         // but we know the link_id will be created. Send teardown after CreateLink.
@@ -3557,7 +4661,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3565,16 +4674,25 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info);
         let (writer, _sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         // Create a link via link_manager directly
         let mut rng = OsRng;
         let dummy_sig = [0xAA; 32];
-        driver.link_manager.create_link(&[0xDD; 16], &dummy_sig, 1, constants::MTU as u32, &mut rng);
+        driver.link_manager.create_link(
+            &[0xDD; 16],
+            &dummy_sig,
+            1,
+            constants::MTU as u32,
+            &mut rng,
+        );
 
         // Query link count — should include link_manager links
         let (resp_tx, resp_rx) = mpsc::channel();
-        tx.send(Event::Query(QueryRequest::LinkCount, resp_tx)).unwrap();
+        tx.send(Event::Query(QueryRequest::LinkCount, resp_tx))
+            .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -3589,7 +4707,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3599,7 +4722,8 @@ mod tests {
             path: "/status".to_string(),
             allowed_list: None,
             handler: Box::new(|_link_id, _path, _data, _remote| Some(b"OK".to_vec())),
-        }).unwrap();
+        })
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -3616,7 +4740,12 @@ mod tests {
         let identity = Identity::new(&mut OsRng);
         let identity_hash = *identity.hash();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: true, identity_hash: Some(identity_hash), prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: true,
+                identity_hash: Some(identity_hash),
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3626,7 +4755,9 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info.clone());
         let (writer, sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         // Enable management announces
         driver.management_config.enable_remote_management = true;
@@ -3642,8 +4773,10 @@ mod tests {
 
         // Should have sent at least one packet (the management announce)
         let sent_packets = sent.lock().unwrap();
-        assert!(!sent_packets.is_empty(),
-            "Management announce should be sent after startup delay");
+        assert!(
+            !sent_packets.is_empty(),
+            "Management announce should be sent after startup delay"
+        );
     }
 
     #[test]
@@ -3653,7 +4786,12 @@ mod tests {
         let identity = Identity::new(&mut OsRng);
         let identity_hash = *identity.hash();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: true, identity_hash: Some(identity_hash), prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: true,
+                identity_hash: Some(identity_hash),
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3662,7 +4800,9 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info.clone());
         let (writer, sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         // Management announces disabled (default)
         driver.transport_identity = Some(identity);
@@ -3674,8 +4814,10 @@ mod tests {
 
         // Should NOT have sent any packets
         let sent_packets = sent.lock().unwrap();
-        assert!(sent_packets.is_empty(),
-            "No announces should be sent when management is disabled");
+        assert!(
+            sent_packets.is_empty(),
+            "No announces should be sent when management is disabled"
+        );
     }
 
     #[test]
@@ -3685,7 +4827,12 @@ mod tests {
         let identity = Identity::new(&mut OsRng);
         let identity_hash = *identity.hash();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: true, identity_hash: Some(identity_hash), prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: true,
+                identity_hash: Some(identity_hash),
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3694,7 +4841,9 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info.clone());
         let (writer, sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         driver.management_config.enable_remote_management = true;
         driver.transport_identity = Some(identity);
@@ -3706,8 +4855,7 @@ mod tests {
         driver.run();
 
         let sent_packets = sent.lock().unwrap();
-        assert!(sent_packets.is_empty(),
-            "No announces before startup delay");
+        assert!(sent_packets.is_empty(), "No announces before startup delay");
     }
 
     // =========================================================================
@@ -3719,7 +4867,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3727,16 +4880,21 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info);
         let (writer, _sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         let identity = Identity::new(&mut OsRng);
         let announce_raw = build_announce_packet(&identity);
 
-        let dest_hash = rns_core::destination::destination_hash(
-            "test", &["app"], Some(identity.hash()),
-        );
+        let dest_hash =
+            rns_core::destination::destination_hash("test", &["app"], Some(identity.hash()));
 
-        tx.send(Event::Frame { interface_id: InterfaceId(1), data: announce_raw }).unwrap();
+        tx.send(Event::Frame {
+            interface_id: InterfaceId(1),
+            data: announce_raw,
+        })
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -3754,7 +4912,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3762,22 +4925,34 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info);
         let (writer, _sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         // No path yet
         let (resp_tx, resp_rx) = mpsc::channel();
-        tx.send(Event::Query(QueryRequest::HasPath { dest_hash: [0xAA; 16] }, resp_tx)).unwrap();
+        tx.send(Event::Query(
+            QueryRequest::HasPath {
+                dest_hash: [0xAA; 16],
+            },
+            resp_tx,
+        ))
+        .unwrap();
 
         // Feed an announce to create a path
         let identity = Identity::new(&mut OsRng);
         let announce_raw = build_announce_packet(&identity);
-        let dest_hash = rns_core::destination::destination_hash(
-            "test", &["app"], Some(identity.hash()),
-        );
-        tx.send(Event::Frame { interface_id: InterfaceId(1), data: announce_raw }).unwrap();
+        let dest_hash =
+            rns_core::destination::destination_hash("test", &["app"], Some(identity.hash()));
+        tx.send(Event::Frame {
+            interface_id: InterfaceId(1),
+            data: announce_raw,
+        })
+        .unwrap();
 
         let (resp_tx2, resp_rx2) = mpsc::channel();
-        tx.send(Event::Query(QueryRequest::HasPath { dest_hash }, resp_tx2)).unwrap();
+        tx.send(Event::Query(QueryRequest::HasPath { dest_hash }, resp_tx2))
+            .unwrap();
 
         tx.send(Event::Shutdown).unwrap();
         driver.run();
@@ -3800,7 +4975,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3808,19 +4988,25 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info);
         let (writer, _sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         // Feed an announce
         let identity = Identity::new(&mut OsRng);
         let announce_raw = build_announce_packet(&identity);
-        let dest_hash = rns_core::destination::destination_hash(
-            "test", &["app"], Some(identity.hash()),
-        );
+        let dest_hash =
+            rns_core::destination::destination_hash("test", &["app"], Some(identity.hash()));
 
-        tx.send(Event::Frame { interface_id: InterfaceId(1), data: announce_raw }).unwrap();
+        tx.send(Event::Frame {
+            interface_id: InterfaceId(1),
+            data: announce_raw,
+        })
+        .unwrap();
 
         let (resp_tx, resp_rx) = mpsc::channel();
-        tx.send(Event::Query(QueryRequest::HopsTo { dest_hash }, resp_tx)).unwrap();
+        tx.send(Event::Query(QueryRequest::HopsTo { dest_hash }, resp_tx))
+            .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -3835,7 +5021,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3843,23 +5034,38 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info);
         let (writer, _sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         let identity = Identity::new(&mut OsRng);
         let announce_raw = build_announce_packet(&identity);
-        let dest_hash = rns_core::destination::destination_hash(
-            "test", &["app"], Some(identity.hash()),
-        );
+        let dest_hash =
+            rns_core::destination::destination_hash("test", &["app"], Some(identity.hash()));
 
-        tx.send(Event::Frame { interface_id: InterfaceId(1), data: announce_raw }).unwrap();
+        tx.send(Event::Frame {
+            interface_id: InterfaceId(1),
+            data: announce_raw,
+        })
+        .unwrap();
 
         // Recall identity
         let (resp_tx, resp_rx) = mpsc::channel();
-        tx.send(Event::Query(QueryRequest::RecallIdentity { dest_hash }, resp_tx)).unwrap();
+        tx.send(Event::Query(
+            QueryRequest::RecallIdentity { dest_hash },
+            resp_tx,
+        ))
+        .unwrap();
 
         // Also recall unknown destination
         let (resp_tx2, resp_rx2) = mpsc::channel();
-        tx.send(Event::Query(QueryRequest::RecallIdentity { dest_hash: [0xFF; 16] }, resp_tx2)).unwrap();
+        tx.send(Event::Query(
+            QueryRequest::RecallIdentity {
+                dest_hash: [0xFF; 16],
+            },
+            resp_tx2,
+        ))
+        .unwrap();
 
         tx.send(Event::Shutdown).unwrap();
         driver.run();
@@ -3885,7 +5091,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3893,16 +5104,24 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info);
         let (writer, sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         // Send path request
-        tx.send(Event::RequestPath { dest_hash: [0xAA; 16] }).unwrap();
+        tx.send(Event::RequestPath {
+            dest_hash: [0xAA; 16],
+        })
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
         // Should have sent a packet on the wire (broadcast)
         let sent_packets = sent.lock().unwrap();
-        assert!(!sent_packets.is_empty(), "Path request should be sent on wire");
+        assert!(
+            !sent_packets.is_empty(),
+            "Path request should be sent on wire"
+        );
 
         // Verify the sent packet is a DATA PLAIN BROADCAST packet
         let raw = &sent_packets[0];
@@ -3917,7 +5136,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: true, identity_hash: Some([0xBB; 16]), prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: true,
+                identity_hash: Some([0xBB; 16]),
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3925,9 +5149,14 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info);
         let (writer, sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
-        tx.send(Event::RequestPath { dest_hash: [0xAA; 16] }).unwrap();
+        tx.send(Event::RequestPath {
+            dest_hash: [0xAA; 16],
+        })
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -3938,9 +5167,21 @@ mod tests {
         let raw = &sent_packets[0];
         if let Ok(packet) = RawPacket::unpack(raw) {
             // Data: dest_hash(16) + transport_id(16) + random_tag(16) = 48 bytes
-            assert_eq!(packet.data.len(), 48, "Path request data should be 48 bytes with transport_id");
-            assert_eq!(&packet.data[..16], &[0xAA; 16], "First 16 bytes should be dest_hash");
-            assert_eq!(&packet.data[16..32], &[0xBB; 16], "Next 16 bytes should be transport_id");
+            assert_eq!(
+                packet.data.len(),
+                48,
+                "Path request data should be 48 bytes with transport_id"
+            );
+            assert_eq!(
+                &packet.data[..16],
+                &[0xAA; 16],
+                "First 16 bytes should be dest_hash"
+            );
+            assert_eq!(
+                &packet.data[16..32],
+                &[0xBB; 16],
+                "Next 16 bytes should be transport_id"
+            );
         } else {
             panic!("Could not unpack sent packet");
         }
@@ -3951,16 +5192,20 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
         );
 
         // The path request dest should be registered as a local PLAIN destination
-        let expected_dest = rns_core::destination::destination_hash(
-            "rnstransport", &["path", "request"], None,
-        );
+        let expected_dest =
+            rns_core::destination::destination_hash("rnstransport", &["path", "request"], None);
         assert_eq!(driver.path_request_dest, expected_dest);
 
         drop(tx);
@@ -3975,7 +5220,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -3989,7 +5239,8 @@ mod tests {
             dest_hash: dest,
             strategy: rns_core::types::ProofStrategy::ProveAll,
             signing_key: Some(prv_key),
-        }).unwrap();
+        })
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -4004,7 +5255,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -4015,7 +5271,8 @@ mod tests {
             dest_hash: dest,
             strategy: rns_core::types::ProofStrategy::ProveNone,
             signing_key: None,
-        }).unwrap();
+        })
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -4030,7 +5287,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -4038,7 +5300,9 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info);
         let (writer, _sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         // Build a DATA packet
         let dest = [0xCC; 16];
@@ -4049,14 +5313,16 @@ mod tests {
             destination_type: constants::DESTINATION_PLAIN,
             packet_type: constants::PACKET_TYPE_DATA,
         };
-        let packet = RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"test data").unwrap();
+        let packet =
+            RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"test data").unwrap();
         let expected_hash = packet.packet_hash;
 
         tx.send(Event::SendOutbound {
             raw: packet.raw,
             dest_type: constants::DESTINATION_PLAIN,
             attached_interface: None,
-        }).unwrap();
+        })
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -4071,7 +5337,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, deliveries, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -4079,17 +5350,24 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info);
         let (writer, sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         // Register a destination with ProveAll
         let dest = [0xDD; 16];
         let identity = Identity::new(&mut OsRng);
         let prv_key = identity.get_private_key().unwrap();
-        driver.engine.register_destination(dest, constants::DESTINATION_SINGLE);
-        driver.proof_strategies.insert(dest, (
-            rns_core::types::ProofStrategy::ProveAll,
-            Some(Identity::from_private_key(&prv_key)),
-        ));
+        driver
+            .engine
+            .register_destination(dest, constants::DESTINATION_SINGLE);
+        driver.proof_strategies.insert(
+            dest,
+            (
+                rns_core::types::ProofStrategy::ProveAll,
+                Some(Identity::from_private_key(&prv_key)),
+            ),
+        );
 
         // Send a DATA packet to that destination
         let flags = PacketFlags {
@@ -4099,9 +5377,14 @@ mod tests {
             destination_type: constants::DESTINATION_SINGLE,
             packet_type: constants::PACKET_TYPE_DATA,
         };
-        let packet = RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"hello").unwrap();
+        let packet =
+            RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"hello").unwrap();
 
-        tx.send(Event::Frame { interface_id: InterfaceId(1), data: packet.raw }).unwrap();
+        tx.send(Event::Frame {
+            interface_id: InterfaceId(1),
+            data: packet.raw,
+        })
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -4115,7 +5398,11 @@ mod tests {
             let flags = PacketFlags::unpack(raw[0] & 0x7F);
             flags.packet_type == constants::PACKET_TYPE_PROOF
         });
-        assert!(has_proof, "ProveAll should generate a proof packet: sent {} packets", sent_packets.len());
+        assert!(
+            has_proof,
+            "ProveAll should generate a proof packet: sent {} packets",
+            sent_packets.len()
+        );
     }
 
     #[test]
@@ -4123,7 +5410,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, deliveries, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -4131,15 +5423,18 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info);
         let (writer, sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         // Register a destination with ProveNone
         let dest = [0xDD; 16];
-        driver.engine.register_destination(dest, constants::DESTINATION_SINGLE);
-        driver.proof_strategies.insert(dest, (
-            rns_core::types::ProofStrategy::ProveNone,
-            None,
-        ));
+        driver
+            .engine
+            .register_destination(dest, constants::DESTINATION_SINGLE);
+        driver
+            .proof_strategies
+            .insert(dest, (rns_core::types::ProofStrategy::ProveNone, None));
 
         // Send a DATA packet to that destination
         let flags = PacketFlags {
@@ -4149,9 +5444,14 @@ mod tests {
             destination_type: constants::DESTINATION_SINGLE,
             packet_type: constants::PACKET_TYPE_DATA,
         };
-        let packet = RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"hello").unwrap();
+        let packet =
+            RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"hello").unwrap();
 
-        tx.send(Event::Frame { interface_id: InterfaceId(1), data: packet.raw }).unwrap();
+        tx.send(Event::Frame {
+            interface_id: InterfaceId(1),
+            data: packet.raw,
+        })
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -4172,7 +5472,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, deliveries, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -4180,11 +5485,15 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info);
         let (writer, sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         // Register destination but NO proof strategy
         let dest = [0xDD; 16];
-        driver.engine.register_destination(dest, constants::DESTINATION_SINGLE);
+        driver
+            .engine
+            .register_destination(dest, constants::DESTINATION_SINGLE);
 
         let flags = PacketFlags {
             header_type: constants::HEADER_1,
@@ -4193,9 +5502,14 @@ mod tests {
             destination_type: constants::DESTINATION_SINGLE,
             packet_type: constants::PACKET_TYPE_DATA,
         };
-        let packet = RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"hello").unwrap();
+        let packet =
+            RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"hello").unwrap();
 
-        tx.send(Event::Frame { interface_id: InterfaceId(1), data: packet.raw }).unwrap();
+        tx.send(Event::Frame {
+            interface_id: InterfaceId(1),
+            data: packet.raw,
+        })
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -4234,7 +5548,12 @@ mod tests {
         };
 
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -4242,17 +5561,24 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info);
         let (writer, sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         // Register dest with ProveApp
         let dest = [0xDD; 16];
         let identity = Identity::new(&mut OsRng);
         let prv_key = identity.get_private_key().unwrap();
-        driver.engine.register_destination(dest, constants::DESTINATION_SINGLE);
-        driver.proof_strategies.insert(dest, (
-            rns_core::types::ProofStrategy::ProveApp,
-            Some(Identity::from_private_key(&prv_key)),
-        ));
+        driver
+            .engine
+            .register_destination(dest, constants::DESTINATION_SINGLE);
+        driver.proof_strategies.insert(
+            dest,
+            (
+                rns_core::types::ProofStrategy::ProveApp,
+                Some(Identity::from_private_key(&prv_key)),
+            ),
+        );
 
         let flags = PacketFlags {
             header_type: constants::HEADER_1,
@@ -4261,9 +5587,14 @@ mod tests {
             destination_type: constants::DESTINATION_SINGLE,
             packet_type: constants::PACKET_TYPE_DATA,
         };
-        let packet = RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"app test").unwrap();
+        let packet =
+            RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"app test").unwrap();
 
-        tx.send(Event::Frame { interface_id: InterfaceId(1), data: packet.raw }).unwrap();
+        tx.send(Event::Frame {
+            interface_id: InterfaceId(1),
+            data: packet.raw,
+        })
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -4278,7 +5609,10 @@ mod tests {
             let flags = PacketFlags::unpack(raw[0] & 0x7F);
             flags.packet_type == constants::PACKET_TYPE_PROOF
         });
-        assert!(has_proof, "ProveApp (callback returns true) should generate a proof");
+        assert!(
+            has_proof,
+            "ProveApp (callback returns true) should generate a proof"
+        );
     }
 
     #[test]
@@ -4305,7 +5639,12 @@ mod tests {
         };
 
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -4313,11 +5652,15 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info);
         let (writer, _sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         // Register a destination so proof packets can be delivered locally
         let dest = [0xEE; 16];
-        driver.engine.register_destination(dest, constants::DESTINATION_SINGLE);
+        driver
+            .engine
+            .register_destination(dest, constants::DESTINATION_SINGLE);
 
         // Simulate a sent packet that we're tracking
         let tracked_hash = [0x42u8; 32];
@@ -4336,9 +5679,14 @@ mod tests {
             destination_type: constants::DESTINATION_SINGLE,
             packet_type: constants::PACKET_TYPE_PROOF,
         };
-        let packet = RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, &proof_data).unwrap();
+        let packet =
+            RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, &proof_data).unwrap();
 
-        tx.send(Event::Frame { interface_id: InterfaceId(1), data: packet.raw }).unwrap();
+        tx.send(Event::Frame {
+            interface_id: InterfaceId(1),
+            data: packet.raw,
+        })
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -4347,7 +5695,11 @@ mod tests {
         assert_eq!(proof_list.len(), 1);
         assert_eq!(proof_list[0].0, DestHash(dest));
         assert_eq!(proof_list[0].1, PacketHash(tracked_hash));
-        assert!(proof_list[0].2 >= 0.4, "RTT should be approximately 0.5s, got {}", proof_list[0].2);
+        assert!(
+            proof_list[0].2 >= 0.4,
+            "RTT should be approximately 0.5s, got {}",
+            proof_list[0].2
+        );
 
         // Tracked packet should be removed
         assert!(!driver.sent_packets.contains_key(&tracked_hash));
@@ -4377,7 +5729,12 @@ mod tests {
         };
 
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -4385,10 +5742,14 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info);
         let (writer, _sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         let dest = [0xEE; 16];
-        driver.engine.register_destination(dest, constants::DESTINATION_SINGLE);
+        driver
+            .engine
+            .register_destination(dest, constants::DESTINATION_SINGLE);
 
         // Build a PROOF packet for an untracked hash
         let unknown_hash = [0xFF; 32];
@@ -4403,9 +5764,14 @@ mod tests {
             destination_type: constants::DESTINATION_SINGLE,
             packet_type: constants::PACKET_TYPE_PROOF,
         };
-        let packet = RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, &proof_data).unwrap();
+        let packet =
+            RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, &proof_data).unwrap();
 
-        tx.send(Event::Frame { interface_id: InterfaceId(1), data: packet.raw }).unwrap();
+        tx.send(Event::Frame {
+            interface_id: InterfaceId(1),
+            data: packet.raw,
+        })
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -4438,7 +5804,12 @@ mod tests {
         };
 
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -4446,23 +5817,30 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info);
         let (writer, _sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         let dest = [0xEE; 16];
-        driver.engine.register_destination(dest, constants::DESTINATION_SINGLE);
+        driver
+            .engine
+            .register_destination(dest, constants::DESTINATION_SINGLE);
 
         // Create real identity and add to known_destinations
         let identity = Identity::new(&mut OsRng);
         let pub_key = identity.get_public_key();
-        driver.known_destinations.insert(dest, crate::destination::AnnouncedIdentity {
-            dest_hash: DestHash(dest),
-            identity_hash: IdentityHash(*identity.hash()),
-            public_key: pub_key.unwrap(),
-            app_data: None,
-            hops: 0,
-            received_at: time::now(),
-            receiving_interface: InterfaceId(0),
-        });
+        driver.known_destinations.insert(
+            dest,
+            crate::destination::AnnouncedIdentity {
+                dest_hash: DestHash(dest),
+                identity_hash: IdentityHash(*identity.hash()),
+                public_key: pub_key.unwrap(),
+                app_data: None,
+                hops: 0,
+                received_at: time::now(),
+                receiving_interface: InterfaceId(0),
+            },
+        );
 
         // Sign a packet hash with the identity
         let tracked_hash = [0x42u8; 32];
@@ -4481,9 +5859,14 @@ mod tests {
             destination_type: constants::DESTINATION_SINGLE,
             packet_type: constants::PACKET_TYPE_PROOF,
         };
-        let packet = RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, &proof_data).unwrap();
+        let packet =
+            RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, &proof_data).unwrap();
 
-        tx.send(Event::Frame { interface_id: InterfaceId(1), data: packet.raw }).unwrap();
+        tx.send(Event::Frame {
+            interface_id: InterfaceId(1),
+            data: packet.raw,
+        })
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -4519,7 +5902,12 @@ mod tests {
         };
 
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -4527,23 +5915,30 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info);
         let (writer, _sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         let dest = [0xEE; 16];
-        driver.engine.register_destination(dest, constants::DESTINATION_SINGLE);
+        driver
+            .engine
+            .register_destination(dest, constants::DESTINATION_SINGLE);
 
         // Create identity and add to known_destinations
         let identity = Identity::new(&mut OsRng);
         let pub_key = identity.get_public_key();
-        driver.known_destinations.insert(dest, crate::destination::AnnouncedIdentity {
-            dest_hash: DestHash(dest),
-            identity_hash: IdentityHash(*identity.hash()),
-            public_key: pub_key.unwrap(),
-            app_data: None,
-            hops: 0,
-            received_at: time::now(),
-            receiving_interface: InterfaceId(0),
-        });
+        driver.known_destinations.insert(
+            dest,
+            crate::destination::AnnouncedIdentity {
+                dest_hash: DestHash(dest),
+                identity_hash: IdentityHash(*identity.hash()),
+                public_key: pub_key.unwrap(),
+                app_data: None,
+                hops: 0,
+                received_at: time::now(),
+                receiving_interface: InterfaceId(0),
+            },
+        );
 
         // Track a sent packet
         let tracked_hash = [0x42u8; 32];
@@ -4562,9 +5957,14 @@ mod tests {
             destination_type: constants::DESTINATION_SINGLE,
             packet_type: constants::PACKET_TYPE_PROOF,
         };
-        let packet = RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, &proof_data).unwrap();
+        let packet =
+            RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, &proof_data).unwrap();
 
-        tx.send(Event::Frame { interface_id: InterfaceId(1), data: packet.raw }).unwrap();
+        tx.send(Event::Frame {
+            interface_id: InterfaceId(1),
+            data: packet.raw,
+        })
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -4578,7 +5978,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -4586,16 +5991,23 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info);
         let (writer, sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         let dest = [0xDD; 16];
         let identity = Identity::new(&mut OsRng);
         let prv_key = identity.get_private_key().unwrap();
-        driver.engine.register_destination(dest, constants::DESTINATION_SINGLE);
-        driver.proof_strategies.insert(dest, (
-            rns_core::types::ProofStrategy::ProveAll,
-            Some(Identity::from_private_key(&prv_key)),
-        ));
+        driver
+            .engine
+            .register_destination(dest, constants::DESTINATION_SINGLE);
+        driver.proof_strategies.insert(
+            dest,
+            (
+                rns_core::types::ProofStrategy::ProveAll,
+                Some(Identity::from_private_key(&prv_key)),
+            ),
+        );
 
         let flags = PacketFlags {
             header_type: constants::HEADER_1,
@@ -4604,10 +6016,15 @@ mod tests {
             destination_type: constants::DESTINATION_SINGLE,
             packet_type: constants::PACKET_TYPE_DATA,
         };
-        let data_packet = RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"verify me").unwrap();
+        let data_packet =
+            RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"verify me").unwrap();
         let data_packet_hash = data_packet.packet_hash;
 
-        tx.send(Event::Frame { interface_id: InterfaceId(1), data: data_packet.raw }).unwrap();
+        tx.send(Event::Frame {
+            interface_id: InterfaceId(1),
+            data: data_packet.raw,
+        })
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -4621,7 +6038,11 @@ mod tests {
 
         let proof_packet = RawPacket::unpack(proof_raw.unwrap()).unwrap();
         // Proof data should be 96 bytes: packet_hash(32) + signature(64)
-        assert_eq!(proof_packet.data.len(), 96, "Explicit proof should be 96 bytes");
+        assert_eq!(
+            proof_packet.data.len(),
+            96,
+            "Explicit proof should be 96 bytes"
+        );
 
         // Validate using rns-core's receipt module
         let result = rns_core::receipt::validate_proof(
@@ -4636,11 +6057,17 @@ mod tests {
     fn query_local_destinations_empty() {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
-        let driver_config = TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 };
+        let driver_config = TransportConfig {
+            transport_enabled: false,
+            identity_hash: None,
+            prefer_shorter_path: false,
+            max_paths_per_destination: 1,
+        };
         let mut driver = Driver::new(driver_config, rx, tx.clone(), Box::new(cbs));
 
         let (resp_tx, resp_rx) = mpsc::channel();
-        tx.send(Event::Query(QueryRequest::LocalDestinations, resp_tx)).unwrap();
+        tx.send(Event::Query(QueryRequest::LocalDestinations, resp_tx))
+            .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -4660,17 +6087,24 @@ mod tests {
     fn query_local_destinations_with_registered() {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
-        let driver_config = TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 };
+        let driver_config = TransportConfig {
+            transport_enabled: false,
+            identity_hash: None,
+            prefer_shorter_path: false,
+            max_paths_per_destination: 1,
+        };
         let mut driver = Driver::new(driver_config, rx, tx.clone(), Box::new(cbs));
 
         let dest_hash = [0xAA; 16];
         tx.send(Event::RegisterDestination {
             dest_hash,
             dest_type: rns_core::constants::DESTINATION_SINGLE,
-        }).unwrap();
+        })
+        .unwrap();
 
         let (resp_tx, resp_rx) = mpsc::channel();
-        tx.send(Event::Query(QueryRequest::LocalDestinations, resp_tx)).unwrap();
+        tx.send(Event::Query(QueryRequest::LocalDestinations, resp_tx))
+            .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -4689,7 +6123,12 @@ mod tests {
     fn query_local_destinations_tracks_link_dest() {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
-        let driver_config = TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 };
+        let driver_config = TransportConfig {
+            transport_enabled: false,
+            identity_hash: None,
+            prefer_shorter_path: false,
+            max_paths_per_destination: 1,
+        };
         let mut driver = Driver::new(driver_config, rx, tx.clone(), Box::new(cbs));
 
         let dest_hash = [0xBB; 16];
@@ -4698,10 +6137,12 @@ mod tests {
             sig_prv_bytes: [0x11; 32],
             sig_pub_bytes: [0x22; 32],
             resource_strategy: 0,
-        }).unwrap();
+        })
+        .unwrap();
 
         let (resp_tx, resp_rx) = mpsc::channel();
-        tx.send(Event::Query(QueryRequest::LocalDestinations, resp_tx)).unwrap();
+        tx.send(Event::Query(QueryRequest::LocalDestinations, resp_tx))
+            .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -4720,7 +6161,12 @@ mod tests {
     fn query_links_empty() {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
-        let driver_config = TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 };
+        let driver_config = TransportConfig {
+            transport_enabled: false,
+            identity_hash: None,
+            prefer_shorter_path: false,
+            max_paths_per_destination: 1,
+        };
         let mut driver = Driver::new(driver_config, rx, tx.clone(), Box::new(cbs));
 
         let (resp_tx, resp_rx) = mpsc::channel();
@@ -4740,11 +6186,17 @@ mod tests {
     fn query_resources_empty() {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
-        let driver_config = TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 };
+        let driver_config = TransportConfig {
+            transport_enabled: false,
+            identity_hash: None,
+            prefer_shorter_path: false,
+            max_paths_per_destination: 1,
+        };
         let mut driver = Driver::new(driver_config, rx, tx.clone(), Box::new(cbs));
 
         let (resp_tx, resp_rx) = mpsc::channel();
-        tx.send(Event::Query(QueryRequest::Resources, resp_tx)).unwrap();
+        tx.send(Event::Query(QueryRequest::Resources, resp_tx))
+            .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -4792,7 +6244,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -4800,14 +6257,20 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info);
         let (writer, _sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         // SendProbe for a dest_hash with no known identity should return None
         let (resp_tx, resp_rx) = mpsc::channel();
-        tx.send(Event::Query(QueryRequest::SendProbe {
-            dest_hash: [0xAA; 16],
-            payload_size: 16,
-        }, resp_tx)).unwrap();
+        tx.send(Event::Query(
+            QueryRequest::SendProbe {
+                dest_hash: [0xAA; 16],
+                payload_size: 16,
+            },
+            resp_tx,
+        ))
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -4822,7 +6285,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -4830,31 +6298,43 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info);
         let (writer, sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         // Inject a known identity so SendProbe can encrypt to it
         let remote_identity = Identity::new(&mut OsRng);
         let dest_hash = rns_core::destination::destination_hash(
-            "rnstransport", &["probe"], Some(remote_identity.hash()),
+            "rnstransport",
+            &["probe"],
+            Some(remote_identity.hash()),
         );
 
         // First inject the identity via announce
         let (inject_tx, inject_rx) = mpsc::channel();
-        tx.send(Event::Query(QueryRequest::InjectIdentity {
-            dest_hash,
-            identity_hash: *remote_identity.hash(),
-            public_key: remote_identity.get_public_key().unwrap(),
-            app_data: None,
-            hops: 1,
-            received_at: 0.0,
-        }, inject_tx)).unwrap();
+        tx.send(Event::Query(
+            QueryRequest::InjectIdentity {
+                dest_hash,
+                identity_hash: *remote_identity.hash(),
+                public_key: remote_identity.get_public_key().unwrap(),
+                app_data: None,
+                hops: 1,
+                received_at: 0.0,
+            },
+            inject_tx,
+        ))
+        .unwrap();
 
         // Now send the probe
         let (resp_tx, resp_rx) = mpsc::channel();
-        tx.send(Event::Query(QueryRequest::SendProbe {
-            dest_hash,
-            payload_size: 16,
-        }, resp_tx)).unwrap();
+        tx.send(Event::Query(
+            QueryRequest::SendProbe {
+                dest_hash,
+                payload_size: 16,
+            },
+            resp_tx,
+        ))
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -4889,16 +6369,25 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
         );
 
         let (resp_tx, resp_rx) = mpsc::channel();
-        tx.send(Event::Query(QueryRequest::CheckProof {
-            packet_hash: [0xBB; 32],
-        }, resp_tx)).unwrap();
+        tx.send(Event::Query(
+            QueryRequest::CheckProof {
+                packet_hash: [0xBB; 32],
+            },
+            resp_tx,
+        ))
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -4913,7 +6402,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -4921,18 +6415,26 @@ mod tests {
 
         // Pre-populate completed_proofs
         let packet_hash = [0xCC; 32];
-        driver.completed_proofs.insert(packet_hash, (0.123, time::now()));
+        driver
+            .completed_proofs
+            .insert(packet_hash, (0.123, time::now()));
 
         let (resp_tx, resp_rx) = mpsc::channel();
-        tx.send(Event::Query(QueryRequest::CheckProof {
-            packet_hash,
-        }, resp_tx)).unwrap();
+        tx.send(Event::Query(
+            QueryRequest::CheckProof { packet_hash },
+            resp_tx,
+        ))
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
         match resp_rx.recv().unwrap() {
             QueryResponse::CheckProof(Some(rtt)) => {
-                assert!((rtt - 0.123).abs() < 0.001, "RTT should be ~0.123, got {}", rtt);
+                assert!(
+                    (rtt - 0.123).abs() < 0.001,
+                    "RTT should be ~0.123, got {}",
+                    rtt
+                );
             }
             other => panic!("expected CheckProof(Some(..)), got {:?}", other),
         }
@@ -4964,7 +6466,12 @@ mod tests {
         };
 
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -4972,17 +6479,24 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info);
         let (writer, sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         // Register a destination with ProveAll so we can get a proof back
         let dest = [0xDD; 16];
         let identity = Identity::new(&mut OsRng);
         let prv_key = identity.get_private_key().unwrap();
-        driver.engine.register_destination(dest, constants::DESTINATION_SINGLE);
-        driver.proof_strategies.insert(dest, (
-            rns_core::types::ProofStrategy::ProveAll,
-            Some(Identity::from_private_key(&prv_key)),
-        ));
+        driver
+            .engine
+            .register_destination(dest, constants::DESTINATION_SINGLE);
+        driver.proof_strategies.insert(
+            dest,
+            (
+                rns_core::types::ProofStrategy::ProveAll,
+                Some(Identity::from_private_key(&prv_key)),
+            ),
+        );
 
         // Build and send a DATA packet to the dest (this creates a sent_packet + proof)
         let flags = PacketFlags {
@@ -4992,23 +6506,40 @@ mod tests {
             destination_type: constants::DESTINATION_SINGLE,
             packet_type: constants::PACKET_TYPE_DATA,
         };
-        let data_packet = RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"probe data").unwrap();
+        let data_packet = RawPacket::pack(
+            flags,
+            0,
+            &dest,
+            None,
+            constants::CONTEXT_NONE,
+            b"probe data",
+        )
+        .unwrap();
         let data_packet_hash = data_packet.packet_hash;
 
         // Track it as a sent packet so the proof handler recognizes it
-        driver.sent_packets.insert(data_packet_hash, (dest, time::now()));
+        driver
+            .sent_packets
+            .insert(data_packet_hash, (dest, time::now()));
 
         // Deliver the frame — this generates a proof which gets sent on wire
-        tx.send(Event::Frame { interface_id: InterfaceId(1), data: data_packet.raw }).unwrap();
+        tx.send(Event::Frame {
+            interface_id: InterfaceId(1),
+            data: data_packet.raw,
+        })
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
         // The proof was generated and sent on the wire
         let sent_packets = sent.lock().unwrap();
-        let proof_packets: Vec<_> = sent_packets.iter().filter(|raw| {
-            let flags = PacketFlags::unpack(raw[0] & 0x7F);
-            flags.packet_type == constants::PACKET_TYPE_PROOF
-        }).collect();
+        let proof_packets: Vec<_> = sent_packets
+            .iter()
+            .filter(|raw| {
+                let flags = PacketFlags::unpack(raw[0] & 0x7F);
+                flags.packet_type == constants::PACKET_TYPE_PROOF
+            })
+            .collect();
         assert!(!proof_packets.is_empty(), "Should have sent a proof packet");
 
         // Now feed the proof packet back to the driver so handle_inbound_proof fires.
@@ -5046,7 +6577,12 @@ mod tests {
             proof_requested: Arc::new(Mutex::new(Vec::new())),
         };
         let mut driver2 = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx2,
             tx2.clone(),
             Box::new(cbs2),
@@ -5054,25 +6590,38 @@ mod tests {
         let info2 = make_interface_info(1);
         driver2.engine.register_interface(info2);
         let (writer2, _sent2) = MockWriter::new();
-        driver2.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer2), true));
+        driver2
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer2), true));
 
         // Track the original sent packet in driver2 so it recognizes the proof
-        driver2.sent_packets.insert(data_packet_hash, (dest, time::now()));
+        driver2
+            .sent_packets
+            .insert(data_packet_hash, (dest, time::now()));
 
         // Feed the proof frame
-        tx2.send(Event::Frame { interface_id: InterfaceId(1), data: proof_raw }).unwrap();
+        tx2.send(Event::Frame {
+            interface_id: InterfaceId(1),
+            data: proof_raw,
+        })
+        .unwrap();
         tx2.send(Event::Shutdown).unwrap();
         driver2.run();
 
         // The on_proof callback should have fired
         let proof_events = proofs2.lock().unwrap();
         assert_eq!(proof_events.len(), 1, "on_proof callback should fire once");
-        assert_eq!(proof_events[0].1.0, data_packet_hash, "proof should match original packet hash");
+        assert_eq!(
+            proof_events[0].1 .0, data_packet_hash,
+            "proof should match original packet hash"
+        );
         assert!(proof_events[0].2 >= 0.0, "RTT should be non-negative");
 
         // completed_proofs should contain the entry
-        assert!(driver2.completed_proofs.contains_key(&data_packet_hash),
-            "completed_proofs should contain the packet hash");
+        assert!(
+            driver2.completed_proofs.contains_key(&data_packet_hash),
+            "completed_proofs should contain the packet hash"
+        );
         let (rtt, _received) = driver2.completed_proofs[&data_packet_hash];
         assert!(rtt >= 0.0, "RTT should be non-negative");
     }
@@ -5082,19 +6631,27 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: true, identity_hash: Some([0x42; 16]), prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: true,
+                identity_hash: Some([0x42; 16]),
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
         );
         let (writer, _sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         // Set probe_responder_hash
         driver.probe_responder_hash = Some([0xEE; 16]);
 
         let (resp_tx, resp_rx) = mpsc::channel();
-        tx.send(Event::Query(QueryRequest::InterfaceStats, resp_tx)).unwrap();
+        tx.send(Event::Query(QueryRequest::InterfaceStats, resp_tx))
+            .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -5111,16 +6668,24 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
         );
         let (writer, _sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         let (resp_tx, resp_rx) = mpsc::channel();
-        tx.send(Event::Query(QueryRequest::InterfaceStats, resp_tx)).unwrap();
+        tx.send(Event::Query(QueryRequest::InterfaceStats, resp_tx))
+            .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -5174,7 +6739,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -5182,20 +6752,29 @@ mod tests {
         let info = make_interface_info(1);
         driver.engine.register_interface(info);
         let (writer, _sent) = MockWriter::new();
-        driver.interfaces.insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
+        driver
+            .interfaces
+            .insert(InterfaceId(1), make_entry(1, Box::new(writer), true));
 
         let identity = Identity::new(&mut OsRng);
         let announce_raw = build_announce_packet(&identity);
 
-        tx.send(Event::Frame { interface_id: InterfaceId(1), data: announce_raw }).unwrap();
+        tx.send(Event::Frame {
+            interface_id: InterfaceId(1),
+            data: announce_raw,
+        })
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
         // The identity should be cached with the correct receiving interface
         assert_eq!(driver.known_destinations.len(), 1);
         let (_, announced) = driver.known_destinations.iter().next().unwrap();
-        assert_eq!(announced.receiving_interface, InterfaceId(1),
-            "receiving_interface should match the interface the announce arrived on");
+        assert_eq!(
+            announced.receiving_interface,
+            InterfaceId(1),
+            "receiving_interface should match the interface the announce arrived on"
+        );
     }
 
     #[test]
@@ -5204,7 +6783,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -5213,14 +6797,20 @@ mod tests {
         for id in [1, 2] {
             driver.engine.register_interface(make_interface_info(id));
             let (writer, _) = MockWriter::new();
-            driver.interfaces.insert(InterfaceId(id), make_entry(id, Box::new(writer), true));
+            driver
+                .interfaces
+                .insert(InterfaceId(id), make_entry(id, Box::new(writer), true));
         }
 
         let identity = Identity::new(&mut OsRng);
         let announce_raw = build_announce_packet(&identity);
 
         // Send on interface 2
-        tx.send(Event::Frame { interface_id: InterfaceId(2), data: announce_raw }).unwrap();
+        tx.send(Event::Frame {
+            interface_id: InterfaceId(2),
+            data: announce_raw,
+        })
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -5236,26 +6826,34 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
         );
 
         let identity = Identity::new(&mut OsRng);
-        let dest_hash = rns_core::destination::destination_hash(
-            "test", &["app"], Some(identity.hash()),
-        );
+        let dest_hash =
+            rns_core::destination::destination_hash("test", &["app"], Some(identity.hash()));
 
         let (resp_tx, resp_rx) = mpsc::channel();
-        tx.send(Event::Query(QueryRequest::InjectIdentity {
-            dest_hash,
-            identity_hash: *identity.hash(),
-            public_key: identity.get_public_key().unwrap(),
-            app_data: Some(b"restored".to_vec()),
-            hops: 2,
-            received_at: 99.0,
-        }, resp_tx)).unwrap();
+        tx.send(Event::Query(
+            QueryRequest::InjectIdentity {
+                dest_hash,
+                identity_hash: *identity.hash(),
+                public_key: identity.get_public_key().unwrap(),
+                app_data: Some(b"restored".to_vec()),
+                hops: 2,
+                received_at: 99.0,
+            },
+            resp_tx,
+        ))
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -5264,9 +6862,15 @@ mod tests {
             other => panic!("expected InjectIdentity(true), got {:?}", other),
         }
 
-        let announced = driver.known_destinations.get(&dest_hash).expect("identity should be cached");
-        assert_eq!(announced.receiving_interface, InterfaceId(0),
-            "injected identity should have sentinel InterfaceId(0)");
+        let announced = driver
+            .known_destinations
+            .get(&dest_hash)
+            .expect("identity should be cached");
+        assert_eq!(
+            announced.receiving_interface,
+            InterfaceId(0),
+            "injected identity should have sentinel InterfaceId(0)"
+        );
         assert_eq!(announced.dest_hash.0, dest_hash);
         assert_eq!(announced.identity_hash.0, *identity.hash());
         assert_eq!(announced.public_key, identity.get_public_key().unwrap());
@@ -5281,44 +6885,62 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
         );
 
         let identity = Identity::new(&mut OsRng);
-        let dest_hash = rns_core::destination::destination_hash(
-            "test", &["app"], Some(identity.hash()),
-        );
+        let dest_hash =
+            rns_core::destination::destination_hash("test", &["app"], Some(identity.hash()));
 
         // First injection
         let (resp_tx1, resp_rx1) = mpsc::channel();
-        tx.send(Event::Query(QueryRequest::InjectIdentity {
-            dest_hash,
-            identity_hash: *identity.hash(),
-            public_key: identity.get_public_key().unwrap(),
-            app_data: Some(b"first".to_vec()),
-            hops: 1,
-            received_at: 10.0,
-        }, resp_tx1)).unwrap();
+        tx.send(Event::Query(
+            QueryRequest::InjectIdentity {
+                dest_hash,
+                identity_hash: *identity.hash(),
+                public_key: identity.get_public_key().unwrap(),
+                app_data: Some(b"first".to_vec()),
+                hops: 1,
+                received_at: 10.0,
+            },
+            resp_tx1,
+        ))
+        .unwrap();
 
         // Second injection with different app_data
         let (resp_tx2, resp_rx2) = mpsc::channel();
-        tx.send(Event::Query(QueryRequest::InjectIdentity {
-            dest_hash,
-            identity_hash: *identity.hash(),
-            public_key: identity.get_public_key().unwrap(),
-            app_data: Some(b"second".to_vec()),
-            hops: 3,
-            received_at: 20.0,
-        }, resp_tx2)).unwrap();
+        tx.send(Event::Query(
+            QueryRequest::InjectIdentity {
+                dest_hash,
+                identity_hash: *identity.hash(),
+                public_key: identity.get_public_key().unwrap(),
+                app_data: Some(b"second".to_vec()),
+                hops: 3,
+                received_at: 20.0,
+            },
+            resp_tx2,
+        ))
+        .unwrap();
 
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
-        assert!(matches!(resp_rx1.recv().unwrap(), QueryResponse::InjectIdentity(true)));
-        assert!(matches!(resp_rx2.recv().unwrap(), QueryResponse::InjectIdentity(true)));
+        assert!(matches!(
+            resp_rx1.recv().unwrap(),
+            QueryResponse::InjectIdentity(true)
+        ));
+        assert!(matches!(
+            resp_rx2.recv().unwrap(),
+            QueryResponse::InjectIdentity(true)
+        ));
 
         // Should have the second injection's data
         let announced = driver.known_destinations.get(&dest_hash).unwrap();
@@ -5334,7 +6956,12 @@ mod tests {
         let (tx, rx) = event::channel();
         let (cbs, _, _, _, _, _) = MockCallbacks::new();
         let mut driver = Driver::new(
-            TransportConfig { transport_enabled: false, identity_hash: None, prefer_shorter_path: false, max_paths_per_destination: 1 },
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
             rx,
             tx.clone(),
             Box::new(cbs),
@@ -5342,20 +6969,30 @@ mod tests {
         for id in [1, 2] {
             driver.engine.register_interface(make_interface_info(id));
             let (writer, _) = MockWriter::new();
-            driver.interfaces.insert(InterfaceId(id), make_entry(id, Box::new(writer), true));
+            driver
+                .interfaces
+                .insert(InterfaceId(id), make_entry(id, Box::new(writer), true));
         }
 
         let identity = Identity::new(&mut OsRng);
         let announce_raw = build_announce_packet(&identity);
 
         // Same announce on interface 1, then interface 2
-        tx.send(Event::Frame { interface_id: InterfaceId(1), data: announce_raw.clone() }).unwrap();
+        tx.send(Event::Frame {
+            interface_id: InterfaceId(1),
+            data: announce_raw.clone(),
+        })
+        .unwrap();
         // The second announce of the same identity will be dropped by the transport
         // engine's deduplication (same random_hash). Build a second identity instead
         // to verify the field is correctly set per-announce.
         let identity2 = Identity::new(&mut OsRng);
         let announce_raw2 = build_announce_packet(&identity2);
-        tx.send(Event::Frame { interface_id: InterfaceId(2), data: announce_raw2 }).unwrap();
+        tx.send(Event::Frame {
+            interface_id: InterfaceId(2),
+            data: announce_raw2,
+        })
+        .unwrap();
         tx.send(Event::Shutdown).unwrap();
         driver.run();
 
@@ -5363,10 +7000,17 @@ mod tests {
         assert_eq!(driver.known_destinations.len(), 2);
         for (_, announced) in &driver.known_destinations {
             // We can't predict ordering, but each should have a valid non-zero interface
-            assert!(announced.receiving_interface == InterfaceId(1) || announced.receiving_interface == InterfaceId(2));
+            assert!(
+                announced.receiving_interface == InterfaceId(1)
+                    || announced.receiving_interface == InterfaceId(2)
+            );
         }
         // Verify we actually got both interfaces represented
-        let ifaces: Vec<_> = driver.known_destinations.values().map(|a| a.receiving_interface).collect();
+        let ifaces: Vec<_> = driver
+            .known_destinations
+            .values()
+            .map(|a| a.receiving_interface)
+            .collect();
         assert!(ifaces.contains(&InterfaceId(1)));
         assert!(ifaces.contains(&InterfaceId(2)));
     }

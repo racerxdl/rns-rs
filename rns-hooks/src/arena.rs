@@ -22,7 +22,9 @@ pub fn write_context(
             let header_size = std::mem::size_of::<PacketContext>();
             let size = header_size + raw.len();
             if ARENA_BASE + size > mem_size {
-                return Err(HookError::InvalidResult("arena overflow for Packet context".into()));
+                return Err(HookError::InvalidResult(
+                    "arena overflow for Packet context".into(),
+                ));
             }
             let data = memory.data_mut(&mut store);
             let base = ARENA_BASE;
@@ -54,7 +56,9 @@ pub fn write_context(
         HookContext::Interface { interface_id } => {
             let size = std::mem::size_of::<InterfaceContext>();
             if ARENA_BASE + size > mem_size {
-                return Err(HookError::InvalidResult("arena overflow for Interface context".into()));
+                return Err(HookError::InvalidResult(
+                    "arena overflow for Interface context".into(),
+                ));
             }
             let data = memory.data_mut(&mut store);
             let base = ARENA_BASE;
@@ -66,7 +70,9 @@ pub fn write_context(
         HookContext::Tick => {
             let size = std::mem::size_of::<TickContext>();
             if ARENA_BASE + size > mem_size {
-                return Err(HookError::InvalidResult("arena overflow for Tick context".into()));
+                return Err(HookError::InvalidResult(
+                    "arena overflow for Tick context".into(),
+                ));
             }
             let data = memory.data_mut(&mut store);
             write_u32(data, ARENA_BASE, CTX_TYPE_TICK);
@@ -79,7 +85,9 @@ pub fn write_context(
         } => {
             let size = std::mem::size_of::<AnnounceContext>();
             if ARENA_BASE + size > mem_size {
-                return Err(HookError::InvalidResult("arena overflow for Announce context".into()));
+                return Err(HookError::InvalidResult(
+                    "arena overflow for Announce context".into(),
+                ));
             }
             let data = memory.data_mut(&mut store);
             let base = ARENA_BASE;
@@ -98,7 +106,9 @@ pub fn write_context(
         } => {
             let size = std::mem::size_of::<LinkContext>();
             if ARENA_BASE + size > mem_size {
-                return Err(HookError::InvalidResult("arena overflow for Link context".into()));
+                return Err(HookError::InvalidResult(
+                    "arena overflow for Link context".into(),
+                ));
             }
             let data = memory.data_mut(&mut store);
             let base = ARENA_BASE;
@@ -191,7 +201,9 @@ pub fn read_action_wire(
     match tag {
         tags::TAG_SEND_ON_INTERFACE => {
             // interface: u64 (8) + data_offset: u32 (4) + data_len: u32 (4) = 16
-            if b.len() < 16 { return None; }
+            if b.len() < 16 {
+                return None;
+            }
             let interface = u64::from_le_bytes(b[0..8].try_into().ok()?);
             let data_offset = u32::from_le_bytes(b[8..12].try_into().ok()?) as usize;
             let data_len = u32::from_le_bytes(b[12..16].try_into().ok()?) as usize;
@@ -200,38 +212,60 @@ pub fn read_action_wire(
         }
         tags::TAG_BROADCAST => {
             // data_offset: u32 (4) + data_len: u32 (4) + exclude: u64 (8) + has_exclude: u8 (1) = 17
-            if b.len() < 17 { return None; }
+            if b.len() < 17 {
+                return None;
+            }
             let data_offset = u32::from_le_bytes(b[0..4].try_into().ok()?) as usize;
             let data_len = u32::from_le_bytes(b[4..8].try_into().ok()?) as usize;
             let exclude = u64::from_le_bytes(b[8..16].try_into().ok()?);
             let has_exclude = b[16];
             let raw = read_slice(wasm_data, data_offset, data_len)?;
-            Some(ActionWire::BroadcastOnAllInterfaces { raw, exclude, has_exclude })
+            Some(ActionWire::BroadcastOnAllInterfaces {
+                raw,
+                exclude,
+                has_exclude,
+            })
         }
         tags::TAG_DELIVER_LOCAL => {
             // dest_hash: 16 + data_offset: 4 + data_len: 4 + packet_hash: 32 + receiving_interface: 8 = 64
-            if b.len() < 64 { return None; }
+            if b.len() < 64 {
+                return None;
+            }
             let destination_hash: [u8; 16] = b[0..16].try_into().ok()?;
             let data_offset = u32::from_le_bytes(b[16..20].try_into().ok()?) as usize;
             let data_len = u32::from_le_bytes(b[20..24].try_into().ok()?) as usize;
             let packet_hash: [u8; 32] = b[24..56].try_into().ok()?;
             let receiving_interface = u64::from_le_bytes(b[56..64].try_into().ok()?);
             let raw = read_slice(wasm_data, data_offset, data_len)?;
-            Some(ActionWire::DeliverLocal { destination_hash, raw, packet_hash, receiving_interface })
+            Some(ActionWire::DeliverLocal {
+                destination_hash,
+                raw,
+                packet_hash,
+                receiving_interface,
+            })
         }
         tags::TAG_PATH_UPDATED => {
             // dest_hash: 16 + hops: 1 + next_hop: 16 + interface: 8 = 41
-            if b.len() < 41 { return None; }
+            if b.len() < 41 {
+                return None;
+            }
             let destination_hash: [u8; 16] = b[0..16].try_into().ok()?;
             let hops = b[16];
             let next_hop: [u8; 16] = b[17..33].try_into().ok()?;
             let interface = u64::from_le_bytes(b[33..41].try_into().ok()?);
-            Some(ActionWire::PathUpdated { destination_hash, hops, next_hop, interface })
+            Some(ActionWire::PathUpdated {
+                destination_hash,
+                hops,
+                next_hop,
+                interface,
+            })
         }
         tags::TAG_ANNOUNCE_RECEIVED => {
             // dest_hash: 16 + identity_hash: 16 + public_key: 64 + name_hash: 10 +
             // random_hash: 10 + hops: 1 + receiving_interface: 8 + has_app_data: 1 = 126 minimum
-            if b.len() < 126 { return None; }
+            if b.len() < 126 {
+                return None;
+            }
             let destination_hash: [u8; 16] = b[0..16].try_into().ok()?;
             let identity_hash: [u8; 16] = b[16..32].try_into().ok()?;
             let public_key: [u8; 64] = b[32..96].try_into().ok()?;
@@ -242,7 +276,9 @@ pub fn read_action_wire(
             let has_app_data = b[125];
             let app_data = if has_app_data != 0 {
                 // app_data_offset: u32 (4) + app_data_len: u32 (4)
-                if b.len() < 134 { return None; }
+                if b.len() < 134 {
+                    return None;
+                }
                 let app_data_offset = u32::from_le_bytes(b[126..130].try_into().ok()?) as usize;
                 let app_data_len = u32::from_le_bytes(b[130..134].try_into().ok()?) as usize;
                 Some(read_slice(wasm_data, app_data_offset, app_data_len)?)
@@ -250,34 +286,55 @@ pub fn read_action_wire(
                 None
             };
             Some(ActionWire::AnnounceReceived {
-                destination_hash, identity_hash, public_key, name_hash,
-                random_hash, app_data, hops, receiving_interface,
+                destination_hash,
+                identity_hash,
+                public_key,
+                name_hash,
+                random_hash,
+                app_data,
+                hops,
+                receiving_interface,
             })
         }
         tags::TAG_FORWARD_LOCAL_CLIENTS => {
             // data_offset: u32 (4) + data_len: u32 (4) + exclude: u64 (8) + has_exclude: u8 (1) = 17
-            if b.len() < 17 { return None; }
+            if b.len() < 17 {
+                return None;
+            }
             let data_offset = u32::from_le_bytes(b[0..4].try_into().ok()?) as usize;
             let data_len = u32::from_le_bytes(b[4..8].try_into().ok()?) as usize;
             let exclude = u64::from_le_bytes(b[8..16].try_into().ok()?);
             let has_exclude = b[16];
             let raw = read_slice(wasm_data, data_offset, data_len)?;
-            Some(ActionWire::ForwardToLocalClients { raw, exclude, has_exclude })
+            Some(ActionWire::ForwardToLocalClients {
+                raw,
+                exclude,
+                has_exclude,
+            })
         }
         tags::TAG_FORWARD_PLAIN_BROADCAST => {
             // data_offset: u32 (4) + data_len: u32 (4) + to_local: u8 (1) + exclude: u64 (8) + has_exclude: u8 (1) = 18
-            if b.len() < 18 { return None; }
+            if b.len() < 18 {
+                return None;
+            }
             let data_offset = u32::from_le_bytes(b[0..4].try_into().ok()?) as usize;
             let data_len = u32::from_le_bytes(b[4..8].try_into().ok()?) as usize;
             let to_local = b[8];
             let exclude = u64::from_le_bytes(b[9..17].try_into().ok()?);
             let has_exclude = b[17];
             let raw = read_slice(wasm_data, data_offset, data_len)?;
-            Some(ActionWire::ForwardPlainBroadcast { raw, to_local, exclude, has_exclude })
+            Some(ActionWire::ForwardPlainBroadcast {
+                raw,
+                to_local,
+                exclude,
+                has_exclude,
+            })
         }
         tags::TAG_CACHE_ANNOUNCE => {
             // packet_hash: 32 + data_offset: 4 + data_len: 4 = 40
-            if b.len() < 40 { return None; }
+            if b.len() < 40 {
+                return None;
+            }
             let packet_hash: [u8; 32] = b[0..32].try_into().ok()?;
             let data_offset = u32::from_le_bytes(b[32..36].try_into().ok()?) as usize;
             let data_len = u32::from_le_bytes(b[36..40].try_into().ok()?) as usize;
@@ -286,20 +343,31 @@ pub fn read_action_wire(
         }
         tags::TAG_TUNNEL_SYNTHESIZE => {
             // interface: u64 (8) + data_offset: u32 (4) + data_len: u32 (4) + dest_hash: 16 = 32
-            if b.len() < 32 { return None; }
+            if b.len() < 32 {
+                return None;
+            }
             let interface = u64::from_le_bytes(b[0..8].try_into().ok()?);
             let data_offset = u32::from_le_bytes(b[8..12].try_into().ok()?) as usize;
             let data_len = u32::from_le_bytes(b[12..16].try_into().ok()?) as usize;
             let dest_hash: [u8; 16] = b[16..32].try_into().ok()?;
             let data = read_slice(wasm_data, data_offset, data_len)?;
-            Some(ActionWire::TunnelSynthesize { interface, data, dest_hash })
+            Some(ActionWire::TunnelSynthesize {
+                interface,
+                data,
+                dest_hash,
+            })
         }
         tags::TAG_TUNNEL_ESTABLISHED => {
             // tunnel_id: 32 + interface: 8 = 40
-            if b.len() < 40 { return None; }
+            if b.len() < 40 {
+                return None;
+            }
             let tunnel_id: [u8; 32] = b[0..32].try_into().ok()?;
             let interface = u64::from_le_bytes(b[32..40].try_into().ok()?);
-            Some(ActionWire::TunnelEstablished { tunnel_id, interface })
+            Some(ActionWire::TunnelEstablished {
+                tunnel_id,
+                interface,
+            })
         }
         _ => None,
     }
@@ -337,7 +405,9 @@ pub fn write_data_override(
     let data_start = ARENA_BASE + header_size;
     let mem_size = memory.data_size(&store);
     if data_start + new_data.len() > mem_size {
-        return Err(HookError::InvalidResult("modified data overflows arena".into()));
+        return Err(HookError::InvalidResult(
+            "modified data overflows arena".into(),
+        ));
     }
     let mem = memory.data_mut(&mut store);
     mem[data_start..data_start + new_data.len()].copy_from_slice(new_data);

@@ -14,8 +14,8 @@ use rns_crypto::OsRng;
 
 use rns_net::{
     AnnouncedIdentity, Callbacks, DestHash, Destination, IdentityHash, InterfaceConfig,
-    InterfaceId, NodeConfig, PacketHash, ProofStrategy, RnsNode,
-    TcpClientConfig, TcpServerConfig, MODE_FULL,
+    InterfaceId, NodeConfig, PacketHash, ProofStrategy, RnsNode, TcpClientConfig, TcpServerConfig,
+    MODE_FULL,
 };
 
 const APP_NAME: &str = "example_utilities";
@@ -117,7 +117,9 @@ fn main() {
     let server_node = RnsNode::start(
         NodeConfig {
             transport_enabled: false,
-            identity: Some(Identity::from_private_key(&server_identity.get_private_key().unwrap())),
+            identity: Some(Identity::from_private_key(
+                &server_identity.get_private_key().unwrap(),
+            )),
             interfaces: vec![InterfaceConfig {
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
@@ -253,7 +255,11 @@ fn main() {
     log::info!("Waiting for server to receive packet...");
     match delivery_rx.recv_timeout(Duration::from_secs(10)) {
         Ok((dest, data)) => {
-            log::info!("Server received: dest={} data={:?}", dest, std::str::from_utf8(&data));
+            log::info!(
+                "Server received: dest={} data={:?}",
+                dest,
+                std::str::from_utf8(&data)
+            );
         }
         Err(_) => {
             log::warn!("Timed out waiting for server delivery (proof may still work)");
@@ -267,7 +273,9 @@ fn main() {
         Ok((dest, hash, rtt)) => {
             log::info!(
                 "Proof confirmed! dest={} hash={} RTT={:.3}s",
-                dest, hash, rtt
+                dest,
+                hash,
+                rtt
             );
             assert_eq!(hash, packet_hash);
             println!("Echo successful! RTT: {:.3}s", rtt);

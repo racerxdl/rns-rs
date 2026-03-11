@@ -7,11 +7,11 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 use std::process;
 
+use crate::args::Args;
+use crate::format::{base32_decode, base32_encode, prettyhexrep};
+use rns_core::destination::destination_hash;
 use rns_crypto::identity::Identity;
 use rns_crypto::OsRng;
-use rns_core::destination::destination_hash;
-use crate::args::Args;
-use crate::format::{prettyhexrep, base32_encode, base32_decode};
 
 const LARGE_FILE_WARN: u64 = 16 * 1024 * 1024; // 16 MB
 
@@ -63,7 +63,9 @@ fn generate_identity(file: &str, args: &Args) {
     }
 
     let identity = Identity::new(&mut OsRng);
-    let prv_key = identity.get_private_key().expect("generated identity has private key");
+    let prv_key = identity
+        .get_private_key()
+        .expect("generated identity has private key");
 
     fs::write(path, &prv_key).unwrap_or_else(|e| {
         eprintln!("Error writing identity: {}", e);
@@ -153,10 +155,12 @@ fn inspect_identity_file(path: &Path, args: &Args) {
                 process::exit(1);
             })
         };
-        let ciphertext = identity.encrypt(&plaintext, &mut OsRng).unwrap_or_else(|e| {
-            eprintln!("Encryption failed: {:?}", e);
-            process::exit(1);
-        });
+        let ciphertext = identity
+            .encrypt(&plaintext, &mut OsRng)
+            .unwrap_or_else(|e| {
+                eprintln!("Encryption failed: {:?}", e);
+                process::exit(1);
+            });
         if use_stdout {
             io::stdout().write_all(&ciphertext).unwrap_or_else(|e| {
                 eprintln!("Error writing to stdout: {}", e);
@@ -240,7 +244,10 @@ fn inspect_identity_file(path: &Path, args: &Args) {
             process::exit(1);
         });
         if sig_data.len() != 64 {
-            eprintln!("  Invalid signature (expected 64 bytes, got {})", sig_data.len());
+            eprintln!(
+                "  Invalid signature (expected 64 bytes, got {})",
+                sig_data.len()
+            );
             process::exit(1);
         }
         let mut sig = [0u8; 64];
@@ -328,7 +335,10 @@ fn import_from_hex(hex_str: &str, args: &Args) {
             println!("  Saved to {}", file);
         }
     } else {
-        eprintln!("Expected 64 bytes (128 hex chars or base32), got {} bytes", bytes.len());
+        eprintln!(
+            "Expected 64 bytes (128 hex chars or base32), got {} bytes",
+            bytes.len()
+        );
         process::exit(1);
     }
 }
@@ -354,8 +364,16 @@ fn base64_encode(data: &[u8]) -> String {
     let mut i = 0;
     while i < data.len() {
         let b0 = data[i] as u32;
-        let b1 = if i + 1 < data.len() { data[i + 1] as u32 } else { 0 };
-        let b2 = if i + 2 < data.len() { data[i + 2] as u32 } else { 0 };
+        let b1 = if i + 1 < data.len() {
+            data[i + 1] as u32
+        } else {
+            0
+        };
+        let b2 = if i + 2 < data.len() {
+            data[i + 2] as u32
+        } else {
+            0
+        };
 
         let triple = (b0 << 16) | (b1 << 8) | b2;
 

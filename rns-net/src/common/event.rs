@@ -28,7 +28,10 @@ impl Default for HolePunchPolicy {
 /// or a channel sender for async).
 pub enum Event<W: Send> {
     /// A decoded frame arrived from an interface.
-    Frame { interface_id: InterfaceId, data: Vec<u8> },
+    Frame {
+        interface_id: InterfaceId,
+        data: Vec<u8>,
+    },
     /// An interface came online after (re)connecting.
     /// Carries a new writer if the connection was re-established.
     /// Carries InterfaceInfo if this is a new dynamic interface (e.g. TCP server client).
@@ -46,18 +49,11 @@ pub enum Event<W: Send> {
         attached_interface: Option<InterfaceId>,
     },
     /// Register a local destination.
-    RegisterDestination {
-        dest_hash: [u8; 16],
-        dest_type: u8,
-    },
+    RegisterDestination { dest_hash: [u8; 16], dest_type: u8 },
     /// Deregister a local destination.
-    DeregisterDestination {
-        dest_hash: [u8; 16],
-    },
+    DeregisterDestination { dest_hash: [u8; 16] },
     /// Deregister a link destination (stop accepting incoming links).
-    DeregisterLinkDestination {
-        dest_hash: [u8; 16],
-    },
+    DeregisterLinkDestination { dest_hash: [u8; 16] },
     /// Query driver state. Response is sent via the provided channel.
     Query(QueryRequest, mpsc::Sender<QueryResponse>),
     /// Register a link destination (accepts incoming LINKREQUEST).
@@ -71,7 +67,9 @@ pub enum Event<W: Send> {
     RegisterRequestHandler {
         path: String,
         allowed_list: Option<Vec<[u8; 16]>>,
-        handler: Box<dyn Fn([u8; 16], &str, &[u8], Option<&([u8; 16], [u8; 64])>) -> Option<Vec<u8>> + Send>,
+        handler: Box<
+            dyn Fn([u8; 16], &str, &[u8], Option<&([u8; 16], [u8; 64])>) -> Option<Vec<u8>> + Send,
+        >,
     },
     /// Create an outbound link. Response sends (link_id) back.
     CreateLink {
@@ -91,9 +89,7 @@ pub enum Event<W: Send> {
         identity_prv_key: [u8; 64],
     },
     /// Tear down a link.
-    TeardownLink {
-        link_id: [u8; 16],
-    },
+    TeardownLink { link_id: [u8; 16] },
     /// Send a resource on a link.
     SendResource {
         link_id: [u8; 16],
@@ -101,10 +97,7 @@ pub enum Event<W: Send> {
         metadata: Option<Vec<u8>>,
     },
     /// Set the resource acceptance strategy for a link.
-    SetResourceStrategy {
-        link_id: [u8; 16],
-        strategy: u8,
-    },
+    SetResourceStrategy { link_id: [u8; 16], strategy: u8 },
     /// Accept or reject a pending resource (for AcceptApp strategy).
     AcceptResource {
         link_id: [u8; 16],
@@ -124,9 +117,7 @@ pub enum Event<W: Send> {
         context: u8,
     },
     /// Request a path to a destination from the network.
-    RequestPath {
-        dest_hash: [u8; 16],
-    },
+    RequestPath { dest_hash: [u8; 16] },
     /// Register a proof strategy for a destination.
     RegisterProofStrategy {
         dest_hash: [u8; 16],
@@ -135,13 +126,9 @@ pub enum Event<W: Send> {
         signing_key: Option<[u8; 64]>,
     },
     /// Propose a direct connection to a peer via hole punching.
-    ProposeDirectConnect {
-        link_id: [u8; 16],
-    },
+    ProposeDirectConnect { link_id: [u8; 16] },
     /// Set the direct-connect policy.
-    SetDirectConnectPolicy {
-        policy: HolePunchPolicy,
-    },
+    SetDirectConnectPolicy { policy: HolePunchPolicy },
     /// (Internal) Probe result arrived from a worker thread.
     HolePunchProbeResult {
         link_id: [u8; 16],
@@ -227,9 +214,7 @@ pub enum QueryRequest {
         reason: Option<String>,
     },
     /// Remove an identity from the blackhole list.
-    UnblackholeIdentity {
-        identity_hash: [u8; 16],
-    },
+    UnblackholeIdentity { identity_hash: [u8; 16] },
     /// Check if a path exists to a destination.
     HasPath { dest_hash: [u8; 16] },
     /// Get hop count to a destination.
@@ -271,9 +256,7 @@ pub enum QueryRequest {
         payload_size: usize,
     },
     /// Check if a proof was received for a probe packet.
-    CheckProof {
-        packet_hash: [u8; 32],
-    },
+    CheckProof { packet_hash: [u8; 32] },
 }
 
 /// Responses to queries.
@@ -414,167 +397,173 @@ pub struct NextHopResponse {
 impl<W: Send> fmt::Debug for Event<W> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Event::Frame { interface_id, data } => {
-                f.debug_struct("Frame")
-                    .field("interface_id", interface_id)
-                    .field("data_len", &data.len())
-                    .finish()
-            }
-            Event::InterfaceUp(id, writer, info) => {
-                f.debug_tuple("InterfaceUp")
-                    .field(id)
-                    .field(&writer.is_some())
-                    .field(&info.is_some())
-                    .finish()
-            }
+            Event::Frame { interface_id, data } => f
+                .debug_struct("Frame")
+                .field("interface_id", interface_id)
+                .field("data_len", &data.len())
+                .finish(),
+            Event::InterfaceUp(id, writer, info) => f
+                .debug_tuple("InterfaceUp")
+                .field(id)
+                .field(&writer.is_some())
+                .field(&info.is_some())
+                .finish(),
             Event::InterfaceDown(id) => f.debug_tuple("InterfaceDown").field(id).finish(),
             Event::Tick => write!(f, "Tick"),
             Event::Shutdown => write!(f, "Shutdown"),
-            Event::SendOutbound { raw, dest_type, .. } => {
-                f.debug_struct("SendOutbound")
-                    .field("raw_len", &raw.len())
-                    .field("dest_type", dest_type)
-                    .finish()
-            }
-            Event::RegisterDestination { dest_hash, dest_type } => {
-                f.debug_struct("RegisterDestination")
-                    .field("dest_hash", dest_hash)
-                    .field("dest_type", dest_type)
-                    .finish()
-            }
-            Event::DeregisterDestination { dest_hash } => {
-                f.debug_struct("DeregisterDestination")
-                    .field("dest_hash", dest_hash)
-                    .finish()
-            }
-            Event::DeregisterLinkDestination { dest_hash } => {
-                f.debug_struct("DeregisterLinkDestination")
-                    .field("dest_hash", dest_hash)
-                    .finish()
-            }
-            Event::Query(req, _) => {
-                f.debug_tuple("Query")
-                    .field(req)
-                    .finish()
-            }
-            Event::RegisterLinkDestination { dest_hash, .. } => {
-                f.debug_struct("RegisterLinkDestination")
-                    .field("dest_hash", dest_hash)
-                    .finish()
-            }
-            Event::RegisterRequestHandler { path, .. } => {
-                f.debug_struct("RegisterRequestHandler")
-                    .field("path", path)
-                    .finish()
-            }
-            Event::CreateLink { dest_hash, .. } => {
-                f.debug_struct("CreateLink")
-                    .field("dest_hash", dest_hash)
-                    .finish()
-            }
-            Event::SendRequest { link_id, path, .. } => {
-                f.debug_struct("SendRequest")
-                    .field("link_id", link_id)
-                    .field("path", path)
-                    .finish()
-            }
-            Event::IdentifyOnLink { link_id, .. } => {
-                f.debug_struct("IdentifyOnLink")
-                    .field("link_id", link_id)
-                    .finish()
-            }
-            Event::TeardownLink { link_id } => {
-                f.debug_struct("TeardownLink")
-                    .field("link_id", link_id)
-                    .finish()
-            }
-            Event::SendResource { link_id, data, .. } => {
-                f.debug_struct("SendResource")
-                    .field("link_id", link_id)
-                    .field("data_len", &data.len())
-                    .finish()
-            }
-            Event::SetResourceStrategy { link_id, strategy } => {
-                f.debug_struct("SetResourceStrategy")
-                    .field("link_id", link_id)
-                    .field("strategy", strategy)
-                    .finish()
-            }
-            Event::AcceptResource { link_id, accept, .. } => {
-                f.debug_struct("AcceptResource")
-                    .field("link_id", link_id)
-                    .field("accept", accept)
-                    .finish()
-            }
-            Event::SendChannelMessage { link_id, msgtype, payload } => {
-                f.debug_struct("SendChannelMessage")
-                    .field("link_id", link_id)
-                    .field("msgtype", msgtype)
-                    .field("payload_len", &payload.len())
-                    .finish()
-            }
-            Event::SendOnLink { link_id, data, context } => {
-                f.debug_struct("SendOnLink")
-                    .field("link_id", link_id)
-                    .field("data_len", &data.len())
-                    .field("context", context)
-                    .finish()
-            }
-            Event::RequestPath { dest_hash } => {
-                f.debug_struct("RequestPath")
-                    .field("dest_hash", dest_hash)
-                    .finish()
-            }
-            Event::RegisterProofStrategy { dest_hash, strategy, .. } => {
-                f.debug_struct("RegisterProofStrategy")
-                    .field("dest_hash", dest_hash)
-                    .field("strategy", strategy)
-                    .finish()
-            }
-            Event::ProposeDirectConnect { link_id } => {
-                f.debug_struct("ProposeDirectConnect")
-                    .field("link_id", link_id)
-                    .finish()
-            }
+            Event::SendOutbound { raw, dest_type, .. } => f
+                .debug_struct("SendOutbound")
+                .field("raw_len", &raw.len())
+                .field("dest_type", dest_type)
+                .finish(),
+            Event::RegisterDestination {
+                dest_hash,
+                dest_type,
+            } => f
+                .debug_struct("RegisterDestination")
+                .field("dest_hash", dest_hash)
+                .field("dest_type", dest_type)
+                .finish(),
+            Event::DeregisterDestination { dest_hash } => f
+                .debug_struct("DeregisterDestination")
+                .field("dest_hash", dest_hash)
+                .finish(),
+            Event::DeregisterLinkDestination { dest_hash } => f
+                .debug_struct("DeregisterLinkDestination")
+                .field("dest_hash", dest_hash)
+                .finish(),
+            Event::Query(req, _) => f.debug_tuple("Query").field(req).finish(),
+            Event::RegisterLinkDestination { dest_hash, .. } => f
+                .debug_struct("RegisterLinkDestination")
+                .field("dest_hash", dest_hash)
+                .finish(),
+            Event::RegisterRequestHandler { path, .. } => f
+                .debug_struct("RegisterRequestHandler")
+                .field("path", path)
+                .finish(),
+            Event::CreateLink { dest_hash, .. } => f
+                .debug_struct("CreateLink")
+                .field("dest_hash", dest_hash)
+                .finish(),
+            Event::SendRequest { link_id, path, .. } => f
+                .debug_struct("SendRequest")
+                .field("link_id", link_id)
+                .field("path", path)
+                .finish(),
+            Event::IdentifyOnLink { link_id, .. } => f
+                .debug_struct("IdentifyOnLink")
+                .field("link_id", link_id)
+                .finish(),
+            Event::TeardownLink { link_id } => f
+                .debug_struct("TeardownLink")
+                .field("link_id", link_id)
+                .finish(),
+            Event::SendResource { link_id, data, .. } => f
+                .debug_struct("SendResource")
+                .field("link_id", link_id)
+                .field("data_len", &data.len())
+                .finish(),
+            Event::SetResourceStrategy { link_id, strategy } => f
+                .debug_struct("SetResourceStrategy")
+                .field("link_id", link_id)
+                .field("strategy", strategy)
+                .finish(),
+            Event::AcceptResource {
+                link_id, accept, ..
+            } => f
+                .debug_struct("AcceptResource")
+                .field("link_id", link_id)
+                .field("accept", accept)
+                .finish(),
+            Event::SendChannelMessage {
+                link_id,
+                msgtype,
+                payload,
+            } => f
+                .debug_struct("SendChannelMessage")
+                .field("link_id", link_id)
+                .field("msgtype", msgtype)
+                .field("payload_len", &payload.len())
+                .finish(),
+            Event::SendOnLink {
+                link_id,
+                data,
+                context,
+            } => f
+                .debug_struct("SendOnLink")
+                .field("link_id", link_id)
+                .field("data_len", &data.len())
+                .field("context", context)
+                .finish(),
+            Event::RequestPath { dest_hash } => f
+                .debug_struct("RequestPath")
+                .field("dest_hash", dest_hash)
+                .finish(),
+            Event::RegisterProofStrategy {
+                dest_hash,
+                strategy,
+                ..
+            } => f
+                .debug_struct("RegisterProofStrategy")
+                .field("dest_hash", dest_hash)
+                .field("strategy", strategy)
+                .finish(),
+            Event::ProposeDirectConnect { link_id } => f
+                .debug_struct("ProposeDirectConnect")
+                .field("link_id", link_id)
+                .finish(),
             Event::SetDirectConnectPolicy { .. } => {
                 write!(f, "SetDirectConnectPolicy")
             }
-            Event::HolePunchProbeResult { link_id, session_id, observed_addr, probe_server, .. } => {
-                f.debug_struct("HolePunchProbeResult")
-                    .field("link_id", link_id)
-                    .field("session_id", session_id)
-                    .field("observed_addr", observed_addr)
-                    .field("probe_server", probe_server)
-                    .finish()
-            }
-            Event::HolePunchProbeFailed { link_id, session_id } => {
-                f.debug_struct("HolePunchProbeFailed")
-                    .field("link_id", link_id)
-                    .field("session_id", session_id)
-                    .finish()
-            }
+            Event::HolePunchProbeResult {
+                link_id,
+                session_id,
+                observed_addr,
+                probe_server,
+                ..
+            } => f
+                .debug_struct("HolePunchProbeResult")
+                .field("link_id", link_id)
+                .field("session_id", session_id)
+                .field("observed_addr", observed_addr)
+                .field("probe_server", probe_server)
+                .finish(),
+            Event::HolePunchProbeFailed {
+                link_id,
+                session_id,
+            } => f
+                .debug_struct("HolePunchProbeFailed")
+                .field("link_id", link_id)
+                .field("session_id", session_id)
+                .finish(),
             Event::InterfaceConfigChanged(id) => {
                 f.debug_tuple("InterfaceConfigChanged").field(id).finish()
             }
-            Event::LoadHook { name, attach_point, priority, .. } => {
-                f.debug_struct("LoadHook")
-                    .field("name", name)
-                    .field("attach_point", attach_point)
-                    .field("priority", priority)
-                    .finish()
-            }
-            Event::UnloadHook { name, attach_point, .. } => {
-                f.debug_struct("UnloadHook")
-                    .field("name", name)
-                    .field("attach_point", attach_point)
-                    .finish()
-            }
-            Event::ReloadHook { name, attach_point, .. } => {
-                f.debug_struct("ReloadHook")
-                    .field("name", name)
-                    .field("attach_point", attach_point)
-                    .finish()
-            }
+            Event::LoadHook {
+                name,
+                attach_point,
+                priority,
+                ..
+            } => f
+                .debug_struct("LoadHook")
+                .field("name", name)
+                .field("attach_point", attach_point)
+                .field("priority", priority)
+                .finish(),
+            Event::UnloadHook {
+                name, attach_point, ..
+            } => f
+                .debug_struct("UnloadHook")
+                .field("name", name)
+                .field("attach_point", attach_point)
+                .finish(),
+            Event::ReloadHook {
+                name, attach_point, ..
+            } => f
+                .debug_struct("ReloadHook")
+                .field("name", name)
+                .field("attach_point", attach_point)
+                .finish(),
             Event::ListHooks { .. } => write!(f, "ListHooks"),
         }
     }

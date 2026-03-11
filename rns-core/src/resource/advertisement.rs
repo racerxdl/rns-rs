@@ -1,9 +1,9 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::msgpack::{self, Value};
-use crate::constants::{RESOURCE_HASHMAP_MAX_LEN, RESOURCE_MAPHASH_LEN};
 use super::types::{AdvFlags, ResourceError};
+use crate::constants::{RESOURCE_HASHMAP_MAX_LEN, RESOURCE_MAPHASH_LEN};
+use crate::msgpack::{self, Value};
 
 /// Resource advertisement data, corresponding to Python's ResourceAdvertisement.
 #[derive(Debug, Clone)]
@@ -72,46 +72,63 @@ impl ResourceAdvertisement {
     pub fn unpack(data: &[u8]) -> Result<Self, ResourceError> {
         let value = msgpack::unpack_exact(data).map_err(|_| ResourceError::InvalidAdvertisement)?;
 
-        let t = value.map_get("t")
+        let t = value
+            .map_get("t")
             .and_then(|v| v.as_uint())
             .ok_or(ResourceError::InvalidAdvertisement)?;
-        let d = value.map_get("d")
+        let d = value
+            .map_get("d")
             .and_then(|v| v.as_uint())
             .ok_or(ResourceError::InvalidAdvertisement)?;
-        let n = value.map_get("n")
+        let n = value
+            .map_get("n")
             .and_then(|v| v.as_uint())
             .ok_or(ResourceError::InvalidAdvertisement)?;
-        let h = value.map_get("h")
+        let h = value
+            .map_get("h")
             .and_then(|v| v.as_bin())
             .ok_or(ResourceError::InvalidAdvertisement)?
             .to_vec();
-        let r = value.map_get("r")
+        let r = value
+            .map_get("r")
             .and_then(|v| v.as_bin())
             .ok_or(ResourceError::InvalidAdvertisement)?
             .to_vec();
-        let o = value.map_get("o")
+        let o = value
+            .map_get("o")
             .and_then(|v| v.as_bin())
             .ok_or(ResourceError::InvalidAdvertisement)?
             .to_vec();
-        let m = value.map_get("m")
+        let m = value
+            .map_get("m")
             .and_then(|v| v.as_bin())
             .ok_or(ResourceError::InvalidAdvertisement)?
             .to_vec();
-        let f = value.map_get("f")
+        let f = value
+            .map_get("f")
             .and_then(|v| v.as_uint())
             .ok_or(ResourceError::InvalidAdvertisement)? as u8;
-        let i = value.map_get("i")
+        let i = value
+            .map_get("i")
             .and_then(|v| v.as_uint())
             .ok_or(ResourceError::InvalidAdvertisement)?;
-        let l = value.map_get("l")
+        let l = value
+            .map_get("l")
             .and_then(|v| v.as_uint())
             .ok_or(ResourceError::InvalidAdvertisement)?;
 
-        let q_val = value.map_get("q").ok_or(ResourceError::InvalidAdvertisement)?;
+        let q_val = value
+            .map_get("q")
+            .ok_or(ResourceError::InvalidAdvertisement)?;
         let request_id = if q_val.is_nil() {
             None
         } else {
-            Some(q_val.as_bin().ok_or(ResourceError::InvalidAdvertisement)?.to_vec())
+            Some(
+                q_val
+                    .as_bin()
+                    .ok_or(ResourceError::InvalidAdvertisement)?
+                    .to_vec(),
+            )
         };
 
         Ok(ResourceAdvertisement {
@@ -161,7 +178,9 @@ mod tests {
             resource_hash: vec![0x11; 32],
             random_hash: vec![0xAA, 0xBB, 0xCC, 0xDD],
             original_hash: vec![0x22; 32],
-            hashmap: vec![0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C],
+            hashmap: vec![
+                0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C,
+            ],
             flags,
             segment_index: 1,
             total_segments: 1,
@@ -344,8 +363,12 @@ mod tests {
     #[test]
     fn test_hashmap_segments_count() {
         let flags = AdvFlags {
-            encrypted: true, compressed: false, split: false,
-            is_request: false, is_response: false, has_metadata: false,
+            encrypted: true,
+            compressed: false,
+            split: false,
+            is_request: false,
+            is_response: false,
+            has_metadata: false,
         };
         let mut adv = make_adv(flags);
 

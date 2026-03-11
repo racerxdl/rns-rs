@@ -6,10 +6,10 @@
 use rns_core::buffer::{BufferReader, BufferWriter, NoopCompressor, StreamDataMessage};
 use rns_core::channel::envelope::{pack_envelope, unpack_envelope};
 use rns_core::channel::Channel;
+use rns_core::link::crypto::create_session_token;
 use rns_core::link::handshake::{
     build_signalling_bytes, derive_session_key, pack_rtt, parse_signalling_bytes, unpack_rtt,
 };
-use rns_core::link::crypto::create_session_token;
 use rns_core::link::{LinkEngine, LinkMode, LinkState};
 
 use rns_crypto::ed25519::Ed25519PrivateKey;
@@ -114,7 +114,10 @@ fn test_link_handshake_interop() {
         // Test HKDF key derivation
         let link_id_arr: [u8; 16] = link_id;
         let derived = derive_session_key(&shared_key, &link_id_arr, mode).unwrap();
-        assert_eq!(derived, expected_derived_key, "{desc}: derived key mismatch");
+        assert_eq!(
+            derived, expected_derived_key,
+            "{desc}: derived key mismatch"
+        );
 
         // Test RTT pack/unpack
         let rtt_value = v["rtt_value"].as_f64().unwrap();
@@ -216,8 +219,7 @@ fn test_link_identify_interop() {
 
         // Verify decryption + identify validation
         let decrypted = token.decrypt(&encrypted).unwrap();
-        let result =
-            rns_core::link::identify::validate_identify_data(&decrypted, &link_id);
+        let result = rns_core::link::identify::validate_identify_data(&decrypted, &link_id);
         assert!(result.is_ok(), "{desc}: identify validation failed");
 
         eprintln!("  PASS: {desc}");
@@ -411,7 +413,9 @@ fn test_channel_messaging_over_link() {
 
     // Send message from initiator to responder via channel
     let link_mdu = initiator.mdu();
-    let actions = ch_init.send(0x01, b"Hello Channel!", 102.0, link_mdu).unwrap();
+    let actions = ch_init
+        .send(0x01, b"Hello Channel!", 102.0, link_mdu)
+        .unwrap();
     assert_eq!(actions.len(), 1);
 
     let raw_envelope = match &actions[0] {

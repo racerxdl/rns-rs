@@ -17,9 +17,8 @@ use rns_crypto::identity::Identity;
 use rns_crypto::OsRng;
 
 use rns_net::{
-    AnnouncedIdentity, Callbacks, DestHash, Destination, IdentityHash, InterfaceConfig,
-    NodeConfig, PacketHash, ProofStrategy, RnsNode, TcpClientConfig,
-    TcpServerConfig, MODE_FULL,
+    AnnouncedIdentity, Callbacks, DestHash, Destination, IdentityHash, InterfaceConfig, NodeConfig,
+    PacketHash, ProofStrategy, RnsNode, TcpClientConfig, TcpServerConfig, MODE_FULL,
 };
 
 // ─── WASM helpers ────────────────────────────────────────────────────────────
@@ -28,8 +27,12 @@ fn wasm_bytes(name: &str) -> Vec<u8> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../rns-hooks/target/wasm-examples")
         .join(format!("{}.wasm", name));
-    std::fs::read(&path)
-        .unwrap_or_else(|_| panic!("{} not found, run rns-hooks/build-examples.sh", path.display()))
+    std::fs::read(&path).unwrap_or_else(|_| {
+        panic!(
+            "{} not found, run rns-hooks/build-examples.sh",
+            path.display()
+        )
+    })
 }
 
 // ─── TestEvent ───────────────────────────────────────────────────────────────
@@ -220,11 +223,7 @@ fn start_transport_node(port: u16) -> RnsNode {
     .expect("Failed to start transport node")
 }
 
-fn start_client_node(
-    port: u16,
-    identity: &Identity,
-    callbacks: Box<dyn Callbacks>,
-) -> RnsNode {
+fn start_client_node(port: u16, identity: &Identity, callbacks: Box<dyn Callbacks>) -> RnsNode {
     RnsNode::start(
         NodeConfig {
             transport_enabled: false,
@@ -294,8 +293,11 @@ fn setup_two_peers() -> (
         .set_proof_strategy(ProofStrategy::ProveAll);
 
     let (alice_tx, alice_rx) = mpsc::channel();
-    let alice_node =
-        start_client_node(port, &alice_identity, Box::new(TestCallbacks::new(alice_tx)));
+    let alice_node = start_client_node(
+        port,
+        &alice_identity,
+        Box::new(TestCallbacks::new(alice_tx)),
+    );
     alice_node
         .register_destination_with_proof(
             &alice_dest,
@@ -449,7 +451,10 @@ fn test_unload_nonexistent_returns_error() {
     let result = node
         .unload_hook("nope".into(), "PreIngress".into())
         .expect("send failed");
-    assert!(result.is_err(), "Expected error for nonexistent hook unload");
+    assert!(
+        result.is_err(),
+        "Expected error for nonexistent hook unload"
+    );
 
     node.shutdown();
     transport.shutdown();
@@ -511,8 +516,17 @@ fn test_load_invalid_wasm_returns_error() {
 
 #[test]
 fn test_packet_logger_does_not_block_delivery() {
-    let (transport, alice_node, alice_rx, bob_node, bob_rx, _alice_id, bob_id, _alice_dest, bob_dest) =
-        setup_two_peers();
+    let (
+        transport,
+        alice_node,
+        alice_rx,
+        bob_node,
+        bob_rx,
+        _alice_id,
+        bob_id,
+        _alice_dest,
+        bob_dest,
+    ) = setup_two_peers();
 
     // Bob announces to Alice (one-direction only)
     let bob_announced = announce_bob_to_alice(&bob_node, &bob_dest, &bob_id, &alice_rx);
@@ -546,8 +560,17 @@ fn test_packet_logger_does_not_block_delivery() {
 
 #[test]
 fn test_announce_filter_allows_low_hop_announces() {
-    let (transport, alice_node, alice_rx, bob_node, _bob_rx, _alice_id, bob_id, _alice_dest, bob_dest) =
-        setup_two_peers();
+    let (
+        transport,
+        alice_node,
+        alice_rx,
+        bob_node,
+        _bob_rx,
+        _alice_id,
+        bob_id,
+        _alice_dest,
+        bob_dest,
+    ) = setup_two_peers();
 
     // Load announce_filter on Alice at AnnounceReceived
     alice_node
@@ -571,8 +594,17 @@ fn test_announce_filter_allows_low_hop_announces() {
 
 #[test]
 fn test_multiple_hooks_on_same_point() {
-    let (transport, alice_node, alice_rx, bob_node, _bob_rx, _alice_id, bob_id, _alice_dest, bob_dest) =
-        setup_two_peers();
+    let (
+        transport,
+        alice_node,
+        alice_rx,
+        bob_node,
+        _bob_rx,
+        _alice_id,
+        bob_id,
+        _alice_dest,
+        bob_dest,
+    ) = setup_two_peers();
 
     // Load announce_filter (priority 100) + packet_logger (priority 0) on AnnounceReceived
     alice_node
@@ -614,8 +646,17 @@ fn test_multiple_hooks_on_same_point() {
 
 #[test]
 fn test_load_hook_after_traffic_flowing() {
-    let (transport, alice_node, alice_rx, bob_node, bob_rx, _alice_id, bob_id, _alice_dest, bob_dest) =
-        setup_two_peers();
+    let (
+        transport,
+        alice_node,
+        alice_rx,
+        bob_node,
+        bob_rx,
+        _alice_id,
+        bob_id,
+        _alice_dest,
+        bob_dest,
+    ) = setup_two_peers();
 
     // Bob announces to Alice
     let bob_announced = announce_bob_to_alice(&bob_node, &bob_dest, &bob_id, &alice_rx);
@@ -625,8 +666,8 @@ fn test_load_hook_after_traffic_flowing() {
     alice_node
         .send_packet(&dest_to_bob, b"before hook")
         .unwrap();
-    let (_, raw, _) = wait_for_delivery(&bob_rx, TIMEOUT)
-        .expect("Bob did not receive pre-hook message");
+    let (_, raw, _) =
+        wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive pre-hook message");
     let decrypted = decrypt_delivery(&raw, &bob_id).expect("Decryption failed");
     assert_eq!(decrypted, b"before hook");
 
@@ -642,11 +683,9 @@ fn test_load_hook_after_traffic_flowing() {
         .expect("load_hook failed");
 
     // Send another packet — should still be delivered
-    alice_node
-        .send_packet(&dest_to_bob, b"after hook")
-        .unwrap();
-    let (_, raw, _) = wait_for_delivery(&bob_rx, TIMEOUT)
-        .expect("Bob did not receive post-hook message");
+    alice_node.send_packet(&dest_to_bob, b"after hook").unwrap();
+    let (_, raw, _) =
+        wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive post-hook message");
     let decrypted = decrypt_delivery(&raw, &bob_id).expect("Decryption failed");
     assert_eq!(decrypted, b"after hook");
 
@@ -657,8 +696,17 @@ fn test_load_hook_after_traffic_flowing() {
 
 #[test]
 fn test_unload_hook_restores_behavior() {
-    let (transport, alice_node, alice_rx, bob_node, bob_rx, _alice_id, bob_id, _alice_dest, bob_dest) =
-        setup_two_peers();
+    let (
+        transport,
+        alice_node,
+        alice_rx,
+        bob_node,
+        bob_rx,
+        _alice_id,
+        bob_id,
+        _alice_dest,
+        bob_dest,
+    ) = setup_two_peers();
 
     // Bob announces to Alice
     let bob_announced = announce_bob_to_alice(&bob_node, &bob_dest, &bob_id, &alice_rx);
@@ -677,8 +725,8 @@ fn test_unload_hook_restores_behavior() {
 
     // Verify traffic works with hook
     alice_node.send_packet(&dest_to_bob, b"with hook").unwrap();
-    let (_, raw, _) = wait_for_delivery(&bob_rx, TIMEOUT)
-        .expect("Bob did not receive message with hook active");
+    let (_, raw, _) =
+        wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive message with hook active");
     let decrypted = decrypt_delivery(&raw, &bob_id).expect("Decryption failed");
     assert_eq!(decrypted, b"with hook");
 
@@ -692,8 +740,8 @@ fn test_unload_hook_restores_behavior() {
     alice_node
         .send_packet(&dest_to_bob, b"after unload")
         .unwrap();
-    let (_, raw, _) = wait_for_delivery(&bob_rx, TIMEOUT)
-        .expect("Bob did not receive message after hook unload");
+    let (_, raw, _) =
+        wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive message after hook unload");
     let decrypted = decrypt_delivery(&raw, &bob_id).expect("Decryption failed");
     assert_eq!(decrypted, b"after unload");
 
@@ -712,8 +760,17 @@ fn test_rate_limiter_drops_excess() {
     // After 100 packets the hook should start dropping.
     // We verify that the hook loads and does not interfere with normal delivery
     // (since we only send a few packets, well under the threshold).
-    let (transport, alice_node, alice_rx, bob_node, bob_rx, _alice_id, bob_id, _alice_dest, bob_dest) =
-        setup_two_peers();
+    let (
+        transport,
+        alice_node,
+        alice_rx,
+        bob_node,
+        bob_rx,
+        _alice_id,
+        bob_id,
+        _alice_dest,
+        bob_dest,
+    ) = setup_two_peers();
 
     let bob_announced = announce_bob_to_alice(&bob_node, &bob_dest, &bob_id, &alice_rx);
     let dest_to_bob = Destination::single_out(APP_NAME, &["msg", "rx"], &bob_announced);
@@ -748,8 +805,17 @@ fn test_rate_limiter_drops_excess() {
 fn test_allowlist_blocks_unknown() {
     // The allowlist only allows destinations starting with 0x0000 or 0xFFFF.
     // Real announces have random hashes, so they will almost certainly be dropped.
-    let (transport, alice_node, alice_rx, bob_node, _bob_rx, _alice_id, bob_id, _alice_dest, bob_dest) =
-        setup_two_peers();
+    let (
+        transport,
+        alice_node,
+        alice_rx,
+        bob_node,
+        _bob_rx,
+        _alice_id,
+        bob_id,
+        _alice_dest,
+        bob_dest,
+    ) = setup_two_peers();
 
     // Load allowlist on Alice at AnnounceReceived
     alice_node
@@ -785,8 +851,17 @@ fn test_allowlist_blocks_unknown() {
 fn test_packet_mirror_does_not_block() {
     // packet_mirror injects a SendOnInterface action but returns Continue,
     // so normal packet delivery should not be affected.
-    let (transport, alice_node, alice_rx, bob_node, bob_rx, _alice_id, bob_id, _alice_dest, bob_dest) =
-        setup_two_peers();
+    let (
+        transport,
+        alice_node,
+        alice_rx,
+        bob_node,
+        bob_rx,
+        _alice_id,
+        bob_id,
+        _alice_dest,
+        bob_dest,
+    ) = setup_two_peers();
 
     let bob_announced = announce_bob_to_alice(&bob_node, &bob_dest, &bob_id, &alice_rx);
     let dest_to_bob = Destination::single_out(APP_NAME, &["msg", "rx"], &bob_announced);
@@ -803,7 +878,9 @@ fn test_packet_mirror_does_not_block() {
         .expect("load_hook failed");
 
     // Send a packet — should still be delivered normally
-    alice_node.send_packet(&dest_to_bob, b"mirror test").unwrap();
+    alice_node
+        .send_packet(&dest_to_bob, b"mirror test")
+        .unwrap();
     let (_, raw, _) = wait_for_delivery(&bob_rx, TIMEOUT)
         .expect("Bob did not receive message with packet_mirror active");
     let decrypted = decrypt_delivery(&raw, &bob_id).expect("Decryption failed");
@@ -819,8 +896,17 @@ fn test_link_guard_loads_and_continues() {
     // Verify link_guard loads successfully on LinkRequestReceived and doesn't
     // interfere with normal operation (no link requests in this test, just
     // verify the hook loads and traffic still flows).
-    let (transport, alice_node, alice_rx, bob_node, bob_rx, _alice_id, bob_id, _alice_dest, bob_dest) =
-        setup_two_peers();
+    let (
+        transport,
+        alice_node,
+        alice_rx,
+        bob_node,
+        bob_rx,
+        _alice_id,
+        bob_id,
+        _alice_dest,
+        bob_dest,
+    ) = setup_two_peers();
 
     let bob_announced = announce_bob_to_alice(&bob_node, &bob_dest, &bob_id, &alice_rx);
     let dest_to_bob = Destination::single_out(APP_NAME, &["msg", "rx"], &bob_announced);
@@ -852,8 +938,17 @@ fn test_link_guard_loads_and_continues() {
 fn test_announce_dedup_loads_and_allows_first() {
     // announce_dedup suppresses after MAX_RETRANSMITS (3) of the same dest hash.
     // First announce should pass through.
-    let (transport, alice_node, alice_rx, bob_node, _bob_rx, _alice_id, bob_id, _alice_dest, bob_dest) =
-        setup_two_peers();
+    let (
+        transport,
+        alice_node,
+        alice_rx,
+        bob_node,
+        _bob_rx,
+        _alice_id,
+        bob_id,
+        _alice_dest,
+        bob_dest,
+    ) = setup_two_peers();
 
     // Load announce_dedup on Alice at AnnounceRetransmit
     alice_node
@@ -878,8 +973,17 @@ fn test_announce_dedup_loads_and_allows_first() {
 #[test]
 fn test_metrics_does_not_interfere() {
     // metrics hook returns Continue on everything, so it should not block delivery.
-    let (transport, alice_node, alice_rx, bob_node, bob_rx, _alice_id, bob_id, _alice_dest, bob_dest) =
-        setup_two_peers();
+    let (
+        transport,
+        alice_node,
+        alice_rx,
+        bob_node,
+        bob_rx,
+        _alice_id,
+        bob_id,
+        _alice_dest,
+        bob_dest,
+    ) = setup_two_peers();
 
     let bob_announced = announce_bob_to_alice(&bob_node, &bob_dest, &bob_id, &alice_rx);
     let dest_to_bob = Destination::single_out(APP_NAME, &["msg", "rx"], &bob_announced);

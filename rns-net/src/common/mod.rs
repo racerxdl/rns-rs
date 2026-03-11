@@ -1,10 +1,10 @@
-pub mod time;
+pub mod callbacks;
 pub mod compressor;
-pub mod destination;
 pub mod config;
-pub mod interface_stats;
+pub mod destination;
 pub mod discovery;
 pub mod event;
-pub mod management;
+pub mod interface_stats;
 pub mod link_manager;
-pub mod callbacks;
+pub mod management;
+pub mod time;

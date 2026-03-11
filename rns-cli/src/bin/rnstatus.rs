@@ -5,13 +5,13 @@
 use std::path::Path;
 use std::process;
 
-use rns_net::{RpcAddr, RpcClient};
+use rns_cli::args::Args;
+use rns_cli::format::{prettyfrequency, prettyhexrep, prettytime, size_str, speed_str};
+use rns_net::config;
 use rns_net::pickle::PickleValue;
 use rns_net::rpc::derive_auth_key;
-use rns_net::config;
 use rns_net::storage;
-use rns_cli::args::Args;
-use rns_cli::format::{size_str, speed_str, prettytime, prettyhexrep, prettyfrequency};
+use rns_net::{RpcAddr, RpcClient};
 
 const VERSION: &str = env!("FULL_VERSION");
 
@@ -47,9 +47,7 @@ fn main() {
     let show_links = args.has("l");
     let show_announces = args.has("A");
     let monitor_mode = args.has("m");
-    let monitor_interval: f64 = args.get("I")
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1.0);
+    let monitor_interval: f64 = args.get("I").and_then(|s| s.parse().ok()).unwrap_or(1.0);
     let remote_hash = args.get("R").map(|s| s.to_string());
     let show_discovered = args.has("d");
     let show_discovered_config = args.has("D");
@@ -64,9 +62,8 @@ fn main() {
     // Discovered interfaces query via -d or -D flag
     if show_discovered || show_discovered_config {
         // Load config to get RPC address and auth key
-        let config_dir = storage::resolve_config_dir(
-            config_path.as_ref().map(|s| Path::new(s.as_str())),
-        );
+        let config_dir =
+            storage::resolve_config_dir(config_path.as_ref().map(|s| Path::new(s.as_str())));
         let config_file = config_dir.join("config");
         let rns_config = if config_file.exists() {
             match config::parse_file(&config_file) {
@@ -102,9 +99,7 @@ fn main() {
             }
         };
 
-        let auth_key = derive_auth_key(
-            &identity.get_private_key().unwrap_or([0u8; 64]),
-        );
+        let auth_key = derive_auth_key(&identity.get_private_key().unwrap_or([0u8; 64]));
 
         let rpc_port = rns_config.reticulum.instance_control_port;
         let rpc_addr = RpcAddr::Tcp("127.0.0.1".into(), rpc_port);
@@ -123,9 +118,8 @@ fn main() {
     }
 
     // Load config to get RPC address and auth key
-    let config_dir = storage::resolve_config_dir(
-        config_path.as_ref().map(|s| Path::new(s.as_str())),
-    );
+    let config_dir =
+        storage::resolve_config_dir(config_path.as_ref().map(|s| Path::new(s.as_str())));
     let config_file = config_dir.join("config");
     let rns_config = if config_file.exists() {
         match config::parse_file(&config_file) {
@@ -162,9 +156,7 @@ fn main() {
         }
     };
 
-    let auth_key = derive_auth_key(
-        &identity.get_private_key().unwrap_or([0u8; 64]),
-    );
+    let auth_key = derive_auth_key(&identity.get_private_key().unwrap_or([0u8; 64]));
 
     let rpc_port = rns_config.reticulum.instance_control_port;
     let rpc_addr = RpcAddr::Tcp("127.0.0.1".into(), rpc_port);
@@ -186,9 +178,10 @@ fn main() {
         };
 
         // Request interface stats
-        let response = match client.call(&PickleValue::Dict(vec![
-            (PickleValue::String("get".into()), PickleValue::String("interface_stats".into())),
-        ])) {
+        let response = match client.call(&PickleValue::Dict(vec![(
+            PickleValue::String("get".into()),
+            PickleValue::String("interface_stats".into()),
+        )])) {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("RPC error: {}", e);
@@ -202,9 +195,10 @@ fn main() {
 
         // Query link count if requested
         let link_count = if show_links {
-            match client.call(&PickleValue::Dict(vec![
-                (PickleValue::String("get".into()), PickleValue::String("link_count".into())),
-            ])) {
+            match client.call(&PickleValue::Dict(vec![(
+                PickleValue::String("get".into()),
+                PickleValue::String("link_count".into()),
+            )])) {
                 Ok(r) => r.as_int(),
                 Err(_) => None,
             }
@@ -316,18 +310,34 @@ fn print_status(
                         na.cmp(nb)
                     }
                 };
-                if reverse { cmp.reverse() } else { cmp }
+                if reverse {
+                    cmp.reverse()
+                } else {
+                    cmp
+                }
             });
         }
 
         for iface in &iface_list {
-            let name = iface.get("name").and_then(|v| v.as_str()).unwrap_or("Unknown");
-            let status = iface.get("status").and_then(|v| v.as_bool()).unwrap_or(false);
+            let name = iface
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown");
+            let status = iface
+                .get("status")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let rxb = iface.get("rxb").and_then(|v| v.as_int()).unwrap_or(0) as u64;
             let txb = iface.get("txb").and_then(|v| v.as_int()).unwrap_or(0) as u64;
-            let bitrate = iface.get("bitrate").and_then(|v| v.as_int()).map(|n| n as u64);
+            let bitrate = iface
+                .get("bitrate")
+                .and_then(|v| v.as_int())
+                .map(|n| n as u64);
             let mode = iface.get("mode").and_then(|v| v.as_int()).unwrap_or(0) as u8;
-            let started = iface.get("started").and_then(|v| v.as_float()).unwrap_or(0.0);
+            let started = iface
+                .get("started")
+                .and_then(|v| v.as_float())
+                .unwrap_or(0.0);
 
             let mode_str = match mode {
                 rns_net::MODE_FULL => "Full",
@@ -357,8 +367,14 @@ fn print_status(
                 }
             }
             if show_announces {
-                let ia_freq = iface.get("ia_freq").and_then(|v| v.as_float()).unwrap_or(0.0);
-                let oa_freq = iface.get("oa_freq").and_then(|v| v.as_float()).unwrap_or(0.0);
+                let ia_freq = iface
+                    .get("ia_freq")
+                    .and_then(|v| v.as_float())
+                    .unwrap_or(0.0);
+                let oa_freq = iface
+                    .get("oa_freq")
+                    .and_then(|v| v.as_float())
+                    .unwrap_or(0.0);
                 println!(
                     "    Announces : {} in  {} out",
                     prettyfrequency(ia_freq),
@@ -415,7 +431,10 @@ fn remote_status(hash_str: &str, config_path: Option<&str>) {
     let dest_hash = match rns_cli::remote::parse_hex_hash(hash_str) {
         Some(h) => h,
         None => {
-            eprintln!("Invalid destination hash: {} (expected 32 hex chars)", hash_str);
+            eprintln!(
+                "Invalid destination hash: {} (expected 32 hex chars)",
+                hash_str
+            );
             process::exit(1);
         }
     };
@@ -440,9 +459,10 @@ fn remote_status(hash_str: &str, config_path: Option<&str>) {
 
 /// Show discovered interfaces
 fn show_discovered_interfaces(client: &mut RpcClient, show_config: bool, json_output: bool) {
-    let response = match client.call(&PickleValue::Dict(vec![
-        (PickleValue::String("get".into()), PickleValue::String("discovered_interfaces".into())),
-    ])) {
+    let response = match client.call(&PickleValue::Dict(vec![(
+        PickleValue::String("get".into()),
+        PickleValue::String("discovered_interfaces".into()),
+    )])) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("RPC error: {}", e);
@@ -475,22 +495,46 @@ fn show_discovered_interfaces(client: &mut RpcClient, show_config: bool, json_ou
                 println!("{}", "=".repeat(32));
             }
 
-            let name = iface.get("name").and_then(|v| v.as_str()).unwrap_or("Unknown");
-            let if_type = iface.get("type").and_then(|v| v.as_str())
+            let name = iface
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown");
+            let if_type = iface
+                .get("type")
+                .and_then(|v| v.as_str())
                 .or_else(|| iface.get("interface_type").and_then(|v| v.as_str()))
                 .unwrap_or("Unknown");
-            let status = iface.get("status").and_then(|v| v.as_str()).unwrap_or("unknown");
-            let transport = iface.get("transport").and_then(|v| v.as_bool()).unwrap_or(false);
+            let status = iface
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let transport = iface
+                .get("transport")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let hops = iface.get("hops").and_then(|v| v.as_int()).unwrap_or(0);
-            let value = iface.get("value").or_else(|| iface.get("stamp_value"))
-                .and_then(|v| v.as_int()).unwrap_or(0);
-            let last_heard = iface.get("last_heard").and_then(|v| v.as_float()).unwrap_or(0.0);
-            let discovered = iface.get("discovered").and_then(|v| v.as_float()).unwrap_or(0.0);
+            let value = iface
+                .get("value")
+                .or_else(|| iface.get("stamp_value"))
+                .and_then(|v| v.as_int())
+                .unwrap_or(0);
+            let last_heard = iface
+                .get("last_heard")
+                .and_then(|v| v.as_float())
+                .unwrap_or(0.0);
+            let discovered = iface
+                .get("discovered")
+                .and_then(|v| v.as_float())
+                .unwrap_or(0.0);
 
-            let transport_id = iface.get("transport_id").and_then(|v| v.as_bytes())
+            let transport_id = iface
+                .get("transport_id")
+                .and_then(|v| v.as_bytes())
                 .map(|b| prettyhexrep(&b[..b.len().min(8)]))
                 .unwrap_or_default();
-            let network_id = iface.get("network_id").and_then(|v| v.as_bytes())
+            let network_id = iface
+                .get("network_id")
+                .and_then(|v| v.as_bytes())
                 .map(|b| prettyhexrep(&b[..b.len().min(8)]))
                 .unwrap_or_default();
 
@@ -504,8 +548,15 @@ fn show_discovered_interfaces(client: &mut RpcClient, show_config: bool, json_ou
             println!("Name         : {}", name);
             println!("Type         : {}", if_type);
             println!("Status       : {}", status);
-            println!("Transport    : {}", if transport { "Enabled" } else { "Disabled" });
-            println!("Distance     : {} hop{}", hops, if hops == 1 { "" } else { "s" });
+            println!(
+                "Transport    : {}",
+                if transport { "Enabled" } else { "Disabled" }
+            );
+            println!(
+                "Distance     : {} hop{}",
+                hops,
+                if hops == 1 { "" } else { "s" }
+            );
 
             let now = rns_net::time::now();
             if discovered > 0.0 {
@@ -531,10 +582,18 @@ fn show_discovered_interfaces(client: &mut RpcClient, show_config: bool, json_ou
             if let Some(bw) = iface.get("bandwidth").and_then(|v| v.as_int()) {
                 println!("Bandwidth    : {} Hz", bw);
             }
-            if let Some(sf) = iface.get("sf").or_else(|| iface.get("spreading_factor")).and_then(|v| v.as_int()) {
+            if let Some(sf) = iface
+                .get("sf")
+                .or_else(|| iface.get("spreading_factor"))
+                .and_then(|v| v.as_int())
+            {
                 println!("Sprd. Factor : {}", sf);
             }
-            if let Some(cr) = iface.get("cr").or_else(|| iface.get("coding_rate")).and_then(|v| v.as_int()) {
+            if let Some(cr) = iface
+                .get("cr")
+                .or_else(|| iface.get("coding_rate"))
+                .and_then(|v| v.as_int())
+            {
                 println!("Coding Rate  : {}", cr);
             }
             if let Some(modulation) = iface.get("modulation").and_then(|v| v.as_str()) {
@@ -561,26 +620,36 @@ fn show_discovered_interfaces(client: &mut RpcClient, show_config: bool, json_ou
         }
     } else {
         // Table view
-        println!("{:<25} {:<12} {:<12} {:<12} {:<8} {:<15}",
-            "Name", "Type", "Status", "Last Heard", "Value", "Location");
+        println!(
+            "{:<25} {:<12} {:<12} {:<12} {:<8} {:<15}",
+            "Name", "Type", "Status", "Last Heard", "Value", "Location"
+        );
         println!("{}", "-".repeat(89));
 
         let now = rns_net::time::now();
 
         for iface in interfaces {
-            let name_full = iface.get("name").and_then(|v| v.as_str()).unwrap_or("Unknown");
+            let name_full = iface
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown");
             let name = if name_full.len() > 24 {
                 format!("{}...", &name_full[..21])
             } else {
                 name_full.to_string()
             };
 
-            let if_type = iface.get("type").and_then(|v| v.as_str())
+            let if_type = iface
+                .get("type")
+                .and_then(|v| v.as_str())
                 .or_else(|| iface.get("interface_type").and_then(|v| v.as_str()))
                 .unwrap_or("Unknown")
                 .replace("Interface", "");
 
-            let status = iface.get("status").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let status = iface
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
             let status_display = match status {
                 "available" => "Available",
                 "unknown" => "Unknown",
@@ -588,7 +657,10 @@ fn show_discovered_interfaces(client: &mut RpcClient, show_config: bool, json_ou
                 _ => status,
             };
 
-            let last_heard = iface.get("last_heard").and_then(|v| v.as_float()).unwrap_or(0.0);
+            let last_heard = iface
+                .get("last_heard")
+                .and_then(|v| v.as_float())
+                .unwrap_or(0.0);
             let last_heard_display = if last_heard > 0.0 {
                 let diff = now - last_heard;
                 if diff < 60.0 {
@@ -604,8 +676,11 @@ fn show_discovered_interfaces(client: &mut RpcClient, show_config: bool, json_ou
                 "N/A".to_string()
             };
 
-            let value = iface.get("value").or_else(|| iface.get("stamp_value"))
-                .and_then(|v| v.as_int()).unwrap_or(0);
+            let value = iface
+                .get("value")
+                .or_else(|| iface.get("stamp_value"))
+                .and_then(|v| v.as_int())
+                .unwrap_or(0);
 
             let lat = iface.get("latitude").and_then(|v| v.as_float());
             let lon = iface.get("longitude").and_then(|v| v.as_float());
@@ -614,8 +689,10 @@ fn show_discovered_interfaces(client: &mut RpcClient, show_config: bool, json_ou
                 _ => "N/A".to_string(),
             };
 
-            println!("{:<25} {:<12} {:<12} {:<12} {:<8} {:<15}",
-                name, if_type, status_display, last_heard_display, value, location);
+            println!(
+                "{:<25} {:<12} {:<12} {:<12} {:<8} {:<15}",
+                name, if_type, status_display, last_heard_display, value, location
+            );
         }
     }
 }

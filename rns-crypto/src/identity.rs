@@ -142,13 +142,8 @@ impl Identity {
         let ephemeral_pub_bytes = ephemeral.public_key().public_bytes();
         let shared_key = ephemeral.exchange(pub_key);
 
-        let derived_key = hkdf::hkdf(
-            DERIVED_KEY_LENGTH,
-            &shared_key,
-            Some(&self.hash),
-            None,
-        )
-        .map_err(CryptoError::HkdfError)?;
+        let derived_key = hkdf::hkdf(DERIVED_KEY_LENGTH, &shared_key, Some(&self.hash), None)
+            .map_err(CryptoError::HkdfError)?;
 
         let token = Token::new(&derived_key).map_err(CryptoError::TokenError)?;
         let ciphertext = token.encrypt(plaintext, rng);
@@ -172,13 +167,8 @@ impl Identity {
         let ephemeral_pub_bytes = ephemeral.public_key().public_bytes();
         let shared_key = ephemeral.exchange(pub_key);
 
-        let derived_key = hkdf::hkdf(
-            DERIVED_KEY_LENGTH,
-            &shared_key,
-            Some(&self.hash),
-            None,
-        )
-        .map_err(CryptoError::HkdfError)?;
+        let derived_key = hkdf::hkdf(DERIVED_KEY_LENGTH, &shared_key, Some(&self.hash), None)
+            .map_err(CryptoError::HkdfError)?;
 
         let token = Token::new(&derived_key).map_err(CryptoError::TokenError)?;
         let ciphertext = token.encrypt_with_iv(plaintext, iv);
@@ -202,13 +192,8 @@ impl Identity {
 
         let shared_key = prv.exchange(&peer_pub);
 
-        let derived_key = hkdf::hkdf(
-            DERIVED_KEY_LENGTH,
-            &shared_key,
-            Some(&self.hash),
-            None,
-        )
-        .map_err(CryptoError::HkdfError)?;
+        let derived_key = hkdf::hkdf(DERIVED_KEY_LENGTH, &shared_key, Some(&self.hash), None)
+            .map_err(CryptoError::HkdfError)?;
 
         let token = Token::new(&derived_key).map_err(CryptoError::TokenError)?;
         token.decrypt(ciphertext).map_err(CryptoError::TokenError)
@@ -245,10 +230,7 @@ mod tests {
         let id = Identity::new(&mut rng);
         let prv_bytes = id.get_private_key().unwrap();
         let id2 = Identity::from_private_key(&prv_bytes);
-        assert_eq!(
-            id.get_public_key().unwrap(),
-            id2.get_public_key().unwrap()
-        );
+        assert_eq!(id.get_public_key().unwrap(), id2.get_public_key().unwrap());
     }
 
     #[test]

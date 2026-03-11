@@ -6,8 +6,8 @@
 
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -121,7 +121,8 @@ fn run_udp_punch(
     let mut first_ack_time: Option<Instant> = None;
 
     // Combine all endpoints to try
-    let all_endpoints: Vec<SocketAddr> = peer_endpoints.iter()
+    let all_endpoints: Vec<SocketAddr> = peer_endpoints
+        .iter()
         .chain(local_endpoints.iter())
         .cloned()
         .collect();
@@ -184,7 +185,11 @@ fn run_udp_punch(
                 // Set socket back to blocking with a reasonable timeout
                 let _ = socket.set_read_timeout(Some(Duration::from_millis(100)));
                 let rtt = first_ack_time.map(|t| t - start).unwrap_or(start.elapsed());
-                return verified_peer.map(|peer_addr| PunchResult { socket, peer_addr, rtt });
+                return verified_peer.map(|peer_addr| PunchResult {
+                    socket,
+                    peer_addr,
+                    rtt,
+                });
             }
         }
     }
@@ -279,21 +284,9 @@ mod tests {
         let session_id = [0x11; 16];
         let token = [0x22; 32];
 
-        let handle_a = start_udp_punch(
-            sock_a,
-            vec![addr_b],
-            vec![],
-            session_id,
-            token,
-        ).unwrap();
+        let handle_a = start_udp_punch(sock_a, vec![addr_b], vec![], session_id, token).unwrap();
 
-        let handle_b = start_udp_punch(
-            sock_b,
-            vec![addr_a],
-            vec![],
-            session_id,
-            token,
-        ).unwrap();
+        let handle_b = start_udp_punch(sock_b, vec![addr_a], vec![], session_id, token).unwrap();
 
         let result_a = handle_a.join();
         let result_b = handle_b.join();

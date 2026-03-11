@@ -18,11 +18,7 @@ pub enum ProofResult {
 ///
 /// Implicit proof (64 bytes): `[signature:64]`
 /// - Verify: identity.verify(signature, packet_hash)
-pub fn validate_proof(
-    proof: &[u8],
-    packet_hash: &[u8; 32],
-    identity: &Identity,
-) -> ProofResult {
+pub fn validate_proof(proof: &[u8], packet_hash: &[u8; 32], identity: &Identity) -> ProofResult {
     if proof.len() == constants::EXPL_LENGTH {
         // Explicit proof: [proof_hash:32][signature:64]
         let proof_hash = &proof[..constants::HASHLENGTH / 8];
@@ -30,7 +26,8 @@ pub fn validate_proof(
             return ProofResult::InvalidHash;
         }
 
-        let signature: &[u8; 64] = proof[constants::HASHLENGTH / 8..constants::HASHLENGTH / 8 + constants::SIGLENGTH / 8]
+        let signature: &[u8; 64] = proof
+            [constants::HASHLENGTH / 8..constants::HASHLENGTH / 8 + constants::SIGLENGTH / 8]
             .try_into()
             .unwrap();
 
@@ -41,9 +38,7 @@ pub fn validate_proof(
         }
     } else if proof.len() == constants::IMPL_LENGTH {
         // Implicit proof: [signature:64]
-        let signature: &[u8; 64] = proof[..constants::SIGLENGTH / 8]
-            .try_into()
-            .unwrap();
+        let signature: &[u8; 64] = proof[..constants::SIGLENGTH / 8].try_into().unwrap();
 
         if identity.verify(signature, packet_hash) {
             ProofResult::Valid
@@ -75,7 +70,10 @@ mod tests {
         proof.extend_from_slice(&signature);
 
         assert_eq!(proof.len(), constants::EXPL_LENGTH);
-        assert_eq!(validate_proof(&proof, &packet_hash, &identity), ProofResult::Valid);
+        assert_eq!(
+            validate_proof(&proof, &packet_hash, &identity),
+            ProofResult::Valid
+        );
     }
 
     #[test]
@@ -90,7 +88,10 @@ mod tests {
         proof.extend_from_slice(&wrong_hash); // wrong hash in proof
         proof.extend_from_slice(&signature);
 
-        assert_eq!(validate_proof(&proof, &packet_hash, &identity), ProofResult::InvalidHash);
+        assert_eq!(
+            validate_proof(&proof, &packet_hash, &identity),
+            ProofResult::InvalidHash
+        );
     }
 
     #[test]
@@ -105,7 +106,10 @@ mod tests {
         proof.extend_from_slice(&packet_hash);
         proof.extend_from_slice(&bad_sig);
 
-        assert_eq!(validate_proof(&proof, &packet_hash, &identity), ProofResult::InvalidSignature);
+        assert_eq!(
+            validate_proof(&proof, &packet_hash, &identity),
+            ProofResult::InvalidSignature
+        );
     }
 
     #[test]
@@ -116,7 +120,10 @@ mod tests {
         let signature = identity.sign(&packet_hash).unwrap();
 
         assert_eq!(signature.len(), constants::IMPL_LENGTH);
-        assert_eq!(validate_proof(&signature, &packet_hash, &identity), ProofResult::Valid);
+        assert_eq!(
+            validate_proof(&signature, &packet_hash, &identity),
+            ProofResult::Valid
+        );
     }
 
     #[test]
@@ -125,7 +132,10 @@ mod tests {
         let packet_hash = crate::hash::full_hash(b"test packet data");
 
         let bad_sig = [0u8; 64];
-        assert_eq!(validate_proof(&bad_sig, &packet_hash, &identity), ProofResult::InvalidSignature);
+        assert_eq!(
+            validate_proof(&bad_sig, &packet_hash, &identity),
+            ProofResult::InvalidSignature
+        );
     }
 
     #[test]
@@ -134,6 +144,9 @@ mod tests {
         let packet_hash = crate::hash::full_hash(b"test packet data");
 
         let proof = [0u8; 50]; // wrong length
-        assert_eq!(validate_proof(&proof, &packet_hash, &identity), ProofResult::InvalidLength);
+        assert_eq!(
+            validate_proof(&proof, &packet_hash, &identity),
+            ProofResult::InvalidLength
+        );
     }
 }

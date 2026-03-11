@@ -121,17 +121,41 @@ impl DiscoveredInterfaceStorage {
     fn serialize_interface(&self, iface: &DiscoveredInterface) -> io::Result<Vec<u8>> {
         let mut entries: Vec<(Value, Value)> = Vec::new();
 
-        entries.push((Value::Str("type".into()), Value::Str(iface.interface_type.clone())));
+        entries.push((
+            Value::Str("type".into()),
+            Value::Str(iface.interface_type.clone()),
+        ));
         entries.push((Value::Str("transport".into()), Value::Bool(iface.transport)));
         entries.push((Value::Str("name".into()), Value::Str(iface.name.clone())));
-        entries.push((Value::Str("discovered".into()), Value::Float(iface.discovered)));
-        entries.push((Value::Str("last_heard".into()), Value::Float(iface.last_heard)));
-        entries.push((Value::Str("heard_count".into()), Value::UInt(iface.heard_count as u64)));
-        entries.push((Value::Str("status".into()), Value::Str(iface.status.as_str().into())));
+        entries.push((
+            Value::Str("discovered".into()),
+            Value::Float(iface.discovered),
+        ));
+        entries.push((
+            Value::Str("last_heard".into()),
+            Value::Float(iface.last_heard),
+        ));
+        entries.push((
+            Value::Str("heard_count".into()),
+            Value::UInt(iface.heard_count as u64),
+        ));
+        entries.push((
+            Value::Str("status".into()),
+            Value::Str(iface.status.as_str().into()),
+        ));
         entries.push((Value::Str("stamp".into()), Value::Bin(iface.stamp.clone())));
-        entries.push((Value::Str("value".into()), Value::UInt(iface.stamp_value as u64)));
-        entries.push((Value::Str("transport_id".into()), Value::Bin(iface.transport_id.to_vec())));
-        entries.push((Value::Str("network_id".into()), Value::Bin(iface.network_id.to_vec())));
+        entries.push((
+            Value::Str("value".into()),
+            Value::UInt(iface.stamp_value as u64),
+        ));
+        entries.push((
+            Value::Str("transport_id".into()),
+            Value::Bin(iface.transport_id.to_vec()),
+        ));
+        entries.push((
+            Value::Str("network_id".into()),
+            Value::Bin(iface.network_id.to_vec()),
+        ));
         entries.push((Value::Str("hops".into()), Value::UInt(iface.hops as u64)));
 
         if let Some(v) = iface.latitude {
@@ -177,7 +201,10 @@ impl DiscoveredInterfaceStorage {
             entries.push((Value::Str("config_entry".into()), Value::Str(v.clone())));
         }
 
-        entries.push((Value::Str("discovery_hash".into()), Value::Bin(iface.discovery_hash.to_vec())));
+        entries.push((
+            Value::Str("discovery_hash".into()),
+            Value::Bin(iface.discovery_hash.to_vec()),
+        ));
 
         Ok(msgpack::pack(&Value::Map(entries)))
     }
@@ -193,44 +220,49 @@ impl DiscoveredInterfaceStorage {
             v.map_get(key)
                 .and_then(|val| val.as_str())
                 .map(|s| s.to_string())
-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, format!("{} not a string", key)))
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, format!("{} not a string", key))
+                })
         };
 
         let get_opt_str = |v: &Value, key: &str| -> Option<String> {
-            v.map_get(key).and_then(|val| val.as_str().map(|s| s.to_string()))
+            v.map_get(key)
+                .and_then(|val| val.as_str().map(|s| s.to_string()))
         };
 
         let get_bool = |v: &Value, key: &str| -> io::Result<bool> {
-            v.map_get(key)
-                .and_then(|val| val.as_bool())
-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, format!("{} not a bool", key)))
+            v.map_get(key).and_then(|val| val.as_bool()).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, format!("{} not a bool", key))
+            })
         };
 
         let get_float = |v: &Value, key: &str| -> io::Result<f64> {
             v.map_get(key)
                 .and_then(|val| val.as_float())
-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, format!("{} not a float", key)))
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, format!("{} not a float", key))
+                })
         };
 
-        let get_opt_float = |v: &Value, key: &str| -> Option<f64> {
-            v.map_get(key).and_then(|val| val.as_float())
-        };
+        let get_opt_float =
+            |v: &Value, key: &str| -> Option<f64> { v.map_get(key).and_then(|val| val.as_float()) };
 
         let get_uint = |v: &Value, key: &str| -> io::Result<u64> {
-            v.map_get(key)
-                .and_then(|val| val.as_uint())
-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, format!("{} not a uint", key)))
+            v.map_get(key).and_then(|val| val.as_uint()).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, format!("{} not a uint", key))
+            })
         };
 
-        let get_opt_uint = |v: &Value, key: &str| -> Option<u64> {
-            v.map_get(key).and_then(|val| val.as_uint())
-        };
+        let get_opt_uint =
+            |v: &Value, key: &str| -> Option<u64> { v.map_get(key).and_then(|val| val.as_uint()) };
 
         let get_bytes = |v: &Value, key: &str| -> io::Result<Vec<u8>> {
             v.map_get(key)
                 .and_then(|val| val.as_bin())
                 .map(|b| b.to_vec())
-                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, format!("{} not bytes", key)))
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, format!("{} not bytes", key))
+                })
         };
 
         let transport_id_bytes = get_bytes(&value, "transport_id")?;
@@ -298,13 +330,10 @@ impl DiscoveredInterfaceStorage {
 /// Generate a discovery stamp with the given cost using rayon parallel iterators.
 ///
 /// Returns `(stamp, value)` on success. This is a blocking, CPU-intensive operation.
-pub fn generate_discovery_stamp(
-    packed_data: &[u8],
-    stamp_cost: u8,
-) -> ([u8; STAMP_SIZE], u32) {
+pub fn generate_discovery_stamp(packed_data: &[u8], stamp_cost: u8) -> ([u8; STAMP_SIZE], u32) {
+    use rns_crypto::{OsRng, Rng};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, Mutex};
-    use rns_crypto::{OsRng, Rng};
 
     let infohash = sha256(packed_data);
     let workblock = stamp_workblock(&infohash, WORKBLOCK_EXPAND_ROUNDS);
@@ -340,7 +369,11 @@ pub fn generate_discovery_stamp(
         }
     });
 
-    let stamp = result.lock().unwrap().take().expect("stamp search must find result");
+    let stamp = result
+        .lock()
+        .unwrap()
+        .take()
+        .expect("stamp search must find result");
     let value = rns_core::stamp::stamp_value(&workblock, &stamp);
     (stamp, value)
 }
@@ -437,11 +470,7 @@ impl InterfaceAnnouncer {
 
             std::thread::spawn(move || {
                 let (stamp, value) = generate_discovery_stamp(&packed, stamp_cost);
-                log::info!(
-                    "Discovery stamp generated (value={}) for '{}'",
-                    value,
-                    name,
-                );
+                log::info!("Discovery stamp generated (value={}) for '{}'", value, name,);
 
                 let flags: u8 = 0x00; // no encryption
                 let mut app_data = Vec::with_capacity(1 + packed.len() + STAMP_SIZE);
@@ -535,7 +564,6 @@ impl InterfaceAnnouncer {
 
         msgpack::pack(&msgpack::Value::Map(entries))
     }
-
 }
 
 // ============================================================================
@@ -640,7 +668,8 @@ mod tests {
         static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
         let id = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("rns-discovery-test-{}-{}", std::process::id(), id));
+        let dir =
+            std::env::temp_dir().join(format!("rns-discovery-test-{}-{}", std::process::id(), id));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
 

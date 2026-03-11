@@ -128,11 +128,7 @@ impl Default for AutoConfig {
 ///   2. Build suffix from hash bytes 2..14 as 6 little-endian 16-bit words
 ///   3. First word is hardcoded "0"
 ///   4. Prefix = "ff" + address_type + scope
-pub fn derive_multicast_address(
-    group_id: &[u8],
-    address_type: &str,
-    scope: &str,
-) -> String {
+pub fn derive_multicast_address(group_id: &[u8], address_type: &str, scope: &str) -> String {
     let group_hash = rns_crypto::sha256::sha256(group_id);
     let g = &group_hash;
 
@@ -177,10 +173,7 @@ pub struct LocalInterface {
 /// Enumerate network interfaces that have IPv6 link-local addresses (fe80::/10).
 ///
 /// Uses `libc::getifaddrs()`. Filters by allowed/ignored interface lists.
-pub fn enumerate_interfaces(
-    allowed: &[String],
-    ignored: &[String],
-) -> Vec<LocalInterface> {
+pub fn enumerate_interfaces(allowed: &[String], ignored: &[String]) -> Vec<LocalInterface> {
     let mut result = Vec::new();
 
     unsafe {
@@ -353,10 +346,7 @@ pub fn start(
     tx: EventSender,
     next_dynamic_id: Arc<AtomicU64>,
 ) -> io::Result<()> {
-    let interfaces = enumerate_interfaces(
-        &config.allowed_interfaces,
-        &config.ignored_interfaces,
-    );
+    let interfaces = enumerate_interfaces(&config.allowed_interfaces, &config.ignored_interfaces);
 
     if interfaces.is_empty() {
         log::warn!(
@@ -397,7 +387,9 @@ pub fn start(
     {
         let mut state = shared.lock().unwrap();
         for iface in &interfaces {
-            state.link_local_addresses.push(iface.link_local_addr.clone());
+            state
+                .link_local_addresses
+                .push(iface.link_local_addr.clone());
         }
     }
 
@@ -415,18 +407,11 @@ pub fn start(
         let if_index = local_iface.index;
 
         // ─── Multicast discovery socket ───────────────────────────────
-        let mcast_socket = create_multicast_recv_socket(
-            &mcast_ip,
-            discovery_port,
-            if_index,
-        )?;
+        let mcast_socket = create_multicast_recv_socket(&mcast_ip, discovery_port, if_index)?;
 
         // ─── Unicast discovery socket ─────────────────────────────────
-        let unicast_socket = create_unicast_recv_socket(
-            &link_local,
-            unicast_discovery_port,
-            if_index,
-        )?;
+        let unicast_socket =
+            create_unicast_recv_socket(&link_local, unicast_discovery_port, if_index)?;
 
         // ─── Discovery sender thread ──────────────────────────────────
         {
@@ -507,22 +492,12 @@ pub fn start(
             let running = running.clone();
             let name = name.clone();
 
-            let data_socket = create_data_recv_socket(
-                &link_local,
-                data_port,
-                if_index,
-            )?;
+            let data_socket = create_data_recv_socket(&link_local, data_port, if_index)?;
 
             thread::Builder::new()
                 .name(format!("auto-data-rx-{}", local_iface.name))
                 .spawn(move || {
-                    data_receiver_loop(
-                        data_socket,
-                        shared,
-                        tx,
-                        &running,
-                        &name,
-                    );
+                    data_receiver_loop(data_socket, shared, tx, &running, &name);
                 })?;
         }
     }
@@ -586,14 +561,10 @@ fn create_multicast_recv_socket(
     Ok(std_socket)
 }
 
-fn create_unicast_recv_socket(
-    link_local: &str,
-    port: u16,
-    if_index: u32,
-) -> io::Result<UdpSocket> {
-    let ip: Ipv6Addr = link_local.parse().map_err(|e| {
-        io::Error::new(io::ErrorKind::InvalidInput, format!("bad IPv6: {}", e))
-    })?;
+fn create_unicast_recv_socket(link_local: &str, port: u16, if_index: u32) -> io::Result<UdpSocket> {
+    let ip: Ipv6Addr = link_local
+        .parse()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("bad IPv6: {}", e)))?;
 
     let socket = socket2::Socket::new(
         socket2::Domain::IPV6,
@@ -614,14 +585,10 @@ fn create_unicast_recv_socket(
     Ok(std_socket)
 }
 
-fn create_data_recv_socket(
-    link_local: &str,
-    port: u16,
-    if_index: u32,
-) -> io::Result<UdpSocket> {
-    let ip: Ipv6Addr = link_local.parse().map_err(|e| {
-        io::Error::new(io::ErrorKind::InvalidInput, format!("bad IPv6: {}", e))
-    })?;
+fn create_data_recv_socket(link_local: &str, port: u16, if_index: u32) -> io::Result<UdpSocket> {
+    let ip: Ipv6Addr = link_local
+        .parse()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, format!("bad IPv6: {}", e)))?;
 
     let socket = socket2::Socket::new(
         socket2::Domain::IPV6,
@@ -714,10 +681,7 @@ fn discovery_receiver_loop(
                 let expected = compute_discovery_token(group_id, &src_ip);
 
                 if peering_hash != expected {
-                    log::debug!(
-                        "[{}] invalid peering hash from {}",
-                        name, src_ip
-                    );
+                    log::debug!("[{}] invalid peering hash from {}", name, src_ip);
                     continue;
                 }
 
@@ -746,17 +710,10 @@ fn discovery_receiver_loop(
                 drop(state);
 
                 // New peer! Create a data writer to send to them.
-                add_peer(
-                    &shared,
-                    &tx,
-                    &src_ip,
-                    data_port,
-                    name,
-                    configured_bitrate,
-                );
+                add_peer(&shared, &tx, &src_ip, data_port, name, configured_bitrate);
             }
-            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock
-                || e.kind() == io::ErrorKind::TimedOut =>
+            Err(ref e)
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
             {
                 // Timeout, loop again
                 continue;
@@ -790,7 +747,12 @@ fn add_peer(
     let send_socket = match UdpSocket::bind("[::]:0") {
         Ok(s) => s,
         Err(e) => {
-            log::warn!("[{}] failed to create writer for peer {}: {}", name, peer_addr, e);
+            log::warn!(
+                "[{}] failed to create writer for peer {}: {}",
+                name,
+                peer_addr,
+                e
+            );
             return;
         }
     };
@@ -844,7 +806,12 @@ fn add_peer(
         },
     );
 
-    log::info!("[{}] Peer discovered: {} (id={})", name, peer_addr, peer_id.0);
+    log::info!(
+        "[{}] Peer discovered: {} (id={})",
+        name,
+        peer_addr,
+        peer_id.0
+    );
 
     // Notify driver of new dynamic interface
     let _ = tx.send(Event::InterfaceUp(
@@ -917,8 +884,8 @@ fn data_receiver_loop(
                     return;
                 }
             }
-            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock
-                || e.kind() == io::ErrorKind::TimedOut =>
+            Err(ref e)
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
             {
                 continue;
             }
@@ -982,13 +949,15 @@ fn socket_fd(_socket: &UdpSocket) -> i32 {
 
 // ── Factory implementation ─────────────────────────────────────────────────
 
-use super::{InterfaceFactory, InterfaceConfigData, StartContext, StartResult};
+use super::{InterfaceConfigData, InterfaceFactory, StartContext, StartResult};
 
 /// Factory for `AutoInterface`.
 pub struct AutoFactory;
 
 impl InterfaceFactory for AutoFactory {
-    fn type_name(&self) -> &str { "AutoInterface" }
+    fn type_name(&self) -> &str {
+        "AutoInterface"
+    }
 
     fn parse_config(
         &self,
@@ -1004,12 +973,12 @@ impl InterfaceFactory for AutoFactory {
         let discovery_scope = params
             .get("discovery_scope")
             .map(|v| match v.to_lowercase().as_str() {
-                "link"                        => SCOPE_LINK.to_string(),
-                "admin"                       => SCOPE_ADMIN.to_string(),
-                "site"                        => SCOPE_SITE.to_string(),
+                "link" => SCOPE_LINK.to_string(),
+                "admin" => SCOPE_ADMIN.to_string(),
+                "site" => SCOPE_SITE.to_string(),
                 "organisation" | "organization" => SCOPE_ORGANISATION.to_string(),
-                "global"                      => SCOPE_GLOBAL.to_string(),
-                _                             => v.clone(),
+                "global" => SCOPE_GLOBAL.to_string(),
+                _ => v.clone(),
             })
             .unwrap_or_else(|| SCOPE_LINK.to_string());
 
@@ -1026,9 +995,9 @@ impl InterfaceFactory for AutoFactory {
         let multicast_address_type = params
             .get("multicast_address_type")
             .map(|v| match v.to_lowercase().as_str() {
-                "permanent"  => MULTICAST_PERMANENT_ADDRESS_TYPE.to_string(),
-                "temporary"  => MULTICAST_TEMPORARY_ADDRESS_TYPE.to_string(),
-                _            => v.clone(),
+                "permanent" => MULTICAST_PERMANENT_ADDRESS_TYPE.to_string(),
+                "temporary" => MULTICAST_TEMPORARY_ADDRESS_TYPE.to_string(),
+                _ => v.clone(),
             })
             .unwrap_or_else(|| MULTICAST_TEMPORARY_ADDRESS_TYPE.to_string());
 
@@ -1079,8 +1048,9 @@ impl InterfaceFactory for AutoFactory {
         config: Box<dyn InterfaceConfigData>,
         ctx: StartContext,
     ) -> std::io::Result<StartResult> {
-        let auto_config = *config.into_any().downcast::<AutoConfig>()
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "wrong config type"))?;
+        let auto_config = *config.into_any().downcast::<AutoConfig>().map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "wrong config type")
+        })?;
 
         start(auto_config, ctx.tx, ctx.next_dynamic_id)?;
         Ok(StartResult::Listener)
@@ -1108,11 +1078,8 @@ mod tests {
 
     #[test]
     fn multicast_address_custom_group() {
-        let addr = derive_multicast_address(
-            b"testgroup",
-            MULTICAST_TEMPORARY_ADDRESS_TYPE,
-            SCOPE_LINK,
-        );
+        let addr =
+            derive_multicast_address(b"testgroup", MULTICAST_TEMPORARY_ADDRESS_TYPE, SCOPE_LINK);
         // Just verify format
         assert!(addr.starts_with("ff12:0:"));
         // Must be different from default
@@ -1158,19 +1125,22 @@ mod tests {
         // Python vector: fe80::1 → 97b25576749ea936b0d8a8536ffaf442d157cf47d460dcf13c48b7bd18b6c163
         let token = compute_discovery_token(DEFAULT_GROUP_ID, "fe80::1");
         let expected = "97b25576749ea936b0d8a8536ffaf442d157cf47d460dcf13c48b7bd18b6c163";
-        let got = token.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+        let got = token
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>();
         assert_eq!(got, expected);
     }
 
     #[test]
     fn discovery_token_interop_2() {
         // Python vector: fe80::dead:beef:1234:5678
-        let token = compute_discovery_token(
-            DEFAULT_GROUP_ID,
-            "fe80::dead:beef:1234:5678",
-        );
+        let token = compute_discovery_token(DEFAULT_GROUP_ID, "fe80::dead:beef:1234:5678");
         let expected = "46b6ec7595504b6a35f06bd4bfff71567fb82fcf2706cd361bab20409c42d072";
-        let got = token.iter().map(|b| format!("{:02x}", b)).collect::<String>();
+        let got = token
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>();
         assert_eq!(got, expected);
     }
 
@@ -1240,12 +1210,15 @@ mod tests {
         let next_id = Arc::new(AtomicU64::new(100));
         let mut state = SharedState::new(next_id);
 
-        state.peers.insert("fe80::1".to_string(), AutoPeer {
-            interface_id: InterfaceId(100),
-            link_local_addr: "fe80::1".to_string(),
-            ifname: "eth0".to_string(),
-            last_heard: 1000.0,
-        });
+        state.peers.insert(
+            "fe80::1".to_string(),
+            AutoPeer {
+                interface_id: InterfaceId(100),
+                link_local_addr: "fe80::1".to_string(),
+                ifname: "eth0".to_string(),
+                last_heard: 1000.0,
+            },
+        );
 
         state.refresh_peer("fe80::1", 2000.0);
         assert_eq!(state.peers["fe80::1"].last_heard, 2000.0);
@@ -1277,7 +1250,16 @@ mod tests {
     #[test]
     fn enumerate_with_ignored() {
         // Ignore everything
-        let interfaces = enumerate_interfaces(&[], &["lo".to_string(), "eth0".to_string(), "wlan0".to_string(), "enp0s3".to_string(), "docker0".to_string()]);
+        let interfaces = enumerate_interfaces(
+            &[],
+            &[
+                "lo".to_string(),
+                "eth0".to_string(),
+                "wlan0".to_string(),
+                "enp0s3".to_string(),
+                "docker0".to_string(),
+            ],
+        );
         // May still have some interfaces, but known ones should be filtered
         for iface in &interfaces {
             assert_ne!(iface.name, "lo");
@@ -1289,10 +1271,7 @@ mod tests {
     #[test]
     fn enumerate_with_allowed_nonexistent() {
         // Only allow an interface that doesn't exist
-        let interfaces = enumerate_interfaces(
-            &["nonexistent_if_12345".to_string()],
-            &[],
-        );
+        let interfaces = enumerate_interfaces(&["nonexistent_if_12345".to_string()], &[]);
         assert!(interfaces.is_empty());
     }
 
@@ -1305,7 +1284,10 @@ mod tests {
         assert_eq!(config.discovery_scope, SCOPE_LINK);
         assert_eq!(config.discovery_port, DEFAULT_DISCOVERY_PORT);
         assert_eq!(config.data_port, DEFAULT_DATA_PORT);
-        assert_eq!(config.multicast_address_type, MULTICAST_TEMPORARY_ADDRESS_TYPE);
+        assert_eq!(
+            config.multicast_address_type,
+            MULTICAST_TEMPORARY_ADDRESS_TYPE
+        );
         assert_eq!(config.configured_bitrate, BITRATE_GUESS);
         assert!(config.allowed_interfaces.is_empty());
         assert!(config.ignored_interfaces.is_empty());

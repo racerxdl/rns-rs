@@ -12,13 +12,17 @@ struct LoggingCallbacks;
 
 impl Callbacks for LoggingCallbacks {
     fn on_announce(&mut self, announced: rns_net::AnnouncedIdentity) {
-        let app_str = announced.app_data
+        let app_str = announced
+            .app_data
             .as_ref()
             .and_then(|d| std::str::from_utf8(d).ok())
             .unwrap_or("<none>");
         log::info!(
             "Announce: dest={} identity={} hops={} app_data={}",
-            announced.dest_hash, announced.identity_hash, announced.hops, app_str
+            announced.dest_hash,
+            announced.identity_hash,
+            announced.hops,
+            app_str
         );
     }
 
@@ -26,7 +30,12 @@ impl Callbacks for LoggingCallbacks {
         log::info!("Path updated: dest={} hops={}", dest_hash, hops);
     }
 
-    fn on_local_delivery(&mut self, dest_hash: rns_net::DestHash, _raw: Vec<u8>, _packet_hash: rns_net::PacketHash) {
+    fn on_local_delivery(
+        &mut self,
+        dest_hash: rns_net::DestHash,
+        _raw: Vec<u8>,
+        _packet_hash: rns_net::PacketHash,
+    ) {
         log::info!("Local delivery: dest={}", dest_hash);
     }
 }
@@ -36,10 +45,7 @@ fn main() {
 
     let args: Vec<String> = env::args().collect();
     let host = args.get(1).cloned().unwrap_or_else(|| "127.0.0.1".into());
-    let port: u16 = args
-        .get(2)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(4242);
+    let port: u16 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(4242);
 
     log::info!("Connecting to {}:{}", host, port);
 

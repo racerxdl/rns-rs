@@ -46,10 +46,7 @@ pub fn process_pending_announces(
                     raw,
                 });
             } else {
-                actions.push(TransportAction::BroadcastOnAllInterfaces {
-                    raw,
-                    exclude: None,
-                });
+                actions.push(TransportAction::BroadcastOnAllInterfaces { raw, exclude: None });
             }
 
             actions.push(TransportAction::AnnounceRetransmit {
@@ -181,9 +178,9 @@ pub fn cull_path_states(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::tables::*;
     use super::super::types::*;
+    use super::*;
     use alloc::collections::BTreeMap;
 
     fn make_announce_entry(
@@ -242,8 +239,14 @@ mod tests {
 
         // Should have retransmitted (broadcast + announce retransmit notification)
         assert_eq!(actions.len(), 2);
-        assert!(matches!(&actions[0], TransportAction::BroadcastOnAllInterfaces { .. }));
-        assert!(matches!(&actions[1], TransportAction::AnnounceRetransmit { .. }));
+        assert!(matches!(
+            &actions[0],
+            TransportAction::BroadcastOnAllInterfaces { .. }
+        ));
+        assert!(matches!(
+            &actions[1],
+            TransportAction::AnnounceRetransmit { .. }
+        ));
 
         // Retries should have increased
         assert_eq!(table[&dest].retries, 1);
@@ -358,7 +361,9 @@ mod tests {
         let (count, closed_actions) = cull_link_table(&mut table, &interfaces, 1100.0);
         assert_eq!(count, 1);
         assert_eq!(closed_actions.len(), 1);
-        assert!(matches!(&closed_actions[0], TransportAction::LinkClosed { link_id } if *link_id == [0x33; 16]));
+        assert!(
+            matches!(&closed_actions[0], TransportAction::LinkClosed { link_id } if *link_id == [0x33; 16])
+        );
     }
 
     #[test]
@@ -387,7 +392,9 @@ mod tests {
         let (count, closed_actions) = cull_link_table(&mut table, &interfaces, 201.0);
         assert_eq!(count, 1);
         assert_eq!(closed_actions.len(), 1);
-        assert!(matches!(&closed_actions[0], TransportAction::LinkClosed { link_id } if *link_id == [0x44; 16]));
+        assert!(
+            matches!(&closed_actions[0], TransportAction::LinkClosed { link_id } if *link_id == [0x44; 16])
+        );
     }
 
     #[test]
@@ -398,16 +405,19 @@ mod tests {
 
         table.insert(
             [0x55; 16],
-            super::super::tables::PathSet::from_single(PathEntry {
-                timestamp: 100.0,
-                next_hop: [0; 16],
-                hops: 2,
-                expires: 500.0,
-                random_blobs: Vec::new(),
-                receiving_interface: InterfaceId(1),
-                packet_hash: [0; 32],
-                announce_raw: None,
-            }, 1),
+            super::super::tables::PathSet::from_single(
+                PathEntry {
+                    timestamp: 100.0,
+                    next_hop: [0; 16],
+                    hops: 2,
+                    expires: 500.0,
+                    random_blobs: Vec::new(),
+                    receiving_interface: InterfaceId(1),
+                    packet_hash: [0; 32],
+                    announce_raw: None,
+                },
+                1,
+            ),
         );
 
         let count = cull_path_table(&mut table, &interfaces, 600.0);
@@ -435,16 +445,19 @@ mod tests {
 
         table.insert(
             [0x88; 16],
-            super::super::tables::PathSet::from_single(PathEntry {
-                timestamp: 1000.0,
-                next_hop: [0; 16],
-                hops: 1,
-                expires: 9999.0, // far future
-                random_blobs: Vec::new(),
-                receiving_interface: InterfaceId(1),
-                packet_hash: [0; 32],
-                announce_raw: None,
-            }, 1),
+            super::super::tables::PathSet::from_single(
+                PathEntry {
+                    timestamp: 1000.0,
+                    next_hop: [0; 16],
+                    hops: 1,
+                    expires: 9999.0, // far future
+                    random_blobs: Vec::new(),
+                    receiving_interface: InterfaceId(1),
+                    packet_hash: [0; 32],
+                    announce_raw: None,
+                },
+                1,
+            ),
         );
 
         let count = cull_path_table(&mut table, &interfaces, 1100.0);

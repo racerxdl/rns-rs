@@ -1,13 +1,13 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
-use crate::constants::*;
-use crate::buffer::types::Compressor;
-use super::types::*;
 use super::advertisement::ResourceAdvertisement;
-use super::parts::{map_hash, extract_metadata};
-use super::proof::{compute_resource_hash, compute_expected_proof, build_proof_data};
+use super::parts::{extract_metadata, map_hash};
+use super::proof::{build_proof_data, compute_expected_proof, compute_resource_hash};
+use super::types::*;
 use super::window::WindowState;
+use crate::buffer::types::Compressor;
+use crate::constants::*;
 
 /// Resource receiver state machine.
 ///
@@ -178,7 +178,9 @@ impl ResourceReceiver {
     /// Reject the advertised resource.
     pub fn reject(&mut self) -> Vec<ResourceAction> {
         self.status = ResourceStatus::Rejected;
-        vec![ResourceAction::SendCancelReceiver(self.resource_hash.clone())]
+        vec![ResourceAction::SendCancelReceiver(
+            self.resource_hash.clone(),
+        )]
     }
 
     /// Receive a part. Matches by map hash and stores it.
@@ -633,15 +635,9 @@ mod tests {
         .unwrap();
 
         let adv_data = sender.get_advertisement(0);
-        let receiver = ResourceReceiver::from_advertisement(
-            &adv_data,
-            RESOURCE_SDU,
-            0.5,
-            1000.0,
-            None,
-            None,
-        )
-        .unwrap();
+        let receiver =
+            ResourceReceiver::from_advertisement(&adv_data, RESOURCE_SDU, 0.5, 1000.0, None, None)
+                .unwrap();
 
         (sender, receiver)
     }
@@ -660,7 +656,9 @@ mod tests {
         let actions = receiver.accept(1000.0);
         assert_eq!(receiver.status, ResourceStatus::Transferring);
         assert!(!actions.is_empty());
-        assert!(actions.iter().any(|a| matches!(a, ResourceAction::SendRequest(_))));
+        assert!(actions
+            .iter()
+            .any(|a| matches!(a, ResourceAction::SendRequest(_))));
     }
 
     #[test]
@@ -668,7 +666,9 @@ mod tests {
         let (_, mut receiver) = make_sender_receiver();
         let actions = receiver.reject();
         assert_eq!(receiver.status, ResourceStatus::Rejected);
-        assert!(actions.iter().any(|a| matches!(a, ResourceAction::SendCancelReceiver(_))));
+        assert!(actions
+            .iter()
+            .any(|a| matches!(a, ResourceAction::SendCancelReceiver(_))));
     }
 
     #[test]
@@ -744,15 +744,9 @@ mod tests {
         .unwrap();
 
         let adv = sender.get_advertisement(0);
-        let mut receiver = ResourceReceiver::from_advertisement(
-            &adv,
-            RESOURCE_SDU,
-            0.5,
-            1000.0,
-            None,
-            None,
-        )
-        .unwrap();
+        let mut receiver =
+            ResourceReceiver::from_advertisement(&adv, RESOURCE_SDU, 0.5, 1000.0, None, None)
+                .unwrap();
 
         // Accept
         let req_actions = receiver.accept(1001.0);
@@ -784,9 +778,15 @@ mod tests {
         let assemble_actions = receiver.assemble(&identity_decrypt, &NoopCompressor);
 
         // Check for proof and data
-        let has_proof = assemble_actions.iter().any(|a| matches!(a, ResourceAction::SendProof(_)));
-        let has_data = assemble_actions.iter().any(|a| matches!(a, ResourceAction::DataReceived { .. }));
-        let has_complete = assemble_actions.iter().any(|a| matches!(a, ResourceAction::Completed));
+        let has_proof = assemble_actions
+            .iter()
+            .any(|a| matches!(a, ResourceAction::SendProof(_)));
+        let has_data = assemble_actions
+            .iter()
+            .any(|a| matches!(a, ResourceAction::DataReceived { .. }));
+        let has_complete = assemble_actions
+            .iter()
+            .any(|a| matches!(a, ResourceAction::Completed));
 
         assert!(has_proof, "Should send proof");
         assert!(has_data, "Should return data");
@@ -843,15 +843,9 @@ mod tests {
         assert!(sender.flags.has_metadata);
 
         let adv = sender.get_advertisement(0);
-        let mut receiver = ResourceReceiver::from_advertisement(
-            &adv,
-            RESOURCE_SDU,
-            0.5,
-            1000.0,
-            None,
-            None,
-        )
-        .unwrap();
+        let mut receiver =
+            ResourceReceiver::from_advertisement(&adv, RESOURCE_SDU, 0.5, 1000.0, None, None)
+                .unwrap();
 
         assert!(receiver.has_metadata);
 
@@ -878,7 +872,9 @@ mod tests {
         let (recv_data, recv_meta) = assemble_actions
             .iter()
             .find_map(|a| match a {
-                ResourceAction::DataReceived { data, metadata } => Some((data.clone(), metadata.clone())),
+                ResourceAction::DataReceived { data, metadata } => {
+                    Some((data.clone(), metadata.clone()))
+                }
                 _ => None,
             })
             .unwrap();

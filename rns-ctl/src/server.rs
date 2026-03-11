@@ -71,7 +71,11 @@ pub fn run_server(addr: SocketAddr, ctx: std::sync::Arc<ServerContext>) -> io::R
     let listener = TcpListener::bind(addr)?;
 
     #[cfg(feature = "tls")]
-    let scheme = if ctx.tls_config.is_some() { "https" } else { "http" };
+    let scheme = if ctx.tls_config.is_some() {
+        "https"
+    } else {
+        "http"
+    };
     #[cfg(not(feature = "tls"))]
     let scheme = "http";
 
@@ -113,7 +117,10 @@ fn wrap_stream(tcp_stream: TcpStream, ctx: &ServerContext) -> io::Result<ConnStr
         if let Some(ref tls_config) = ctx.tls_config {
             let server_conn = rustls::ServerConnection::new(tls_config.clone())
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("TLS error: {}", e)))?;
-            return Ok(ConnStream::Tls(rustls::StreamOwned::new(server_conn, tcp_stream)));
+            return Ok(ConnStream::Tls(rustls::StreamOwned::new(
+                server_conn,
+                tcp_stream,
+            )));
         }
     }
     let _ = ctx; // suppress unused warning when tls feature is off
@@ -227,10 +234,8 @@ fn handle_ws_text(text: &str, topics: &mut HashSet<String>, stream: &mut ConnStr
                 }
             }
             Some("ping") => {
-                let _ = ws::write_text_frame(
-                    stream,
-                    &serde_json::json!({"type": "pong"}).to_string(),
-                );
+                let _ =
+                    ws::write_text_frame(stream, &serde_json::json!({"type": "pong"}).to_string());
             }
             _ => {}
         }

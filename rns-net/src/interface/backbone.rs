@@ -89,11 +89,7 @@ impl Drop for BackboneWriter {
 unsafe impl Send for BackboneWriter {}
 
 /// Start a backbone interface. Binds TCP listener, spawns epoll thread.
-pub fn start(
-    config: BackboneConfig,
-    tx: EventSender,
-    next_id: Arc<AtomicU64>,
-) -> io::Result<()> {
+pub fn start(config: BackboneConfig, tx: EventSender, next_id: Arc<AtomicU64>) -> io::Result<()> {
     let addr = format!("{}:{}", config.listen_ip, config.listen_port);
     let listener = TcpListener::bind(&addr)?;
     listener.set_nonblocking(true)?;
@@ -149,9 +145,8 @@ fn epoll_loop(
     let mut events = vec![libc::epoll_event { events: 0, u64: 0 }; 64];
 
     loop {
-        let nfds = unsafe {
-            libc::epoll_wait(epfd, events.as_mut_ptr(), events.len() as i32, 1000)
-        };
+        let nfds =
+            unsafe { libc::epoll_wait(epfd, events.as_mut_ptr(), events.len() as i32, 1000) };
 
         if nfds < 0 {
             let err = io::Error::last_os_error();
@@ -187,8 +182,7 @@ fn epoll_loop(
                             // Set SO_KEEPALIVE and TCP options
                             set_tcp_keepalive(client_fd);
 
-                            let client_id =
-                                InterfaceId(next_id.fetch_add(1, Ordering::Relaxed));
+                            let client_id = InterfaceId(next_id.fetch_add(1, Ordering::Relaxed));
 
                             log::info!(
                                 "[{}] backbone client connected: {} → id {}",
@@ -266,18 +260,13 @@ fn epoll_loop(
                             };
 
                             if tx
-                                .send(Event::InterfaceUp(
-                                    client_id,
-                                    Some(writer),
-                                    Some(info),
-                                ))
+                                .send(Event::InterfaceUp(client_id, Some(writer), Some(info)))
                                 .is_err()
                             {
                                 // Driver shut down
                                 cleanup(epfd, &clients, listener_fd);
                                 return Ok(());
                             }
-
                         }
                         Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => break,
                         Err(e) => {
@@ -327,11 +316,7 @@ fn epoll_loop(
                 }
 
                 if should_remove {
-                    log::info!(
-                        "[{}] backbone client {} disconnected",
-                        name,
-                        client_id.0
-                    );
+                    log::info!("[{}] backbone client {} disconnected", name, client_id.0);
                     unsafe {
                         libc::epoll_ctl(epfd, libc::EPOLL_CTL_DEL, fd, std::ptr::null_mut());
                         libc::close(fd);
@@ -452,10 +437,7 @@ fn try_connect_client(config: &BackboneClientConfig) -> io::Result<TcpStream> {
 }
 
 /// Connect and start the reader thread. Returns the writer for the driver.
-pub fn start_client(
-    config: BackboneClientConfig,
-    tx: EventSender,
-) -> io::Result<Box<dyn Writer>> {
+pub fn start_client(config: BackboneClientConfig, tx: EventSender) -> io::Result<Box<dyn Writer>> {
     let stream = try_connect_client(&config)?;
     let reader_stream = stream.try_clone()?;
     let writer_stream = stream.try_clone()?;
@@ -477,7 +459,9 @@ pub fn start_client(
             client_reader_loop(reader_stream, config, tx);
         })?;
 
-    Ok(Box::new(BackboneClientWriter { stream: writer_stream }))
+    Ok(Box::new(BackboneClientWriter {
+        stream: writer_stream,
+    }))
 }
 
 /// Reader thread: reads from socket, HDLC-decodes, sends frames to driver.
@@ -551,11 +535,7 @@ fn client_reconnect(config: &BackboneClientConfig, tx: &EventSender) -> Option<T
             }
         }
 
-        log::info!(
-            "[{}] reconnect attempt {} ...",
-            config.name,
-            attempts
-        );
+        log::info!("[{}] reconnect attempt {} ...", config.name, attempts);
 
         match try_connect_client(config) {
             Ok(new_stream) => {
@@ -567,9 +547,14 @@ fn client_reconnect(config: &BackboneClientConfig, tx: &EventSender) -> Option<T
                     }
                 };
                 log::info!("[{}] reconnected", config.name);
-                let new_writer: Box<dyn Writer> =
-                    Box::new(BackboneClientWriter { stream: writer_stream });
-                let _ = tx.send(Event::InterfaceUp(config.interface_id, Some(new_writer), None));
+                let new_writer: Box<dyn Writer> = Box::new(BackboneClientWriter {
+                    stream: writer_stream,
+                });
+                let _ = tx.send(Event::InterfaceUp(
+                    config.interface_id,
+                    Some(new_writer),
+                    None,
+                ));
                 return Some(new_stream);
             }
             Err(e) => {
@@ -598,7 +583,9 @@ enum BackboneMode {
 pub struct BackboneInterfaceFactory;
 
 impl InterfaceFactory for BackboneInterfaceFactory {
-    fn type_name(&self) -> &str { "BackboneInterface" }
+    fn type_name(&self) -> &str {
+        "BackboneInterface"
+    }
 
     fn parse_config(
         &self,
@@ -609,7 +596,8 @@ impl InterfaceFactory for BackboneInterfaceFactory {
         if let Some(target_host) = params.get("remote").or_else(|| params.get("target_host")) {
             // Client mode
             let target_host = target_host.clone();
-            let target_port = params.get("target_port")
+            let target_port = params
+                .get("target_port")
                 .or_else(|| params.get("port"))
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(4242);
@@ -624,11 +612,13 @@ impl InterfaceFactory for BackboneInterfaceFactory {
             })))
         } else {
             // Server mode
-            let listen_ip = params.get("listen_ip")
+            let listen_ip = params
+                .get("listen_ip")
                 .or_else(|| params.get("device"))
                 .cloned()
                 .unwrap_or_else(|| "0.0.0.0".into());
-            let listen_port = params.get("listen_port")
+            let listen_port = params
+                .get("listen_port")
                 .or_else(|| params.get("port"))
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(4242);
@@ -646,9 +636,12 @@ impl InterfaceFactory for BackboneInterfaceFactory {
         config: Box<dyn InterfaceConfigData>,
         ctx: StartContext,
     ) -> io::Result<StartResult> {
-        let mode = *config.into_any()
-            .downcast::<BackboneMode>()
-            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "wrong config type for BackboneInterface"))?;
+        let mode = *config.into_any().downcast::<BackboneMode>().map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "wrong config type for BackboneInterface",
+            )
+        })?;
 
         match mode {
             BackboneMode::Client(cfg) => {
@@ -787,7 +780,9 @@ mod tests {
         thread::sleep(Duration::from_millis(50));
 
         let mut client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
-        client.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
 
         // Get writer from InterfaceUp
         let event = rx.recv_timeout(Duration::from_secs(1)).unwrap();

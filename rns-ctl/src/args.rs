@@ -41,10 +41,8 @@ impl Args {
                 } else {
                     // Boolean flags that don't take values
                     match key.as_str() {
-                        "version" | "exampleconfig" | "help"
-                        | "stdin" | "stdout" | "force"
-                        | "blackholed"
-                        | "daemon" | "disable-auth" => {
+                        "version" | "exampleconfig" | "help" | "stdin" | "stdout" | "force"
+                        | "blackholed" | "daemon" | "disable-auth" => {
                             flags.insert(key, "true".into());
                         }
                         _ => {
@@ -64,8 +62,7 @@ impl Args {
                     match c {
                         'v' => verbosity = verbosity.saturating_add(1),
                         'q' => quiet = quiet.saturating_add(1),
-                        'a' | 'r' | 'j' | 'P' | 'D'
-                        | 'l' | 'f' | 'A' => {
+                        'a' | 'r' | 'j' | 'P' | 'D' | 'l' | 'f' | 'A' => {
                             flags.insert(c.to_string(), "true".into());
                         }
                         'h' => {
@@ -75,7 +72,9 @@ impl Args {
                             // Short flag that may take a value: -c /path, -s rate
                             // Only consume next arg if it doesn't look like a flag
                             if chars.len() == 1 {
-                                let next_is_value = iter.as_slice().first()
+                                let next_is_value = iter
+                                    .as_slice()
+                                    .first()
                                     .map(|s| !s.starts_with('-') || s == "-")
                                     .unwrap_or(false);
                                 if next_is_value {

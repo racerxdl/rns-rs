@@ -13,8 +13,7 @@ use rns_crypto::identity::Identity;
 use rns_crypto::OsRng;
 
 use rns_net::{
-    InterfaceConfig, InterfaceId, NodeConfig, RnsNode,
-    TcpClientConfig, TcpServerConfig, MODE_FULL,
+    InterfaceConfig, InterfaceId, NodeConfig, RnsNode, TcpClientConfig, TcpServerConfig, MODE_FULL,
 };
 
 use rns_ctl::api::NodeHandle;
@@ -50,30 +49,36 @@ fn find_free_port() -> u16 {
 
 /// Start a test server with no interfaces and auth disabled.
 fn start_test_server() -> TestServer {
-    start_test_server_with_config(CtlConfig {
-        host: "127.0.0.1".into(),
-        port: 0, // overridden below
-        auth_token: None,
-        disable_auth: true,
-        config_path: None,
-        daemon_mode: false,
-        tls_cert: None,
-        tls_key: None,
-    }, vec![])
+    start_test_server_with_config(
+        CtlConfig {
+            host: "127.0.0.1".into(),
+            port: 0, // overridden below
+            auth_token: None,
+            disable_auth: true,
+            config_path: None,
+            daemon_mode: false,
+            tls_cert: None,
+            tls_key: None,
+        },
+        vec![],
+    )
 }
 
 /// Start a test server with auth enabled and a specific token.
 fn start_test_server_with_auth(token: &str) -> TestServer {
-    start_test_server_with_config(CtlConfig {
-        host: "127.0.0.1".into(),
-        port: 0,
-        auth_token: Some(token.to_string()),
-        disable_auth: false,
-        config_path: None,
-        daemon_mode: false,
-        tls_cert: None,
-        tls_key: None,
-    }, vec![])
+    start_test_server_with_config(
+        CtlConfig {
+            host: "127.0.0.1".into(),
+            port: 0,
+            auth_token: Some(token.to_string()),
+            disable_auth: false,
+            config_path: None,
+            daemon_mode: false,
+            tls_cert: None,
+            tls_key: None,
+        },
+        vec![],
+    )
 }
 
 /// Start a test server with the given config and interfaces.
@@ -97,7 +102,9 @@ fn start_test_server_with_config(
     let node = RnsNode::start(
         NodeConfig {
             transport_enabled: false,
-            identity: Some(Identity::from_private_key(&identity.get_private_key().unwrap())),
+            identity: Some(Identity::from_private_key(
+                &identity.get_private_key().unwrap(),
+            )),
             interfaces,
             share_instance: false,
             instance_name: "default".into(),
@@ -180,9 +187,8 @@ struct HttpResult {
 
 impl HttpResult {
     fn json(&self) -> serde_json::Value {
-        serde_json::from_str(&self.body).unwrap_or_else(|e| {
-            panic!("Failed to parse JSON: {} body={}", e, self.body)
-        })
+        serde_json::from_str(&self.body)
+            .unwrap_or_else(|e| panic!("Failed to parse JSON: {} body={}", e, self.body))
     }
 }
 
@@ -210,13 +216,15 @@ fn http_request(
     body: Option<&str>,
     token: Option<&str>,
 ) -> HttpResult {
-    let mut stream =
-        TcpStream::connect(format!("127.0.0.1:{}", port)).expect("Failed to connect");
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).expect("Failed to connect");
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
 
-    let mut request = format!("{} {} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n", method, path);
+    let mut request = format!(
+        "{} {} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n",
+        method, path
+    );
 
     if let Some(token) = token {
         request.push_str(&format!("Authorization: Bearer {}\r\n", token));
@@ -231,7 +239,9 @@ fn http_request(
         request.push_str("\r\n");
     }
 
-    stream.write_all(request.as_bytes()).expect("Failed to write request");
+    stream
+        .write_all(request.as_bytes())
+        .expect("Failed to write request");
 
     let mut response = Vec::new();
     loop {
@@ -668,7 +678,10 @@ fn test_announce_propagation() {
         if res.status == 200 {
             let json = res.json();
             if let Some(announces) = json["announces"].as_array() {
-                if announces.iter().any(|a| a["dest_hash"].as_str() == Some(&dest_hash)) {
+                if announces
+                    .iter()
+                    .any(|a| a["dest_hash"].as_str() == Some(&dest_hash))
+                {
                     found = true;
                     break;
                 }
@@ -676,7 +689,10 @@ fn test_announce_propagation() {
         }
     }
 
-    assert!(found, "Node B should have received the announce from Node A within 10s");
+    assert!(
+        found,
+        "Node B should have received the announce from Node A within 10s"
+    );
 
     pair.shutdown();
 }
@@ -712,7 +728,10 @@ fn test_identity_recall() {
         }
     }
 
-    assert!(recalled, "Node B should have recalled the identity from Node A within 10s");
+    assert!(
+        recalled,
+        "Node B should have recalled the identity from Node A within 10s"
+    );
 
     pair.shutdown();
 }
@@ -751,7 +770,11 @@ fn test_packet_delivery() {
         dest_hash
     );
     let out_reg = http_post(pair.server_b.port, "/api/destination", &out_body);
-    assert_eq!(out_reg.status, 201, "Failed to register outbound destination: {}", out_reg.body);
+    assert_eq!(
+        out_reg.status, 201,
+        "Failed to register outbound destination: {}",
+        out_reg.body
+    );
     let out_hash = out_reg.json()["dest_hash"].as_str().unwrap().to_string();
 
     // Send packet from B
@@ -778,7 +801,10 @@ fn test_packet_delivery() {
         }
     }
 
-    assert!(delivered, "Node A should have received at least one packet within 10s");
+    assert!(
+        delivered,
+        "Node A should have received at least one packet within 10s"
+    );
 
     pair.shutdown();
 }
@@ -803,7 +829,8 @@ mod tls_tests {
 
         // Write cert and key to temp files (unique per call to avoid parallel test conflicts)
         let id = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let tmp_dir = std::env::temp_dir().join(format!("rns-ctl-tls-test-{}-{}", std::process::id(), id));
+        let tmp_dir =
+            std::env::temp_dir().join(format!("rns-ctl-tls-test-{}-{}", std::process::id(), id));
         std::fs::create_dir_all(&tmp_dir).unwrap();
         let cert_path = tmp_dir.join("cert.pem");
         let key_path = tmp_dir.join("key.pem");
@@ -921,8 +948,7 @@ mod tls_tests {
             .with_root_certificates(root_store.clone())
             .with_no_client_auth();
 
-        let server_name: rustls::pki_types::ServerName =
-            "localhost".try_into().unwrap();
+        let server_name: rustls::pki_types::ServerName = "localhost".try_into().unwrap();
 
         let mut conn = rustls::ClientConnection::new(Arc::new(tls_config), server_name).unwrap();
         let mut tcp = TcpStream::connect(format!("127.0.0.1:{}", port)).expect("Failed to connect");
@@ -934,7 +960,8 @@ mod tls_tests {
             "GET {} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
             path
         );
-        tls.write_all(request.as_bytes()).expect("Failed to write request");
+        tls.write_all(request.as_bytes())
+            .expect("Failed to write request");
 
         let mut response = Vec::new();
         loop {

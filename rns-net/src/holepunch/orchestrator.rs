@@ -12,11 +12,11 @@ use std::collections::HashMap;
 use std::net::{SocketAddr, UdpSocket};
 use std::thread;
 
-use rns_core::holepunch::{
-    HolePunchAction, HolePunchEngine, HolePunchState, Endpoint, ProbeProtocol,
-    UPGRADE_REQUEST, REJECT_POLICY,
-};
 use rns_core::holepunch::types::is_holepunch_msgtype;
+use rns_core::holepunch::{
+    Endpoint, HolePunchAction, HolePunchEngine, HolePunchState, ProbeProtocol, REJECT_POLICY,
+    UPGRADE_REQUEST,
+};
 
 use crate::event::{Event, EventSender};
 use crate::time;
@@ -40,8 +40,8 @@ struct HolePunchSession {
 
 /// Manages all hole-punch sessions.
 pub struct HolePunchManager {
-    sessions: HashMap<[u8; 16], HolePunchSession>,  // session_id -> session
-    link_to_session: HashMap<[u8; 16], [u8; 16]>,   // link_id -> session_id
+    sessions: HashMap<[u8; 16], HolePunchSession>, // session_id -> session
+    link_to_session: HashMap<[u8; 16], [u8; 16]>,  // link_id -> session_id
     policy: HolePunchPolicy,
     /// Configured probe servers (tried sequentially with failover).
     probe_addrs: Vec<SocketAddr>,
@@ -80,7 +80,11 @@ pub enum HolePunchManagerAction {
 }
 
 impl HolePunchManager {
-    pub fn new(probe_addrs: Vec<SocketAddr>, probe_protocol: ProbeProtocol, device: Option<String>) -> Self {
+    pub fn new(
+        probe_addrs: Vec<SocketAddr>,
+        probe_protocol: ProbeProtocol,
+        device: Option<String>,
+    ) -> Self {
         HolePunchManager {
             sessions: HashMap::new(),
             link_to_session: HashMap::new(),
@@ -120,7 +124,10 @@ impl HolePunchManager {
             if let Some(session) = self.sessions.get(session_id) {
                 let elapsed = now - session.last_proposal;
                 if elapsed < rns_core::holepunch::types::PROPOSAL_COOLDOWN {
-                    log::debug!("Hole punch proposal rate limited for link {:02x?}", &link_id[..4]);
+                    log::debug!(
+                        "Hole punch proposal rate limited for link {:02x?}",
+                        &link_id[..4]
+                    );
                     return Vec::new();
                 }
             }
@@ -150,12 +157,15 @@ impl HolePunchManager {
 
         let session_id = *engine.session_id();
         self.link_to_session.insert(link_id, session_id);
-        self.sessions.insert(session_id, HolePunchSession {
-            engine,
-            socket: None,
-            punch_handle: None,
-            last_proposal: now,
-        });
+        self.sessions.insert(
+            session_id,
+            HolePunchSession {
+                engine,
+                socket: None,
+                punch_handle: None,
+                last_proposal: now,
+            },
+        );
 
         let mgr_actions = convert_engine_actions(link_id, &actions);
 
@@ -218,12 +228,15 @@ impl HolePunchManager {
 
             let session_id = *engine.session_id();
             self.link_to_session.insert(link_id, session_id);
-            self.sessions.insert(session_id, HolePunchSession {
-                engine,
-                socket: None,
-                punch_handle: None,
-                last_proposal: now,
-            });
+            self.sessions.insert(
+                session_id,
+                HolePunchSession {
+                    engine,
+                    socket: None,
+                    punch_handle: None,
+                    last_proposal: now,
+                },
+            );
 
             let mgr_actions = convert_engine_actions(link_id, &actions);
 
@@ -248,7 +261,10 @@ impl HolePunchManager {
         };
 
         let now = time::now();
-        let actions = match session.engine.handle_signal(msgtype, &payload, derived_key, now) {
+        let actions = match session
+            .engine
+            .handle_signal(msgtype, &payload, derived_key, now)
+        {
             Ok(a) => a,
             Err(e) => {
                 log::warn!("Error handling signal 0x{:04x}: {}", msgtype, e);
@@ -270,9 +286,13 @@ impl HolePunchManager {
         let mut all_actions = Vec::new();
 
         // Build a snapshot of session IDs and their corresponding link IDs
-        let session_link_pairs: Vec<([u8; 16], Option<[u8; 16]>)> = self.sessions.keys()
+        let session_link_pairs: Vec<([u8; 16], Option<[u8; 16]>)> = self
+            .sessions
+            .keys()
             .map(|sid| {
-                let link_id = self.link_to_session.iter()
+                let link_id = self
+                    .link_to_session
+                    .iter()
                     .find(|(_, v)| *v == sid)
                     .map(|(k, _)| *k);
                 (*sid, link_id)
@@ -292,12 +312,16 @@ impl HolePunchManager {
 
         for (session_id, link_id) in &session_link_pairs {
             if let Some(session) = self.sessions.get_mut(session_id) {
-                let punch_done = session.punch_handle.as_ref()
+                let punch_done = session
+                    .punch_handle
+                    .as_ref()
                     .map(|h| !h.is_running())
                     .unwrap_or(false);
 
                 if punch_done {
-                    let succeeded = session.punch_handle.as_ref()
+                    let succeeded = session
+                        .punch_handle
+                        .as_ref()
                         .map(|h| h.succeeded())
                         .unwrap_or(false);
 
@@ -337,7 +361,8 @@ impl HolePunchManager {
             if completion.succeeded {
                 if let (Some(socket), Some(peer_addr)) = (completion.socket, completion.peer_addr) {
                     // Register direct interface
-                    let interface_id = rns_core::transport::types::InterfaceId(self.next_interface_id);
+                    let interface_id =
+                        rns_core::transport::types::InterfaceId(self.next_interface_id);
                     self.next_interface_id += 1;
 
                     let mut iface_ok = false;
@@ -345,11 +370,20 @@ impl HolePunchManager {
                         let session_id = *session.engine.session_id();
                         let punch_token = *session.engine.punch_token();
                         match udp_direct::start_direct_interface(
-                            socket, peer_addr, interface_id, session_id, punch_token, tx.clone(),
+                            socket,
+                            peer_addr,
+                            interface_id,
+                            session_id,
+                            punch_token,
+                            tx.clone(),
                         ) {
                             Ok((writer, info)) => {
                                 log::info!("Direct UDP interface registered: {}", info.name);
-                                let _ = tx.send(Event::InterfaceUp(interface_id, Some(writer), Some(info)));
+                                let _ = tx.send(Event::InterfaceUp(
+                                    interface_id,
+                                    Some(writer),
+                                    Some(info),
+                                ));
                                 iface_ok = true;
                             }
                             Err(e) => {
@@ -367,13 +401,15 @@ impl HolePunchManager {
                         for action in engine_actions {
                             match action {
                                 HolePunchAction::Succeeded { session_id } if iface_ok => {
-                                    all_actions.push(HolePunchManagerAction::DirectConnectEstablished {
-                                        link_id: completion.link_id,
-                                        session_id,
-                                        interface_id,
-                                        rtt: completion.rtt.unwrap_or(0.0),
-                                        mtu: 1400,
-                                    });
+                                    all_actions.push(
+                                        HolePunchManagerAction::DirectConnectEstablished {
+                                            link_id: completion.link_id,
+                                            session_id,
+                                            interface_id,
+                                            rtt: completion.rtt.unwrap_or(0.0),
+                                            mtu: 1400,
+                                        },
+                                    );
                                 }
                                 HolePunchAction::Succeeded { session_id } => {
                                     all_actions.push(HolePunchManagerAction::DirectConnectFailed {
@@ -417,7 +453,9 @@ impl HolePunchManager {
         }
 
         // Clean up Failed sessions
-        let failed_sessions: Vec<[u8; 16]> = self.sessions.iter()
+        let failed_sessions: Vec<[u8; 16]> = self
+            .sessions
+            .iter()
             .filter(|(_, s)| s.engine.state() == HolePunchState::Failed)
             .map(|(id, _)| *id)
             .collect();
@@ -456,7 +494,11 @@ impl HolePunchManager {
         tx: &EventSender,
     ) {
         for action in actions {
-            if let HolePunchAction::DiscoverEndpoints { probe_addr, protocol } = action {
+            if let HolePunchAction::DiscoverEndpoints {
+                probe_addr,
+                protocol,
+            } = action
+            {
                 let session_id = match self.link_to_session.get(&link_id) {
                     Some(s) => *s,
                     None => continue,
@@ -482,7 +524,10 @@ impl HolePunchManager {
                 };
 
                 if servers.is_empty() {
-                    log::warn!("No probe servers available for session {:02x?}", &session_id[..4]);
+                    log::warn!(
+                        "No probe servers available for session {:02x?}",
+                        &session_id[..4]
+                    );
                     continue;
                 }
 
@@ -491,11 +536,19 @@ impl HolePunchManager {
                 let device_clone = self.device.clone();
                 let protocol_copy = *protocol;
 
-                if let Err(e) = thread::Builder::new()
-                    .name("probe-worker".into())
-                    .spawn(move || {
-                        run_probe_worker(servers, protocol_copy, session_id_copy, link_id, tx_clone, device_clone);
-                    })
+                if let Err(e) =
+                    thread::Builder::new()
+                        .name("probe-worker".into())
+                        .spawn(move || {
+                            run_probe_worker(
+                                servers,
+                                protocol_copy,
+                                session_id_copy,
+                                link_id,
+                                tx_clone,
+                                device_clone,
+                            );
+                        })
                 {
                     log::warn!("Failed to spawn probe worker: {}", e);
                 }
@@ -504,13 +557,14 @@ impl HolePunchManager {
     }
 
     /// Start punch if the engine actions contain a StartUdpPunch.
-    fn start_punch_from_actions(
-        &mut self,
-        session_id: &[u8; 16],
-        actions: &[HolePunchAction],
-    ) {
+    fn start_punch_from_actions(&mut self, session_id: &[u8; 16], actions: &[HolePunchAction]) {
         for action in actions {
-            if let HolePunchAction::StartUdpPunch { peer_public, punch_token, session_id: sid } = action {
+            if let HolePunchAction::StartUdpPunch {
+                peer_public,
+                punch_token,
+                session_id: sid,
+            } = action
+            {
                 self.start_punch_for_session(session_id, peer_public, punch_token, sid);
             }
         }
@@ -554,7 +608,8 @@ impl HolePunchManager {
 
         log::info!(
             "Starting UDP hole punch for session {:02x?} to {}",
-            &session_id_copy[..4], peer_addr
+            &session_id_copy[..4],
+            peer_addr
         );
 
         match puncher::start_udp_punch(
@@ -633,11 +688,18 @@ impl HolePunchManager {
         let mgr_actions = convert_engine_actions(link_id, &actions);
 
         // Check if engine now wants to start punching (responder after discovery)
-        let should_punch = actions.iter().any(|a| matches!(a, HolePunchAction::StartUdpPunch { .. }));
+        let should_punch = actions
+            .iter()
+            .any(|a| matches!(a, HolePunchAction::StartUdpPunch { .. }));
         if should_punch {
             // Need to extract punch params and start
             for action in &actions {
-                if let HolePunchAction::StartUdpPunch { peer_public, punch_token, session_id: sid } = action {
+                if let HolePunchAction::StartUdpPunch {
+                    peer_public,
+                    punch_token,
+                    session_id: sid,
+                } = action
+                {
                     self.start_punch_for_session(&session_id, peer_public, punch_token, sid);
                 }
             }
@@ -673,11 +735,18 @@ fn run_probe_worker(
     tx: EventSender,
     device: Option<String>,
 ) {
-    match probe::probe_endpoint_failover(&servers, protocol, std::time::Duration::from_secs(3), device.as_deref()) {
+    match probe::probe_endpoint_failover(
+        &servers,
+        protocol,
+        std::time::Duration::from_secs(3),
+        device.as_deref(),
+    ) {
         Ok((observed, socket, probe_server)) => {
             log::info!(
                 "Probe discovered endpoint: {} via server {} for session {:02x?}",
-                observed, probe_server, &session_id[..4]
+                observed,
+                probe_server,
+                &session_id[..4]
             );
             let _ = tx.send(Event::HolePunchProbeResult {
                 link_id,
@@ -688,7 +757,12 @@ fn run_probe_worker(
             });
         }
         Err(e) => {
-            log::warn!("Probe failed for session {:02x?} (tried {} servers): {}", &session_id[..4], servers.len(), e);
+            log::warn!(
+                "Probe failed for session {:02x?} (tried {} servers): {}",
+                &session_id[..4],
+                servers.len(),
+                e
+            );
             let _ = tx.send(Event::HolePunchProbeFailed {
                 link_id,
                 session_id,
@@ -705,7 +779,11 @@ fn convert_engine_actions(
     let mut mgr_actions = Vec::new();
     for action in actions {
         match action {
-            HolePunchAction::SendSignal { link_id, msgtype, payload } => {
+            HolePunchAction::SendSignal {
+                link_id,
+                msgtype,
+                payload,
+            } => {
                 mgr_actions.push(HolePunchManagerAction::SendChannelMessage {
                     link_id: *link_id,
                     msgtype: *msgtype,
@@ -765,8 +843,8 @@ impl HolePunchManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rns_core::holepunch::{UPGRADE_ACCEPT, UPGRADE_READY, UPGRADE_REJECT};
     use rns_crypto::FixedRng;
-    use rns_core::holepunch::{UPGRADE_ACCEPT, UPGRADE_REJECT, UPGRADE_READY};
 
     fn make_rng(seed: u8) -> FixedRng {
         FixedRng::new(&[seed; 128])
@@ -823,23 +901,44 @@ mod tests {
         let (tx, _rx) = make_tx();
 
         // Build a proper UPGRADE_REQUEST payload
-        let mut proposer = HolePunchEngine::new(link_id, Some(Endpoint { addr: vec![127, 0, 0, 1], port: 4343 }), ProbeProtocol::Rnsp);
-        proposer.propose(&test_derived_key(), 100.0, &mut rng).unwrap();
-        let discover_actions = proposer.endpoints_discovered(
-            Endpoint { addr: vec![1, 2, 3, 4], port: 41000 }, 101.0
-        ).unwrap();
+        let mut proposer = HolePunchEngine::new(
+            link_id,
+            Some(Endpoint {
+                addr: vec![127, 0, 0, 1],
+                port: 4343,
+            }),
+            ProbeProtocol::Rnsp,
+        );
+        proposer
+            .propose(&test_derived_key(), 100.0, &mut rng)
+            .unwrap();
+        let discover_actions = proposer
+            .endpoints_discovered(
+                Endpoint {
+                    addr: vec![1, 2, 3, 4],
+                    port: 41000,
+                },
+                101.0,
+            )
+            .unwrap();
         let request_payload = match &discover_actions[0] {
             HolePunchAction::SendSignal { payload, .. } => payload.clone(),
             _ => panic!("Expected SendSignal"),
         };
 
         let (handled, actions) = mgr.handle_signal(
-            link_id, UPGRADE_REQUEST, request_payload, Some(&test_derived_key()), &tx,
+            link_id,
+            UPGRADE_REQUEST,
+            request_payload,
+            Some(&test_derived_key()),
+            &tx,
         );
 
         assert!(handled);
         assert_eq!(actions.len(), 1);
-        assert!(matches!(&actions[0], HolePunchManagerAction::SendChannelMessage { msgtype, .. } if *msgtype == UPGRADE_REJECT));
+        assert!(
+            matches!(&actions[0], HolePunchManagerAction::SendChannelMessage { msgtype, .. } if *msgtype == UPGRADE_REJECT)
+        );
         assert_eq!(mgr.session_count(), 0);
     }
 
@@ -853,18 +952,37 @@ mod tests {
         let (tx, _rx) = make_tx();
 
         // Build UPGRADE_REQUEST
-        let mut proposer = HolePunchEngine::new(link_id, Some(Endpoint { addr: vec![127, 0, 0, 1], port: 4343 }), ProbeProtocol::Rnsp);
-        proposer.propose(&test_derived_key(), 100.0, &mut rng).unwrap();
-        let discover_actions = proposer.endpoints_discovered(
-            Endpoint { addr: vec![1, 2, 3, 4], port: 41000 }, 101.0
-        ).unwrap();
+        let mut proposer = HolePunchEngine::new(
+            link_id,
+            Some(Endpoint {
+                addr: vec![127, 0, 0, 1],
+                port: 4343,
+            }),
+            ProbeProtocol::Rnsp,
+        );
+        proposer
+            .propose(&test_derived_key(), 100.0, &mut rng)
+            .unwrap();
+        let discover_actions = proposer
+            .endpoints_discovered(
+                Endpoint {
+                    addr: vec![1, 2, 3, 4],
+                    port: 41000,
+                },
+                101.0,
+            )
+            .unwrap();
         let request_payload = match &discover_actions[0] {
             HolePunchAction::SendSignal { payload, .. } => payload.clone(),
             _ => panic!("Expected SendSignal"),
         };
 
         let (handled, actions) = mgr.handle_signal(
-            link_id, UPGRADE_REQUEST, request_payload, Some(&test_derived_key()), &tx,
+            link_id,
+            UPGRADE_REQUEST,
+            request_payload,
+            Some(&test_derived_key()),
+            &tx,
         );
 
         assert!(handled);
@@ -879,9 +997,7 @@ mod tests {
         let mut mgr = HolePunchManager::new(vec![], ProbeProtocol::Rnsp, None);
         let (tx, _rx) = make_tx();
 
-        let (handled, actions) = mgr.handle_signal(
-            [0x55; 16], 0x0001, vec![1, 2, 3], None, &tx,
-        );
+        let (handled, actions) = mgr.handle_signal([0x55; 16], 0x0001, vec![1, 2, 3], None, &tx);
 
         assert!(!handled);
         assert!(actions.is_empty());
@@ -914,8 +1030,10 @@ mod tests {
 
         let actions = mgr.handle_probe_failed(link_id, session_id);
         assert_eq!(actions.len(), 1);
-        assert!(matches!(&actions[0], HolePunchManagerAction::DirectConnectFailed { reason, .. }
-            if *reason == rns_core::holepunch::types::FAIL_PROBE));
+        assert!(
+            matches!(&actions[0], HolePunchManagerAction::DirectConnectFailed { reason, .. }
+            if *reason == rns_core::holepunch::types::FAIL_PROBE)
+        );
     }
 
     #[test]
@@ -940,7 +1058,13 @@ mod tests {
         // Probe result arrives — initiator should send UPGRADE_REQUEST
         let probe_socket = UdpSocket::bind("127.0.0.1:0").unwrap();
         let observed: SocketAddr = "1.2.3.4:41000".parse().unwrap();
-        let actions = mgr.handle_probe_result(link_id, session_id, observed, probe_socket, make_probe_addr());
+        let actions = mgr.handle_probe_result(
+            link_id,
+            session_id,
+            observed,
+            probe_socket,
+            make_probe_addr(),
+        );
 
         // Should emit UPGRADE_REQUEST (initiator discovered endpoint -> sends request)
         assert!(actions.iter().any(|a| matches!(a,
@@ -957,24 +1081,51 @@ mod tests {
         let (tx, _rx) = make_tx();
 
         // Build UPGRADE_REQUEST from an initiator
-        let mut proposer = HolePunchEngine::new(link_id, Some(Endpoint { addr: vec![127, 0, 0, 1], port: 4343 }), ProbeProtocol::Rnsp);
-        proposer.propose(&test_derived_key(), 100.0, &mut rng).unwrap();
-        let discover_actions = proposer.endpoints_discovered(
-            Endpoint { addr: vec![1, 2, 3, 4], port: 41000 }, 101.0
-        ).unwrap();
+        let mut proposer = HolePunchEngine::new(
+            link_id,
+            Some(Endpoint {
+                addr: vec![127, 0, 0, 1],
+                port: 4343,
+            }),
+            ProbeProtocol::Rnsp,
+        );
+        proposer
+            .propose(&test_derived_key(), 100.0, &mut rng)
+            .unwrap();
+        let discover_actions = proposer
+            .endpoints_discovered(
+                Endpoint {
+                    addr: vec![1, 2, 3, 4],
+                    port: 41000,
+                },
+                101.0,
+            )
+            .unwrap();
         let request_payload = match &discover_actions[0] {
             HolePunchAction::SendSignal { payload, .. } => payload.clone(),
             _ => panic!("Expected SendSignal"),
         };
 
         // Responder receives UPGRADE_REQUEST (session enters Discovering)
-        mgr.handle_signal(link_id, UPGRADE_REQUEST, request_payload, Some(&test_derived_key()), &tx);
+        mgr.handle_signal(
+            link_id,
+            UPGRADE_REQUEST,
+            request_payload,
+            Some(&test_derived_key()),
+            &tx,
+        );
         let session_id = *mgr.link_to_session.get(&link_id).unwrap();
 
         // Responder's probe result arrives — should send UPGRADE_READY
         let probe_socket = UdpSocket::bind("127.0.0.1:0").unwrap();
         let observed: SocketAddr = "5.6.7.8:52000".parse().unwrap();
-        let actions = mgr.handle_probe_result(link_id, session_id, observed, probe_socket, make_probe_addr());
+        let actions = mgr.handle_probe_result(
+            link_id,
+            session_id,
+            observed,
+            probe_socket,
+            make_probe_addr(),
+        );
 
         assert!(actions.iter().any(|a| matches!(a,
             HolePunchManagerAction::SendChannelMessage { msgtype, .. }
@@ -984,21 +1135,30 @@ mod tests {
 
     #[test]
     fn test_endpoint_to_socket_addr_ipv4() {
-        let ep = Endpoint { addr: vec![10, 0, 0, 1], port: 8080 };
+        let ep = Endpoint {
+            addr: vec![10, 0, 0, 1],
+            port: 8080,
+        };
         let addr = endpoint_to_socket_addr(&ep).unwrap();
         assert_eq!(addr, "10.0.0.1:8080".parse::<SocketAddr>().unwrap());
     }
 
     #[test]
     fn test_endpoint_to_socket_addr_ipv6() {
-        let ep = Endpoint { addr: vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1], port: 9090 };
+        let ep = Endpoint {
+            addr: vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+            port: 9090,
+        };
         let addr = endpoint_to_socket_addr(&ep).unwrap();
         assert_eq!(addr, "[::1]:9090".parse::<SocketAddr>().unwrap());
     }
 
     #[test]
     fn test_endpoint_to_socket_addr_invalid() {
-        let ep = Endpoint { addr: vec![1, 2, 3], port: 80 };
+        let ep = Endpoint {
+            addr: vec![1, 2, 3],
+            port: 80,
+        };
         assert!(endpoint_to_socket_addr(&ep).is_none());
     }
 

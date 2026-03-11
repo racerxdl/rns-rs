@@ -1,28 +1,28 @@
 //! Network interface abstractions.
 
+#[cfg(feature = "iface-auto")]
+pub mod auto;
+#[cfg(feature = "iface-backbone")]
+pub mod backbone;
+#[cfg(feature = "iface-i2p")]
+pub mod i2p;
+#[cfg(feature = "iface-kiss")]
+pub mod kiss_iface;
+#[cfg(feature = "iface-local")]
+pub mod local;
+#[cfg(feature = "iface-pipe")]
+pub mod pipe;
+pub mod registry;
+#[cfg(feature = "iface-rnode")]
+pub mod rnode;
+#[cfg(feature = "iface-serial")]
+pub mod serial_iface;
 #[cfg(feature = "iface-tcp")]
 pub mod tcp;
 #[cfg(feature = "iface-tcp")]
 pub mod tcp_server;
 #[cfg(feature = "iface-udp")]
 pub mod udp;
-#[cfg(feature = "iface-local")]
-pub mod local;
-#[cfg(feature = "iface-serial")]
-pub mod serial_iface;
-#[cfg(feature = "iface-kiss")]
-pub mod kiss_iface;
-#[cfg(feature = "iface-pipe")]
-pub mod pipe;
-#[cfg(feature = "iface-rnode")]
-pub mod rnode;
-#[cfg(feature = "iface-backbone")]
-pub mod backbone;
-#[cfg(feature = "iface-auto")]
-pub mod auto;
-#[cfg(feature = "iface-i2p")]
-pub mod i2p;
-pub mod registry;
 
 use std::any::Any;
 use std::collections::HashMap;
@@ -30,9 +30,9 @@ use std::io;
 use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
-use rns_core::transport::types::{InterfaceId, InterfaceInfo};
 use crate::event::EventSender;
 use crate::ifac::IfacState;
+use rns_core::transport::types::{InterfaceId, InterfaceInfo};
 
 /// Bind a socket to a specific network interface using `SO_BINDTODEVICE`.
 ///
@@ -136,7 +136,9 @@ pub trait InterfaceFactory: Send + Sync {
     fn type_name(&self) -> &str;
 
     /// Default IFAC size (bytes). 8 for serial/kiss/rnode, 16 for others.
-    fn default_ifac_size(&self) -> usize { 16 }
+    fn default_ifac_size(&self) -> usize {
+        16
+    }
 
     /// Parse from key-value params (config file or external).
     fn parse_config(
@@ -155,10 +157,18 @@ pub trait InterfaceFactory: Send + Sync {
 }
 
 impl InterfaceStatusView for InterfaceEntry {
-    fn id(&self) -> InterfaceId { self.id }
-    fn info(&self) -> &InterfaceInfo { &self.info }
-    fn online(&self) -> bool { self.online }
-    fn stats(&self) -> &InterfaceStats { &self.stats }
+    fn id(&self) -> InterfaceId {
+        self.id
+    }
+    fn info(&self) -> &InterfaceInfo {
+        &self.info
+    }
+    fn online(&self) -> bool {
+        self.online
+    }
+    fn stats(&self) -> &InterfaceStats {
+        &self.stats
+    }
 }
 
 #[cfg(test)]

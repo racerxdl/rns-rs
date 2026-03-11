@@ -85,6 +85,9 @@ mod tests {
         let seed = [1u8; 32];
         let key1 = Ed25519PrivateKey::from_bytes(&seed);
         let key2 = Ed25519PrivateKey::from_bytes(&seed);
-        assert_eq!(key1.public_key().public_bytes(), key2.public_key().public_bytes());
+        assert_eq!(
+            key1.public_key().public_bytes(),
+            key2.public_key().public_bytes()
+        );
     }
 }

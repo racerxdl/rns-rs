@@ -27,8 +27,8 @@ pub fn stamp_workblock(material: &[u8], expand_rounds: u32) -> Vec<u8> {
         salt_input.extend_from_slice(&packed_n);
         let salt = sha256(&salt_input);
 
-        let expanded = hkdf(256, material, Some(&salt), None)
-            .expect("HKDF expansion should not fail");
+        let expanded =
+            hkdf(256, material, Some(&salt), None).expect("HKDF expansion should not fail");
         workblock.extend_from_slice(&expanded);
     }
     workblock
@@ -134,9 +134,12 @@ mod tests {
         //   infohash = RNS.Identity.full_hash(packed)
         //   wb = LXStamper.stamp_workblock(infohash, expand_rounds=20)
         //   stamp = LXStamper.generate_stamp(infohash, stamp_cost=8, expand_rounds=20)[0]
-        let infohash = hex_to_bytes("916f0027a575074ce72a331777c3478d6513f786a591bd892da1a577bf2335f9");
-        let expected_wb_prefix = hex_to_bytes("9e36b853221f04ca1cf54447abce3e9eb47d01d55215414ee5b540eaa796caf2");
-        let stamp = hex_to_bytes("4a1aa3a295482fa9a340b05f2c4779e701b53cd0f158c1bbe559730ae5ff6d17");
+        let infohash =
+            hex_to_bytes("916f0027a575074ce72a331777c3478d6513f786a591bd892da1a577bf2335f9");
+        let expected_wb_prefix =
+            hex_to_bytes("9e36b853221f04ca1cf54447abce3e9eb47d01d55215414ee5b540eaa796caf2");
+        let stamp =
+            hex_to_bytes("4a1aa3a295482fa9a340b05f2c4779e701b53cd0f158c1bbe559730ae5ff6d17");
 
         let wb = stamp_workblock(&infohash, 20);
         assert_eq!(wb.len(), 5120);
@@ -148,6 +151,9 @@ mod tests {
     }
 
     fn hex_to_bytes(s: &str) -> Vec<u8> {
-        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i+2], 16).unwrap()).collect()
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
     }
 }

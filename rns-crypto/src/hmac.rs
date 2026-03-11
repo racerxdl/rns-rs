@@ -43,7 +43,8 @@ mod tests {
     fn test_hmac_rfc4231_test1() {
         let key = hex_to_bytes("0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b");
         let data = b"Hi There";
-        let expected = hex_to_bytes("b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7");
+        let expected =
+            hex_to_bytes("b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7");
         assert_eq!(hmac_sha256(&key, data).to_vec(), expected);
     }
 
@@ -51,7 +52,8 @@ mod tests {
     fn test_hmac_rfc4231_test2() {
         let key = b"Jefe";
         let data = b"what do ya want for nothing?";
-        let expected = hex_to_bytes("5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
+        let expected =
+            hex_to_bytes("5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
         assert_eq!(hmac_sha256(key, data).to_vec(), expected);
     }
 
@@ -66,7 +68,8 @@ mod tests {
     fn test_hmac_long_key() {
         let key = [0xAA; 131];
         let data = b"Test Using Larger Than Block-Size Key - Hash Key First";
-        let expected = hex_to_bytes("60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54");
+        let expected =
+            hex_to_bytes("60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54");
         assert_eq!(hmac_sha256(&key, data).to_vec(), expected);
     }
 

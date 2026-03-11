@@ -1,5 +1,5 @@
-use rns_core::types::{DestHash, IdentityHash, LinkId, PacketHash};
 use rns_core::transport::types::InterfaceId;
+use rns_core::types::{DestHash, IdentityHash, LinkId, PacketHash};
 use rns_net::destination::AnnouncedIdentity;
 use rns_net::Callbacks;
 
@@ -14,7 +14,10 @@ pub struct CtlCallbacks {
 
 impl CtlCallbacks {
     pub fn new(state: SharedState, ws_broadcast: WsBroadcast) -> Self {
-        CtlCallbacks { state, ws_broadcast }
+        CtlCallbacks {
+            state,
+            ws_broadcast,
+        }
     }
 }
 
@@ -57,7 +60,13 @@ impl Callbacks for CtlCallbacks {
         true
     }
 
-    fn on_link_established(&mut self, link_id: LinkId, _dest_hash: DestHash, rtt: f64, is_initiator: bool) {
+    fn on_link_established(
+        &mut self,
+        link_id: LinkId,
+        _dest_hash: DestHash,
+        rtt: f64,
+        is_initiator: bool,
+    ) {
         // Set resource strategy to AcceptAll so this node can receive resources on this link
         let node_handle = {
             let s = self.state.read().unwrap();
@@ -96,7 +105,12 @@ impl Callbacks for CtlCallbacks {
         broadcast(&self.ws_broadcast, event);
     }
 
-    fn on_remote_identified(&mut self, link_id: LinkId, identity_hash: IdentityHash, _public_key: [u8; 64]) {
+    fn on_remote_identified(
+        &mut self,
+        link_id: LinkId,
+        identity_hash: IdentityHash,
+        _public_key: [u8; 64],
+    ) {
         let record = LinkEventRecord {
             link_id: to_hex(&link_id.0),
             event_type: "identified".into(),

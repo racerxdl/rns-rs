@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
-use super::types::{InterfaceId, InterfaceInfo, TransportAction};
 use super::tables::PathSet;
+use super::types::{InterfaceId, InterfaceInfo, TransportAction};
 use crate::constants;
 use crate::packet::RawPacket;
 
@@ -28,7 +28,10 @@ pub fn route_outbound(
         && dest_type != constants::DESTINATION_GROUP;
 
     if use_path_table {
-        if let Some(path_entry) = path_table.get(&packet.destination_hash).and_then(|ps| ps.primary()) {
+        if let Some(path_entry) = path_table
+            .get(&packet.destination_hash)
+            .and_then(|ps| ps.primary())
+        {
             if path_entry.hops > 1 {
                 if packet.flags.header_type == constants::HEADER_1 {
                     // Rewrite H1 → H2 with transport
@@ -191,8 +194,8 @@ pub(crate) fn should_transmit_announce(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::collections::BTreeMap;
     use crate::packet::PacketFlags;
+    use alloc::collections::BTreeMap;
 
     fn make_interface(id: u64, mode: u8) -> InterfaceInfo {
         InterfaceInfo {
@@ -219,16 +222,19 @@ mod tests {
     use super::super::tables::PathEntry;
 
     fn make_path(hops: u8, iface: u64) -> PathSet {
-        PathSet::from_single(PathEntry {
-            timestamp: 1000.0,
-            next_hop: [0xAA; 16],
-            hops,
-            expires: 9999.0,
-            random_blobs: Vec::new(),
-            receiving_interface: InterfaceId(iface),
-            packet_hash: [0; 32],
-            announce_raw: None,
-        }, 1)
+        PathSet::from_single(
+            PathEntry {
+                timestamp: 1000.0,
+                next_hop: [0xAA; 16],
+                hops,
+                expires: 9999.0,
+                random_blobs: Vec::new(),
+                receiving_interface: InterfaceId(iface),
+                packet_hash: [0; 32],
+                announce_raw: None,
+            },
+            1,
+        )
     }
 
     fn make_data_packet(dest_hash: &[u8; 16]) -> RawPacket {
@@ -328,7 +334,10 @@ mod tests {
         );
 
         assert_eq!(actions.len(), 1);
-        assert!(matches!(&actions[0], TransportAction::BroadcastOnAllInterfaces { .. }));
+        assert!(matches!(
+            &actions[0],
+            TransportAction::BroadcastOnAllInterfaces { .. }
+        ));
     }
 
     #[test]
@@ -364,7 +373,10 @@ mod tests {
         let paths = BTreeMap::new();
         let mut interfaces = BTreeMap::new();
         interfaces.insert(InterfaceId(1), make_interface(1, constants::MODE_FULL));
-        interfaces.insert(InterfaceId(2), make_interface(2, constants::MODE_ACCESS_POINT));
+        interfaces.insert(
+            InterfaceId(2),
+            make_interface(2, constants::MODE_ACCESS_POINT),
+        );
 
         let local_dests = BTreeMap::new();
 
@@ -375,7 +387,8 @@ mod tests {
             destination_type: constants::DESTINATION_SINGLE,
             packet_type: constants::PACKET_TYPE_ANNOUNCE,
         };
-        let packet = RawPacket::pack(flags, 1, &dest, None, constants::CONTEXT_NONE, &[0xAA; 64]).unwrap();
+        let packet =
+            RawPacket::pack(flags, 1, &dest, None, constants::CONTEXT_NONE, &[0xAA; 64]).unwrap();
 
         let actions = route_outbound(
             &paths,
@@ -447,7 +460,10 @@ mod tests {
 
         // Should broadcast, not use path table
         assert_eq!(actions.len(), 1);
-        assert!(matches!(&actions[0], TransportAction::BroadcastOnAllInterfaces { .. }));
+        assert!(matches!(
+            &actions[0],
+            TransportAction::BroadcastOnAllInterfaces { .. }
+        ));
     }
 
     // =========================================================================

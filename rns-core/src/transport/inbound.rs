@@ -22,7 +22,7 @@ pub fn forward_transport_packet(
         new_raw.push(packet.raw[0]); // flags unchanged
         new_raw.push(packet.hops); // updated hop count
         new_raw.extend_from_slice(&next_hop); // new transport_id
-        // Skip old transport_id (bytes 2..18), keep dest_hash + context + data
+                                              // Skip old transport_id (bytes 2..18), keep dest_hash + context + data
         new_raw.extend_from_slice(&packet.raw[(constants::TRUNCATED_HASHLENGTH / 8 + 2)..]);
         new_raw
     } else if remaining_hops == 1 {
@@ -180,7 +180,15 @@ mod tests {
             destination_type: constants::DESTINATION_SINGLE,
             packet_type: constants::PACKET_TYPE_DATA,
         };
-        RawPacket::pack(flags, hops, dest, Some(transport_id), constants::CONTEXT_NONE, b"payload").unwrap()
+        RawPacket::pack(
+            flags,
+            hops,
+            dest,
+            Some(transport_id),
+            constants::CONTEXT_NONE,
+            b"payload",
+        )
+        .unwrap()
     }
 
     #[test]
@@ -229,7 +237,15 @@ mod tests {
             destination_type: constants::DESTINATION_SINGLE,
             packet_type: constants::PACKET_TYPE_PROOF,
         };
-        let packet = RawPacket::pack(flags, 2, &[0xAA; 16], None, constants::CONTEXT_NONE, &[0xBB; 32]).unwrap();
+        let packet = RawPacket::pack(
+            flags,
+            2,
+            &[0xAA; 16],
+            None,
+            constants::CONTEXT_NONE,
+            &[0xBB; 32],
+        )
+        .unwrap();
 
         let reverse = ReverseEntry {
             receiving_interface: InterfaceId(1),
@@ -256,7 +272,15 @@ mod tests {
             destination_type: constants::DESTINATION_SINGLE,
             packet_type: constants::PACKET_TYPE_PROOF,
         };
-        let packet = RawPacket::pack(flags, 2, &[0xAA; 16], None, constants::CONTEXT_NONE, &[0xBB; 32]).unwrap();
+        let packet = RawPacket::pack(
+            flags,
+            2,
+            &[0xAA; 16],
+            None,
+            constants::CONTEXT_NONE,
+            &[0xBB; 32],
+        )
+        .unwrap();
 
         let reverse = ReverseEntry {
             receiving_interface: InterfaceId(1),
@@ -278,7 +302,15 @@ mod tests {
             destination_type: constants::DESTINATION_LINK,
             packet_type: constants::PACKET_TYPE_DATA,
         };
-        let packet = RawPacket::pack(flags, 3, &[0xAA; 16], None, constants::CONTEXT_NONE, b"data").unwrap();
+        let packet = RawPacket::pack(
+            flags,
+            3,
+            &[0xAA; 16],
+            None,
+            constants::CONTEXT_NONE,
+            b"data",
+        )
+        .unwrap();
 
         let link = LinkEntry {
             timestamp: 100.0,
@@ -299,7 +331,15 @@ mod tests {
         assert_eq!(iface, InterfaceId(2));
 
         // Received on received_interface (2), should forward to next_hop_interface (1)
-        let packet2 = RawPacket::pack(flags, 5, &[0xAA; 16], None, constants::CONTEXT_NONE, b"data").unwrap();
+        let packet2 = RawPacket::pack(
+            flags,
+            5,
+            &[0xAA; 16],
+            None,
+            constants::CONTEXT_NONE,
+            b"data",
+        )
+        .unwrap();
         let result2 = route_via_link_table(&packet2, &link, InterfaceId(2));
         assert!(result2.is_some());
         let (iface2, _) = result2.unwrap();
@@ -316,7 +356,15 @@ mod tests {
             packet_type: constants::PACKET_TYPE_DATA,
         };
         // Wrong hop count
-        let packet = RawPacket::pack(flags, 99, &[0xAA; 16], None, constants::CONTEXT_NONE, b"data").unwrap();
+        let packet = RawPacket::pack(
+            flags,
+            99,
+            &[0xAA; 16],
+            None,
+            constants::CONTEXT_NONE,
+            b"data",
+        )
+        .unwrap();
 
         let link = LinkEntry {
             timestamp: 100.0,

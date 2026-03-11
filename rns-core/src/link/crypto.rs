@@ -19,7 +19,9 @@ pub fn link_encrypt(token: &Token, plaintext: &[u8], rng: &mut dyn Rng) -> Vec<u
 
 /// Decrypt ciphertext received on link.
 pub fn link_decrypt(token: &Token, ciphertext: &[u8]) -> Result<Vec<u8>, LinkError> {
-    token.decrypt(ciphertext).map_err(|_| LinkError::CryptoError)
+    token
+        .decrypt(ciphertext)
+        .map_err(|_| LinkError::CryptoError)
 }
 
 #[cfg(test)]

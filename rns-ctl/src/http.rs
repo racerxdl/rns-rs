@@ -54,7 +54,11 @@ impl HttpResponse {
     }
 
     pub fn internal_error(msg: &str) -> Self {
-        Self::json(500, "Internal Server Error", &serde_json::json!({"error": msg}))
+        Self::json(
+            500,
+            "Internal Server Error",
+            &serde_json::json!({"error": msg}),
+        )
     }
 }
 
@@ -68,19 +72,28 @@ pub fn parse_request(stream: &mut dyn Read) -> io::Result<HttpRequest> {
     let request_line = request_line.trim_end();
 
     if request_line.is_empty() {
-        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "Empty request"));
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "Empty request",
+        ));
     }
 
     let parts: Vec<&str> = request_line.splitn(3, ' ').collect();
     if parts.len() < 2 {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid request line"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Invalid request line",
+        ));
     }
 
     let method = parts[0].to_string();
     let full_path = parts[1];
 
     let (path, query) = if let Some(pos) = full_path.find('?') {
-        (full_path[..pos].to_string(), full_path[pos + 1..].to_string())
+        (
+            full_path[..pos].to_string(),
+            full_path[pos + 1..].to_string(),
+        )
     } else {
         (full_path.to_string(), String::new())
     };

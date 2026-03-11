@@ -1,15 +1,15 @@
-pub mod types;
-pub mod tables;
-pub mod dedup;
-pub mod pathfinder;
-pub mod rate_limit;
 pub mod announce_proc;
-pub mod outbound;
-pub mod inbound;
 pub mod announce_queue;
-pub mod tunnel;
+pub mod dedup;
+pub mod inbound;
 pub mod ingress_control;
 pub mod jobs;
+pub mod outbound;
+pub mod pathfinder;
+pub mod rate_limit;
+pub mod tables;
+pub mod tunnel;
+pub mod types;
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;
@@ -25,19 +25,18 @@ use crate::packet::RawPacket;
 use self::announce_proc::compute_path_expires;
 use self::announce_queue::AnnounceQueues;
 use self::dedup::PacketHashlist;
-use self::tunnel::TunnelTable;
 use self::inbound::{
-    create_link_entry, create_reverse_entry, forward_transport_packet,
-    route_proof_via_reverse, route_via_link_table,
-};
-use self::outbound::{route_outbound, should_transmit_announce};
-use self::pathfinder::{
-    extract_random_blob, timebase_from_random_blob,
-    decide_announce_multipath, MultiPathDecision,
+    create_link_entry, create_reverse_entry, forward_transport_packet, route_proof_via_reverse,
+    route_via_link_table,
 };
 use self::ingress_control::IngressControl;
+use self::outbound::{route_outbound, should_transmit_announce};
+use self::pathfinder::{
+    decide_announce_multipath, extract_random_blob, timebase_from_random_blob, MultiPathDecision,
+};
 use self::rate_limit::AnnounceRateLimiter;
 use self::tables::{AnnounceEntry, DiscoveryPathRequest, LinkEntry, PathEntry, PathSet};
+use self::tunnel::TunnelTable;
 use self::types::{BlackholeEntry, InterfaceId, InterfaceInfo, TransportAction, TransportConfig};
 
 /// The core transport/routing engine.
@@ -122,19 +121,30 @@ impl TransportEngine {
     // =========================================================================
 
     pub fn has_path(&self, dest_hash: &[u8; 16]) -> bool {
-        self.path_table.get(dest_hash).map_or(false, |ps| !ps.is_empty())
+        self.path_table
+            .get(dest_hash)
+            .map_or(false, |ps| !ps.is_empty())
     }
 
     pub fn hops_to(&self, dest_hash: &[u8; 16]) -> Option<u8> {
-        self.path_table.get(dest_hash).and_then(|ps| ps.primary()).map(|e| e.hops)
+        self.path_table
+            .get(dest_hash)
+            .and_then(|ps| ps.primary())
+            .map(|e| e.hops)
     }
 
     pub fn next_hop(&self, dest_hash: &[u8; 16]) -> Option<[u8; 16]> {
-        self.path_table.get(dest_hash).and_then(|ps| ps.primary()).map(|e| e.next_hop)
+        self.path_table
+            .get(dest_hash)
+            .and_then(|ps| ps.primary())
+            .map(|e| e.next_hop)
     }
 
     pub fn next_hop_interface(&self, dest_hash: &[u8; 16]) -> Option<InterfaceId> {
-        self.path_table.get(dest_hash).and_then(|ps| ps.primary()).map(|e| e.receiving_interface)
+        self.path_table
+            .get(dest_hash)
+            .and_then(|ps| ps.primary())
+            .map(|e| e.receiving_interface)
     }
 
     // =========================================================================
@@ -163,7 +173,7 @@ impl TransportEngine {
         if let Some(ps) = self.path_table.get_mut(dest_hash) {
             if ps.len() > 1 {
                 ps.failover(false); // demote old primary to back
-                // Clear unresponsive state since we promoted a fresh primary
+                                    // Clear unresponsive state since we promoted a fresh primary
                 self.path_states.remove(dest_hash);
                 return;
             }
@@ -254,9 +264,8 @@ impl TransportEngine {
 
     /// Cull expired blackhole entries.
     fn cull_blackholed(&mut self, now: f64) {
-        self.blackholed_identities.retain(|_, entry| {
-            entry.expires == 0.0 || entry.expires > now
-        });
+        self.blackholed_identities
+            .retain(|_, entry| entry.expires == 0.0 || entry.expires > now);
     }
 
     // =========================================================================
@@ -303,10 +312,8 @@ impl TransportEngine {
                     packet_hash: tunnel_path.packet_hash,
                     announce_raw: None,
                 };
-                self.path_table.insert(
-                    *dest_hash,
-                    PathSet::from_single(entry, max_paths),
-                );
+                self.path_table
+                    .insert(*dest_hash, PathSet::from_single(entry, max_paths));
             }
         }
 
@@ -523,7 +530,11 @@ impl TransportEngine {
             {
                 if let Some(ref identity_hash) = self.config.identity_hash {
                     if packet.transport_id.as_ref() == Some(identity_hash) {
-                        if let Some(path_entry) = self.path_table.get(&packet.destination_hash).and_then(|ps| ps.primary()) {
+                        if let Some(path_entry) = self
+                            .path_table
+                            .get(&packet.destination_hash)
+                            .and_then(|ps| ps.primary())
+                        {
                             let next_hop = path_entry.next_hop;
                             let remaining_hops = path_entry.hops;
                             let outbound_interface = path_entry.receiving_interface;
@@ -557,12 +568,8 @@ impl TransportEngine {
                                     receiving_interface: iface,
                                 });
                             } else {
-                                let (trunc_hash, reverse_entry) = create_reverse_entry(
-                                    &packet,
-                                    outbound_interface,
-                                    iface,
-                                    now,
-                                );
+                                let (trunc_hash, reverse_entry) =
+                                    create_reverse_entry(&packet, outbound_interface, iface, now);
                                 self.reverse_table.insert(trunc_hash, reverse_entry);
                             }
 
@@ -572,7 +579,11 @@ impl TransportEngine {
                             });
 
                             // Update path timestamp
-                            if let Some(entry) = self.path_table.get_mut(&packet.destination_hash).and_then(|ps| ps.primary_mut()) {
+                            if let Some(entry) = self
+                                .path_table
+                                .get_mut(&packet.destination_hash)
+                                .and_then(|ps| ps.primary_mut())
+                            {
                                 entry.timestamp = now;
                             }
                         }
@@ -598,9 +609,7 @@ impl TransportEngine {
                         });
 
                         // Update link timestamp
-                        if let Some(entry) =
-                            self.link_table.get_mut(&packet.destination_hash)
-                        {
+                        if let Some(entry) = self.link_table.get_mut(&packet.destination_hash) {
                             entry.timestamp = now;
                         }
                     }
@@ -622,7 +631,10 @@ impl TransportEngine {
         if packet.flags.packet_type == constants::PACKET_TYPE_LINKREQUEST
             || packet.flags.packet_type == constants::PACKET_TYPE_DATA
         {
-            if self.local_destinations.contains_key(&packet.destination_hash) {
+            if self
+                .local_destinations
+                .contains_key(&packet.destination_hash)
+            {
                 actions.push(TransportAction::DeliverLocal {
                     destination_hash: packet.destination_hash,
                     raw: packet.raw.clone(),
@@ -671,11 +683,16 @@ impl TransportEngine {
         }
 
         // Skip local destinations
-        if self.local_destinations.contains_key(&packet.destination_hash) {
+        if self
+            .local_destinations
+            .contains_key(&packet.destination_hash)
+        {
             log::debug!(
                 "Announce:skipping local destination {:02x}{:02x}{:02x}{:02x}..",
-                packet.destination_hash[0], packet.destination_hash[1],
-                packet.destination_hash[2], packet.destination_hash[3],
+                packet.destination_hash[0],
+                packet.destination_hash[1],
+                packet.destination_hash[2],
+                packet.destination_hash[3],
             );
             return;
         }
@@ -684,7 +701,12 @@ impl TransportEngine {
         if !self.has_path(&packet.destination_hash) {
             if let Some(info) = self.interfaces.get(&iface) {
                 if info.ingress_control {
-                    if self.ingress_control.should_ingress_limit(iface, info.ia_freq, info.started, now) {
+                    if self.ingress_control.should_ingress_limit(
+                        iface,
+                        info.ia_freq,
+                        info.started,
+                        now,
+                    ) {
                         self.ingress_control.hold_announce(
                             iface,
                             packet.destination_hash,
@@ -705,17 +727,20 @@ impl TransportEngine {
         let received_from = if let Some(transport_id) = packet.transport_id {
             // Check if this is a retransmit we can stop
             if self.config.transport_enabled {
-                if let Some(announce_entry) = self.announce_table.get_mut(&packet.destination_hash) {
+                if let Some(announce_entry) = self.announce_table.get_mut(&packet.destination_hash)
+                {
                     if packet.hops.checked_sub(1) == Some(announce_entry.hops) {
                         announce_entry.local_rebroadcasts += 1;
                         if announce_entry.retries > 0
-                            && announce_entry.local_rebroadcasts >= constants::LOCAL_REBROADCASTS_MAX
+                            && announce_entry.local_rebroadcasts
+                                >= constants::LOCAL_REBROADCASTS_MAX
                         {
                             self.announce_table.remove(&packet.destination_hash);
                         }
                     }
                     // Check if our retransmit was passed on
-                    if let Some(announce_entry) = self.announce_table.get(&packet.destination_hash) {
+                    if let Some(announce_entry) = self.announce_table.get(&packet.destination_hash)
+                    {
                         if packet.hops.checked_sub(1) == Some(announce_entry.hops + 1)
                             && announce_entry.retries > 0
                         {
@@ -762,8 +787,10 @@ impl TransportEngine {
         if mp_decision == MultiPathDecision::Reject {
             log::debug!(
                 "Announce:path decision REJECT for dest={:02x}{:02x}{:02x}{:02x}..",
-                packet.destination_hash[0], packet.destination_hash[1],
-                packet.destination_hash[2], packet.destination_hash[3],
+                packet.destination_hash[0],
+                packet.destination_hash[1],
+                packet.destination_hash[2],
+                packet.destination_hash[3],
             );
             return;
         }
@@ -921,8 +948,7 @@ impl TransportEngine {
                 block_rebroadcasts: true,
                 attached_interface: Some(pr_entry),
             };
-            self.announce_table
-                .insert(packet.destination_hash, entry);
+            self.announce_table.insert(packet.destination_hash, entry);
         }
     }
 
@@ -947,13 +973,12 @@ impl TransportEngine {
     ) {
         if packet.context == constants::CONTEXT_LRPROOF {
             // Link request proof routing
-            if (self.config.transport_enabled) && self.link_table.contains_key(&packet.destination_hash)
+            if (self.config.transport_enabled)
+                && self.link_table.contains_key(&packet.destination_hash)
             {
                 let link_entry = self.link_table.get(&packet.destination_hash).cloned();
                 if let Some(entry) = link_entry {
-                    if packet.hops == entry.remaining_hops
-                        && iface == entry.next_hop_interface
-                    {
+                    if packet.hops == entry.remaining_hops && iface == entry.next_hop_interface {
                         // Forward the proof (simplified: skip signature validation
                         // which requires Identity recall)
                         let mut new_raw = Vec::new();
@@ -962,9 +987,7 @@ impl TransportEngine {
                         new_raw.extend_from_slice(&packet.raw[2..]);
 
                         // Mark link as validated
-                        if let Some(le) =
-                            self.link_table.get_mut(&packet.destination_hash)
-                        {
+                        if let Some(le) = self.link_table.get_mut(&packet.destination_hash) {
                             le.validated = true;
                         }
 
@@ -991,12 +1014,8 @@ impl TransportEngine {
         } else {
             // Regular proof: check reverse table
             if self.config.transport_enabled {
-                if let Some(reverse_entry) =
-                    self.reverse_table.remove(&packet.destination_hash)
-                {
-                    if let Some(action) =
-                        route_proof_via_reverse(packet, &reverse_entry, iface)
-                    {
+                if let Some(reverse_entry) = self.reverse_table.remove(&packet.destination_hash) {
+                    if let Some(action) = route_proof_via_reverse(packet, &reverse_entry, iface) {
                         actions.push(action);
                     }
                 }
@@ -1122,8 +1141,12 @@ impl TransportEngine {
             if !ic_enabled {
                 continue;
             }
-            if let Some(held) = self.ingress_control.process_held_announces(iface_id, ia_freq, started, now) {
-                let released_actions = self.handle_inbound(&held.raw, held.receiving_interface, now, rng);
+            if let Some(held) = self
+                .ingress_control
+                .process_held_announces(iface_id, ia_freq, started, now)
+            {
+                let released_actions =
+                    self.handle_inbound(&held.raw, held.receiving_interface, now, rng);
                 actions.extend(released_actions);
             }
         }
@@ -1132,7 +1155,8 @@ impl TransportEngine {
         if now > self.tables_last_culled + constants::TABLES_CULL_INTERVAL {
             jobs::cull_path_table(&mut self.path_table, &self.interfaces, now);
             jobs::cull_reverse_table(&mut self.reverse_table, &self.interfaces, now);
-            let (_culled, link_closed_actions) = jobs::cull_link_table(&mut self.link_table, &self.interfaces, now);
+            let (_culled, link_closed_actions) =
+                jobs::cull_link_table(&mut self.link_table, &self.interfaces, now);
             actions.extend(link_closed_actions);
             jobs::cull_path_states(&mut self.path_states, &self.path_table);
             self.cull_blackholed(now);
@@ -1140,7 +1164,8 @@ impl TransportEngine {
             self.discovery_path_requests
                 .retain(|_, req| now - req.timestamp < constants::DISCOVERY_PATH_REQUEST_TIMEOUT);
             // Cull tunnels: void missing interfaces, then remove expired
-            self.tunnel_table.void_missing_interfaces(|id| self.interfaces.contains_key(id));
+            self.tunnel_table
+                .void_missing_interfaces(|id| self.interfaces.contains_key(id));
             self.tunnel_table.cull(now);
             self.tables_last_culled = now;
         }
@@ -1326,7 +1351,13 @@ impl TransportEngine {
 
         // If we know the path and transport is enabled, queue retransmit
         if self.config.transport_enabled && self.has_path(&destination_hash) {
-            let path = self.path_table.get(&destination_hash).unwrap().primary().unwrap().clone();
+            let path = self
+                .path_table
+                .get(&destination_hash)
+                .unwrap()
+                .primary()
+                .unwrap()
+                .clone();
 
             // ROAMING loop prevention (Python Transport.py:2731-2732):
             // If the receiving interface is ROAMING and the known path's next-hop
@@ -1347,16 +1378,17 @@ impl TransportEngine {
                 if let Some(existing) = self.announce_table.remove(&destination_hash) {
                     self.held_announces.insert(destination_hash, existing);
                 }
-                let retransmit_timeout = if let Some(iface_info) = self.interfaces.get(&interface_id) {
-                    let base = now + constants::PATH_REQUEST_GRACE;
-                    if iface_info.mode == constants::MODE_ROAMING {
-                        base + constants::PATH_REQUEST_RG
+                let retransmit_timeout =
+                    if let Some(iface_info) = self.interfaces.get(&interface_id) {
+                        let base = now + constants::PATH_REQUEST_GRACE;
+                        if iface_info.mode == constants::MODE_ROAMING {
+                            base + constants::PATH_REQUEST_RG
+                        } else {
+                            base
+                        }
                     } else {
-                        base
-                    }
-                } else {
-                    now + constants::PATH_REQUEST_GRACE
-                };
+                        now + constants::PATH_REQUEST_GRACE
+                    };
 
                 let (packet_data, context_flag) = match RawPacket::unpack(raw) {
                     Ok(parsed) => (parsed.data, parsed.flags.context_flag),
@@ -1421,7 +1453,9 @@ impl TransportEngine {
 
     /// Iterate over primary path entries (one per destination).
     pub fn path_table_entries(&self) -> impl Iterator<Item = (&[u8; 16], &PathEntry)> {
-        self.path_table.iter().filter_map(|(k, ps)| ps.primary().map(|e| (k, e)))
+        self.path_table
+            .iter()
+            .filter_map(|(k, ps)| ps.primary().map(|e| (k, e)))
     }
 
     /// Iterate over all path sets (exposing alternatives).
@@ -1452,28 +1486,39 @@ impl TransportEngine {
     /// Redirect a path entry to a different interface (e.g. after direct connect).
     /// If no entry exists, creates a minimal direct path (hops=1).
     pub fn redirect_path(&mut self, dest_hash: &[u8; 16], interface: InterfaceId, now: f64) {
-        if let Some(entry) = self.path_table.get_mut(dest_hash).and_then(|ps| ps.primary_mut()) {
+        if let Some(entry) = self
+            .path_table
+            .get_mut(dest_hash)
+            .and_then(|ps| ps.primary_mut())
+        {
             entry.receiving_interface = interface;
             entry.hops = 1;
         } else {
             let max_paths = self.config.max_paths_per_destination;
-            self.path_table.insert(*dest_hash, PathSet::from_single(PathEntry {
-                timestamp: now,
-                next_hop: [0u8; 16],
-                hops: 1,
-                expires: now + 3600.0,
-                random_blobs: Vec::new(),
-                receiving_interface: interface,
-                packet_hash: [0u8; 32],
-                announce_raw: None,
-            }, max_paths));
+            self.path_table.insert(
+                *dest_hash,
+                PathSet::from_single(
+                    PathEntry {
+                        timestamp: now,
+                        next_hop: [0u8; 16],
+                        hops: 1,
+                        expires: now + 3600.0,
+                        random_blobs: Vec::new(),
+                        receiving_interface: interface,
+                        packet_hash: [0u8; 32],
+                        announce_raw: None,
+                    },
+                    max_paths,
+                ),
+            );
         }
     }
 
     /// Inject a path entry directly into the path table (full override).
     pub fn inject_path(&mut self, dest_hash: [u8; 16], entry: PathEntry) {
         let max_paths = self.config.max_paths_per_destination;
-        self.path_table.insert(dest_hash, PathSet::from_single(entry, max_paths));
+        self.path_table
+            .insert(dest_hash, PathSet::from_single(entry, max_paths));
     }
 
     /// Drop a path from the path table.
@@ -1522,7 +1567,10 @@ impl TransportEngine {
     /// Get path table entries as tuples for management queries.
     /// Returns (dest_hash, timestamp, next_hop, hops, expires, interface_name).
     /// Reports primaries only for backward compatibility.
-    pub fn get_path_table(&self, max_hops: Option<u8>) -> Vec<([u8; 16], f64, [u8; 16], u8, f64, alloc::string::String)> {
+    pub fn get_path_table(
+        &self,
+        max_hops: Option<u8>,
+    ) -> Vec<([u8; 16], f64, [u8; 16], u8, f64, alloc::string::String)> {
         let mut result = Vec::new();
         for (dest_hash, ps) in self.path_table.iter() {
             if let Some(entry) = ps.primary() {
@@ -1531,10 +1579,21 @@ impl TransportEngine {
                         continue;
                     }
                 }
-                let iface_name = self.interfaces.get(&entry.receiving_interface)
+                let iface_name = self
+                    .interfaces
+                    .get(&entry.receiving_interface)
                     .map(|i| i.name.clone())
-                    .unwrap_or_else(|| alloc::format!("Interface({})", entry.receiving_interface.0));
-                result.push((*dest_hash, entry.timestamp, entry.next_hop, entry.hops, entry.expires, iface_name));
+                    .unwrap_or_else(|| {
+                        alloc::format!("Interface({})", entry.receiving_interface.0)
+                    });
+                result.push((
+                    *dest_hash,
+                    entry.timestamp,
+                    entry.next_hop,
+                    entry.hops,
+                    entry.expires,
+                    iface_name,
+                ));
             }
         }
         result
@@ -1543,8 +1602,17 @@ impl TransportEngine {
     /// Get rate table entries as tuples for management queries.
     /// Returns (dest_hash, last, rate_violations, blocked_until, timestamps).
     pub fn get_rate_table(&self) -> Vec<([u8; 16], f64, u32, f64, Vec<f64>)> {
-        self.rate_limiter.entries()
-            .map(|(hash, entry)| (*hash, entry.last, entry.rate_violations, entry.blocked_until, entry.timestamps.clone()))
+        self.rate_limiter
+            .entries()
+            .map(|(hash, entry)| {
+                (
+                    *hash,
+                    entry.last,
+                    entry.rate_violations,
+                    entry.blocked_until,
+                    entry.timestamps.clone(),
+                )
+            })
             .collect()
     }
 
@@ -1614,7 +1682,6 @@ mod tests {
             max_paths_per_destination: 1,
         }
     }
-
 
     fn make_interface(id: u64, mode: u8) -> InterfaceInfo {
         InterfaceInfo {
@@ -1710,16 +1777,19 @@ mod tests {
 
         engine.path_table.insert(
             dest,
-            PathSet::from_single(PathEntry {
-                timestamp: 1000.0,
-                next_hop: [0; 16],
-                hops: 2,
-                expires: 9999.0,
-                random_blobs: Vec::new(),
-                receiving_interface: InterfaceId(1),
-                packet_hash: [0; 32],
-                announce_raw: None,
-            }, 1),
+            PathSet::from_single(
+                PathEntry {
+                    timestamp: 1000.0,
+                    next_hop: [0; 16],
+                    hops: 2,
+                    expires: 9999.0,
+                    random_blobs: Vec::new(),
+                    receiving_interface: InterfaceId(1),
+                    packet_hash: [0; 32],
+                    announce_raw: None,
+                },
+                1,
+            ),
         );
 
         assert!(engine.has_path(&dest));
@@ -1822,9 +1892,15 @@ mod tests {
             destination_type: constants::DESTINATION_SINGLE,
             packet_type: constants::PACKET_TYPE_ANNOUNCE,
         };
-        let packet =
-            RawPacket::pack(flags, 0, &[0; 16], None, constants::CONTEXT_NONE, &[0xAA; 64])
-                .unwrap();
+        let packet = RawPacket::pack(
+            flags,
+            0,
+            &[0; 16],
+            None,
+            constants::CONTEXT_NONE,
+            &[0xAA; 64],
+        )
+        .unwrap();
 
         // Add to hashlist
         engine.packet_hashlist.add(packet.packet_hash);
@@ -1925,14 +2001,14 @@ mod tests {
         let mut engine = TransportEngine::new(make_config(false));
         engine.register_interface(make_interface(1, constants::MODE_FULL));
 
-        let identity = rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0x55; 32]));
+        let identity =
+            rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0x55; 32]));
         let dest_hash = destination_hash("test", &["app"], Some(identity.hash()));
         let name_h = name_hash("test", &["app"]);
         let random_hash = [0x42u8; 10];
 
-        let (announce_data, _) = AnnounceData::pack(
-            &identity, &dest_hash, &name_h, &random_hash, None, None,
-        ).unwrap();
+        let (announce_data, _) =
+            AnnounceData::pack(&identity, &dest_hash, &name_h, &random_hash, None, None).unwrap();
 
         let flags = PacketFlags {
             header_type: constants::HEADER_1,
@@ -1941,7 +2017,15 @@ mod tests {
             destination_type: constants::DESTINATION_SINGLE,
             packet_type: constants::PACKET_TYPE_ANNOUNCE,
         };
-        let packet = RawPacket::pack(flags, 0, &dest_hash, None, constants::CONTEXT_NONE, &announce_data).unwrap();
+        let packet = RawPacket::pack(
+            flags,
+            0,
+            &dest_hash,
+            None,
+            constants::CONTEXT_NONE,
+            &announce_data,
+        )
+        .unwrap();
 
         // Blackhole the identity
         let now = 1000.0;
@@ -1951,8 +2035,12 @@ mod tests {
         let actions = engine.handle_inbound(&packet.raw, InterfaceId(1), now, &mut rng);
 
         // Should produce no AnnounceReceived or PathUpdated actions
-        assert!(actions.iter().all(|a| !matches!(a, TransportAction::AnnounceReceived { .. })));
-        assert!(actions.iter().all(|a| !matches!(a, TransportAction::PathUpdated { .. })));
+        assert!(actions
+            .iter()
+            .all(|a| !matches!(a, TransportAction::AnnounceReceived { .. })));
+        assert!(actions
+            .iter()
+            .all(|a| !matches!(a, TransportAction::PathUpdated { .. })));
     }
 
     #[test]
@@ -1963,16 +2051,19 @@ mod tests {
         let dest = [0x66; 16];
         engine.path_table.insert(
             dest,
-            PathSet::from_single(PathEntry {
-                timestamp: 100.0,
-                next_hop: [0; 16],
-                hops: 2,
-                expires: 200.0,
-                random_blobs: Vec::new(),
-                receiving_interface: InterfaceId(1),
-                packet_hash: [0; 32],
-                announce_raw: None,
-            }, 1),
+            PathSet::from_single(
+                PathEntry {
+                    timestamp: 100.0,
+                    next_hop: [0; 16],
+                    hops: 2,
+                    expires: 200.0,
+                    random_blobs: Vec::new(),
+                    receiving_interface: InterfaceId(1),
+                    packet_hash: [0; 32],
+                    announce_raw: None,
+                },
+                1,
+            ),
         );
 
         assert!(engine.has_path(&dest));
@@ -2045,14 +2136,17 @@ mod tests {
             packet_type: constants::PACKET_TYPE_DATA,
         };
         // Pack with hops=0
-        let packet = RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"hello").unwrap();
+        let packet =
+            RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"hello").unwrap();
 
         let mut rng = rns_crypto::FixedRng::new(&[0; 32]);
         let actions = engine.handle_inbound(&packet.raw, InterfaceId(1), 1000.0, &mut rng);
 
         // Should have local delivery; hops should still be 0 (not 1)
         // because the local client decrement cancels the increment
-        let deliver = actions.iter().find(|a| matches!(a, TransportAction::DeliverLocal { .. }));
+        let deliver = actions
+            .iter()
+            .find(|a| matches!(a, TransportAction::DeliverLocal { .. }));
         assert!(deliver.is_some(), "Should deliver locally");
     }
 
@@ -2071,15 +2165,22 @@ mod tests {
             destination_type: constants::DESTINATION_PLAIN,
             packet_type: constants::PACKET_TYPE_DATA,
         };
-        let packet = RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"test").unwrap();
+        let packet =
+            RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"test").unwrap();
 
         let mut rng = rns_crypto::FixedRng::new(&[0; 32]);
         let actions = engine.handle_inbound(&packet.raw, InterfaceId(1), 1000.0, &mut rng);
 
         // Should have ForwardPlainBroadcast to external (to_local=false)
-        let forward = actions.iter().find(|a| matches!(
-            a, TransportAction::ForwardPlainBroadcast { to_local: false, .. }
-        ));
+        let forward = actions.iter().find(|a| {
+            matches!(
+                a,
+                TransportAction::ForwardPlainBroadcast {
+                    to_local: false,
+                    ..
+                }
+            )
+        });
         assert!(forward.is_some(), "Should forward to external interfaces");
     }
 
@@ -2098,15 +2199,19 @@ mod tests {
             destination_type: constants::DESTINATION_PLAIN,
             packet_type: constants::PACKET_TYPE_DATA,
         };
-        let packet = RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"test").unwrap();
+        let packet =
+            RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"test").unwrap();
 
         let mut rng = rns_crypto::FixedRng::new(&[0; 32]);
         let actions = engine.handle_inbound(&packet.raw, InterfaceId(2), 1000.0, &mut rng);
 
         // Should have ForwardPlainBroadcast to local clients (to_local=true)
-        let forward = actions.iter().find(|a| matches!(
-            a, TransportAction::ForwardPlainBroadcast { to_local: true, .. }
-        ));
+        let forward = actions.iter().find(|a| {
+            matches!(
+                a,
+                TransportAction::ForwardPlainBroadcast { to_local: true, .. }
+            )
+        });
         assert!(forward.is_some(), "Should forward to local clients");
     }
 
@@ -2125,15 +2230,16 @@ mod tests {
             destination_type: constants::DESTINATION_PLAIN,
             packet_type: constants::PACKET_TYPE_DATA,
         };
-        let packet = RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"test").unwrap();
+        let packet =
+            RawPacket::pack(flags, 0, &dest, None, constants::CONTEXT_NONE, b"test").unwrap();
 
         let mut rng = rns_crypto::FixedRng::new(&[0; 32]);
         let actions = engine.handle_inbound(&packet.raw, InterfaceId(1), 1000.0, &mut rng);
 
         // No ForwardPlainBroadcast should be emitted
-        let has_forward = actions.iter().any(|a| matches!(
-            a, TransportAction::ForwardPlainBroadcast { .. }
-        ));
+        let has_forward = actions
+            .iter()
+            .any(|a| matches!(a, TransportAction::ForwardPlainBroadcast { .. }));
         assert!(!has_forward, "No bridging without local clients");
     }
 
@@ -2146,14 +2252,14 @@ mod tests {
         engine.register_interface(make_interface(1, constants::MODE_FULL));
         engine.register_interface(make_local_client_interface(2));
 
-        let identity = rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0x77; 32]));
+        let identity =
+            rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0x77; 32]));
         let dest_hash = destination_hash("test", &["fwd"], Some(identity.hash()));
         let name_h = name_hash("test", &["fwd"]);
         let random_hash = [0x42u8; 10];
 
-        let (announce_data, _) = AnnounceData::pack(
-            &identity, &dest_hash, &name_h, &random_hash, None, None,
-        ).unwrap();
+        let (announce_data, _) =
+            AnnounceData::pack(&identity, &dest_hash, &name_h, &random_hash, None, None).unwrap();
 
         let flags = PacketFlags {
             header_type: constants::HEADER_1,
@@ -2162,16 +2268,27 @@ mod tests {
             destination_type: constants::DESTINATION_SINGLE,
             packet_type: constants::PACKET_TYPE_ANNOUNCE,
         };
-        let packet = RawPacket::pack(flags, 0, &dest_hash, None, constants::CONTEXT_NONE, &announce_data).unwrap();
+        let packet = RawPacket::pack(
+            flags,
+            0,
+            &dest_hash,
+            None,
+            constants::CONTEXT_NONE,
+            &announce_data,
+        )
+        .unwrap();
 
         let mut rng = rns_crypto::FixedRng::new(&[0x11; 32]);
         let actions = engine.handle_inbound(&packet.raw, InterfaceId(1), 1000.0, &mut rng);
 
         // Should have ForwardToLocalClients since we have local clients
-        let forward = actions.iter().find(|a| matches!(
-            a, TransportAction::ForwardToLocalClients { .. }
-        ));
-        assert!(forward.is_some(), "Should forward announce to local clients");
+        let forward = actions
+            .iter()
+            .find(|a| matches!(a, TransportAction::ForwardToLocalClients { .. }));
+        assert!(
+            forward.is_some(),
+            "Should forward announce to local clients"
+        );
 
         // The exclude should be the receiving interface
         match forward.unwrap() {
@@ -2190,14 +2307,14 @@ mod tests {
         let mut engine = TransportEngine::new(make_config(false));
         engine.register_interface(make_interface(1, constants::MODE_FULL));
 
-        let identity = rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0x88; 32]));
+        let identity =
+            rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0x88; 32]));
         let dest_hash = destination_hash("test", &["nofwd"], Some(identity.hash()));
         let name_h = name_hash("test", &["nofwd"]);
         let random_hash = [0x42u8; 10];
 
-        let (announce_data, _) = AnnounceData::pack(
-            &identity, &dest_hash, &name_h, &random_hash, None, None,
-        ).unwrap();
+        let (announce_data, _) =
+            AnnounceData::pack(&identity, &dest_hash, &name_h, &random_hash, None, None).unwrap();
 
         let flags = PacketFlags {
             header_type: constants::HEADER_1,
@@ -2206,15 +2323,23 @@ mod tests {
             destination_type: constants::DESTINATION_SINGLE,
             packet_type: constants::PACKET_TYPE_ANNOUNCE,
         };
-        let packet = RawPacket::pack(flags, 0, &dest_hash, None, constants::CONTEXT_NONE, &announce_data).unwrap();
+        let packet = RawPacket::pack(
+            flags,
+            0,
+            &dest_hash,
+            None,
+            constants::CONTEXT_NONE,
+            &announce_data,
+        )
+        .unwrap();
 
         let mut rng = rns_crypto::FixedRng::new(&[0x22; 32]);
         let actions = engine.handle_inbound(&packet.raw, InterfaceId(1), 1000.0, &mut rng);
 
         // No ForwardToLocalClients should be emitted
-        let has_forward = actions.iter().any(|a| matches!(
-            a, TransportAction::ForwardToLocalClients { .. }
-        ));
+        let has_forward = actions
+            .iter()
+            .any(|a| matches!(a, TransportAction::ForwardToLocalClients { .. }));
         assert!(!has_forward, "No forward without local clients");
     }
 
@@ -2227,14 +2352,14 @@ mod tests {
         engine.register_interface(make_local_client_interface(1));
         engine.register_interface(make_local_client_interface(2));
 
-        let identity = rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0x99; 32]));
+        let identity =
+            rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0x99; 32]));
         let dest_hash = destination_hash("test", &["excl"], Some(identity.hash()));
         let name_h = name_hash("test", &["excl"]);
         let random_hash = [0x42u8; 10];
 
-        let (announce_data, _) = AnnounceData::pack(
-            &identity, &dest_hash, &name_h, &random_hash, None, None,
-        ).unwrap();
+        let (announce_data, _) =
+            AnnounceData::pack(&identity, &dest_hash, &name_h, &random_hash, None, None).unwrap();
 
         let flags = PacketFlags {
             header_type: constants::HEADER_1,
@@ -2243,16 +2368,24 @@ mod tests {
             destination_type: constants::DESTINATION_SINGLE,
             packet_type: constants::PACKET_TYPE_ANNOUNCE,
         };
-        let packet = RawPacket::pack(flags, 0, &dest_hash, None, constants::CONTEXT_NONE, &announce_data).unwrap();
+        let packet = RawPacket::pack(
+            flags,
+            0,
+            &dest_hash,
+            None,
+            constants::CONTEXT_NONE,
+            &announce_data,
+        )
+        .unwrap();
 
         let mut rng = rns_crypto::FixedRng::new(&[0x33; 32]);
         // Feed announce from local client 1
         let actions = engine.handle_inbound(&packet.raw, InterfaceId(1), 1000.0, &mut rng);
 
         // Should forward to local clients, excluding interface 1 (the sender)
-        let forward = actions.iter().find(|a| matches!(
-            a, TransportAction::ForwardToLocalClients { .. }
-        ));
+        let forward = actions
+            .iter()
+            .find(|a| matches!(a, TransportAction::ForwardToLocalClients { .. }));
         assert!(forward.is_some());
         match forward.unwrap() {
             TransportAction::ForwardToLocalClients { exclude, .. } => {
@@ -2297,9 +2430,9 @@ mod tests {
         let actions = engine.handle_tunnel(tunnel_id, InterfaceId(1), 1000.0);
 
         // Should emit TunnelEstablished
-        assert!(actions.iter().any(|a| matches!(
-            a, TransportAction::TunnelEstablished { .. }
-        )));
+        assert!(actions
+            .iter()
+            .any(|a| matches!(a, TransportAction::TunnelEstablished { .. })));
 
         // Interface should now have tunnel_id set
         let info = engine.interface_info(&InterfaceId(1)).unwrap();
@@ -2324,14 +2457,14 @@ mod tests {
         engine.handle_tunnel(tunnel_id, InterfaceId(1), 1000.0);
 
         // Create and send an announce
-        let identity = rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0xCC; 32]));
+        let identity =
+            rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0xCC; 32]));
         let dest_hash = destination_hash("test", &["tunnel"], Some(identity.hash()));
         let name_h = name_hash("test", &["tunnel"]);
         let random_hash = [0x42u8; 10];
 
-        let (announce_data, _) = AnnounceData::pack(
-            &identity, &dest_hash, &name_h, &random_hash, None, None,
-        ).unwrap();
+        let (announce_data, _) =
+            AnnounceData::pack(&identity, &dest_hash, &name_h, &random_hash, None, None).unwrap();
 
         let flags = PacketFlags {
             header_type: constants::HEADER_1,
@@ -2340,7 +2473,15 @@ mod tests {
             destination_type: constants::DESTINATION_SINGLE,
             packet_type: constants::PACKET_TYPE_ANNOUNCE,
         };
-        let packet = RawPacket::pack(flags, 0, &dest_hash, None, constants::CONTEXT_NONE, &announce_data).unwrap();
+        let packet = RawPacket::pack(
+            flags,
+            0,
+            &dest_hash,
+            None,
+            constants::CONTEXT_NONE,
+            &announce_data,
+        )
+        .unwrap();
 
         let mut rng = rns_crypto::FixedRng::new(&[0xDD; 32]);
         engine.handle_inbound(&packet.raw, InterfaceId(1), 1000.0, &mut rng);
@@ -2396,9 +2537,9 @@ mod tests {
         assert_eq!(path.receiving_interface, InterfaceId(2));
 
         // Should emit TunnelEstablished
-        assert!(actions.iter().any(|a| matches!(
-            a, TransportAction::TunnelEstablished { .. }
-        )));
+        assert!(actions
+            .iter()
+            .any(|a| matches!(a, TransportAction::TunnelEstablished { .. })));
     }
 
     #[test]
@@ -2437,7 +2578,10 @@ mod tests {
         let mut rng = rns_crypto::FixedRng::new(&[0; 32]);
 
         // Tick past DESTINATION_TIMEOUT + TABLES_CULL_INTERVAL
-        engine.tick(1000.0 + constants::DESTINATION_TIMEOUT + constants::TABLES_CULL_INTERVAL + 1.0, &mut rng);
+        engine.tick(
+            1000.0 + constants::DESTINATION_TIMEOUT + constants::TABLES_CULL_INTERVAL + 1.0,
+            &mut rng,
+        );
 
         assert_eq!(engine.tunnel_table().len(), 0);
     }
@@ -2447,7 +2591,8 @@ mod tests {
         let mut engine = TransportEngine::new(make_config(true));
         engine.register_interface(make_tunnel_interface(1));
 
-        let identity = rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0xFF; 32]));
+        let identity =
+            rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0xFF; 32]));
         let mut rng = rns_crypto::FixedRng::new(&[0x11; 32]);
 
         let actions = engine.synthesize_tunnel(&identity, InterfaceId(1), &mut rng);
@@ -2455,12 +2600,18 @@ mod tests {
         // Should produce a TunnelSynthesize action
         assert_eq!(actions.len(), 1);
         match &actions[0] {
-            TransportAction::TunnelSynthesize { interface, data, dest_hash } => {
+            TransportAction::TunnelSynthesize {
+                interface,
+                data,
+                dest_hash,
+            } => {
                 assert_eq!(*interface, InterfaceId(1));
                 assert_eq!(data.len(), tunnel::TUNNEL_SYNTH_LENGTH);
                 // dest_hash should be the tunnel.synthesize plain destination
                 let expected_dest = crate::destination::destination_hash(
-                    "rnstransport", &["tunnel", "synthesize"], None,
+                    "rnstransport",
+                    &["tunnel", "synthesize"],
+                    None,
                 );
                 assert_eq!(*dest_hash, expected_dest);
             }
@@ -2529,16 +2680,19 @@ mod tests {
         // Path is known and routes through the same interface (1)
         engine.path_table.insert(
             dest,
-            PathSet::from_single(PathEntry {
-                timestamp: 900.0,
-                next_hop: [0xAA; 16],
-                hops: 2,
-                expires: 9999.0,
-                random_blobs: Vec::new(),
-                receiving_interface: InterfaceId(1),
-                packet_hash: [0; 32],
-                announce_raw: None,
-            }, 1),
+            PathSet::from_single(
+                PathEntry {
+                    timestamp: 900.0,
+                    next_hop: [0xAA; 16],
+                    hops: 2,
+                    expires: 9999.0,
+                    random_blobs: Vec::new(),
+                    receiving_interface: InterfaceId(1),
+                    packet_hash: [0; 32],
+                    announce_raw: None,
+                },
+                1,
+            ),
         );
 
         let tag = [0x03; 16];
@@ -2577,16 +2731,19 @@ mod tests {
 
         engine.path_table.insert(
             dest,
-            PathSet::from_single(PathEntry {
-                timestamp: 900.0,
-                next_hop: [0xBB; 16],
-                hops: 2,
-                expires: 9999.0,
-                random_blobs: Vec::new(),
-                receiving_interface: InterfaceId(2),
-                packet_hash: [0; 32],
-                announce_raw: Some(announce_raw.clone()),
-            }, 1),
+            PathSet::from_single(
+                PathEntry {
+                    timestamp: 900.0,
+                    next_hop: [0xBB; 16],
+                    hops: 2,
+                    expires: 9999.0,
+                    random_blobs: Vec::new(),
+                    receiving_interface: InterfaceId(2),
+                    packet_hash: [0; 32],
+                    announce_raw: Some(announce_raw.clone()),
+                },
+                1,
+            ),
         );
 
         let tag = [0x05; 16];
@@ -2594,7 +2751,10 @@ mod tests {
         let _actions = engine.handle_path_request(&data, InterfaceId(1), 1000.0);
 
         // The announce table should now have an entry with populated packet_raw/packet_data
-        let entry = engine.announce_table.get(&dest).expect("announce entry must exist");
+        let entry = engine
+            .announce_table
+            .get(&dest)
+            .expect("announce entry must exist");
         assert_eq!(entry.packet_raw, announce_raw);
         assert_eq!(entry.packet_data, payload);
         assert!(entry.block_rebroadcasts);
@@ -2610,16 +2770,19 @@ mod tests {
 
         engine.path_table.insert(
             dest,
-            PathSet::from_single(PathEntry {
-                timestamp: 900.0,
-                next_hop: [0xCC; 16],
-                hops: 1,
-                expires: 9999.0,
-                random_blobs: Vec::new(),
-                receiving_interface: InterfaceId(2),
-                packet_hash: [0; 32],
-                announce_raw: None, // no raw data available
-            }, 1),
+            PathSet::from_single(
+                PathEntry {
+                    timestamp: 900.0,
+                    next_hop: [0xCC; 16],
+                    hops: 1,
+                    expires: 9999.0,
+                    random_blobs: Vec::new(),
+                    receiving_interface: InterfaceId(2),
+                    packet_hash: [0; 32],
+                    announce_raw: None, // no raw data available
+                },
+                1,
+            ),
         );
 
         let tag = [0x06; 16];

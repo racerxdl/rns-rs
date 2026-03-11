@@ -1,10 +1,9 @@
 use serde_json::{json, Value};
 
-use rns_net::{
-    Destination, QueryRequest, QueryResponse, RnsNode,
-    DestHash, IdentityHash, ProofStrategy,
-};
 use rns_crypto::identity::Identity;
+use rns_net::{
+    DestHash, Destination, IdentityHash, ProofStrategy, QueryRequest, QueryResponse, RnsNode,
+};
 
 use crate::auth::check_auth;
 use crate::config::CtlConfig;
@@ -104,74 +103,68 @@ fn handle_info(node: &NodeHandle, state: &SharedState) -> HttpResponse {
 }
 
 fn handle_interfaces(node: &NodeHandle) -> HttpResponse {
-    with_node(node, |n| {
-        match n.query(QueryRequest::InterfaceStats) {
-            Ok(QueryResponse::InterfaceStats(stats)) => {
-                let ifaces: Vec<Value> = stats
-                    .interfaces
-                    .iter()
-                    .map(|i| {
-                        json!({
-                            "name": i.name,
-                            "status": if i.status { "up" } else { "down" },
-                            "mode": i.mode,
-                            "interface_type": i.interface_type,
-                            "rxb": i.rxb,
-                            "txb": i.txb,
-                            "rx_packets": i.rx_packets,
-                            "tx_packets": i.tx_packets,
-                            "bitrate": i.bitrate,
-                            "started": i.started,
-                            "ia_freq": i.ia_freq,
-                            "oa_freq": i.oa_freq,
-                        })
+    with_node(node, |n| match n.query(QueryRequest::InterfaceStats) {
+        Ok(QueryResponse::InterfaceStats(stats)) => {
+            let ifaces: Vec<Value> = stats
+                .interfaces
+                .iter()
+                .map(|i| {
+                    json!({
+                        "name": i.name,
+                        "status": if i.status { "up" } else { "down" },
+                        "mode": i.mode,
+                        "interface_type": i.interface_type,
+                        "rxb": i.rxb,
+                        "txb": i.txb,
+                        "rx_packets": i.rx_packets,
+                        "tx_packets": i.tx_packets,
+                        "bitrate": i.bitrate,
+                        "started": i.started,
+                        "ia_freq": i.ia_freq,
+                        "oa_freq": i.oa_freq,
                     })
-                    .collect();
-                HttpResponse::ok(json!({
-                    "interfaces": ifaces,
-                    "transport_enabled": stats.transport_enabled,
-                    "transport_uptime": stats.transport_uptime,
-                    "total_rxb": stats.total_rxb,
-                    "total_txb": stats.total_txb,
-                }))
-            }
-            _ => HttpResponse::internal_error("Query failed"),
+                })
+                .collect();
+            HttpResponse::ok(json!({
+                "interfaces": ifaces,
+                "transport_enabled": stats.transport_enabled,
+                "transport_uptime": stats.transport_uptime,
+                "total_rxb": stats.total_rxb,
+                "total_txb": stats.total_txb,
+            }))
         }
+        _ => HttpResponse::internal_error("Query failed"),
     })
 }
 
 fn handle_destinations(node: &NodeHandle, state: &SharedState) -> HttpResponse {
-    with_node(node, |n| {
-        match n.query(QueryRequest::LocalDestinations) {
-            Ok(QueryResponse::LocalDestinations(dests)) => {
-                let s = state.read().unwrap();
-                let list: Vec<Value> = dests
-                    .iter()
-                    .map(|d| {
-                        let name = s
-                            .destinations
-                            .get(&d.hash)
-                            .map(|e| e.full_name.as_str())
-                            .unwrap_or("");
-                        json!({
-                            "hash": to_hex(&d.hash),
-                            "type": d.dest_type,
-                            "name": name,
-                        })
+    with_node(node, |n| match n.query(QueryRequest::LocalDestinations) {
+        Ok(QueryResponse::LocalDestinations(dests)) => {
+            let s = state.read().unwrap();
+            let list: Vec<Value> = dests
+                .iter()
+                .map(|d| {
+                    let name = s
+                        .destinations
+                        .get(&d.hash)
+                        .map(|e| e.full_name.as_str())
+                        .unwrap_or("");
+                    json!({
+                        "hash": to_hex(&d.hash),
+                        "type": d.dest_type,
+                        "name": name,
                     })
-                    .collect();
-                HttpResponse::ok(json!({"destinations": list}))
-            }
-            _ => HttpResponse::internal_error("Query failed"),
+                })
+                .collect();
+            HttpResponse::ok(json!({"destinations": list}))
         }
+        _ => HttpResponse::internal_error("Query failed"),
     })
 }
 
 fn handle_paths(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
     let params = parse_query(&req.query);
-    let filter_hash: Option<[u8; 16]> = params
-        .get("dest_hash")
-        .and_then(|s| hex_to_array(s));
+    let filter_hash: Option<[u8; 16]> = params.get("dest_hash").and_then(|s| hex_to_array(s));
 
     with_node(node, |n| {
         match n.query(QueryRequest::PathTable { max_hops: None }) {
@@ -198,49 +191,45 @@ fn handle_paths(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
 }
 
 fn handle_links(node: &NodeHandle) -> HttpResponse {
-    with_node(node, |n| {
-        match n.query(QueryRequest::Links) {
-            Ok(QueryResponse::Links(links)) => {
-                let list: Vec<Value> = links
-                    .iter()
-                    .map(|l| {
-                        json!({
-                            "link_id": to_hex(&l.link_id),
-                            "state": l.state,
-                            "is_initiator": l.is_initiator,
-                            "dest_hash": to_hex(&l.dest_hash),
-                            "remote_identity": l.remote_identity.map(|h| to_hex(&h)),
-                            "rtt": l.rtt,
-                        })
+    with_node(node, |n| match n.query(QueryRequest::Links) {
+        Ok(QueryResponse::Links(links)) => {
+            let list: Vec<Value> = links
+                .iter()
+                .map(|l| {
+                    json!({
+                        "link_id": to_hex(&l.link_id),
+                        "state": l.state,
+                        "is_initiator": l.is_initiator,
+                        "dest_hash": to_hex(&l.dest_hash),
+                        "remote_identity": l.remote_identity.map(|h| to_hex(&h)),
+                        "rtt": l.rtt,
                     })
-                    .collect();
-                HttpResponse::ok(json!({"links": list}))
-            }
-            _ => HttpResponse::internal_error("Query failed"),
+                })
+                .collect();
+            HttpResponse::ok(json!({"links": list}))
         }
+        _ => HttpResponse::internal_error("Query failed"),
     })
 }
 
 fn handle_resources(node: &NodeHandle) -> HttpResponse {
-    with_node(node, |n| {
-        match n.query(QueryRequest::Resources) {
-            Ok(QueryResponse::Resources(resources)) => {
-                let list: Vec<Value> = resources
-                    .iter()
-                    .map(|r| {
-                        json!({
-                            "link_id": to_hex(&r.link_id),
-                            "direction": r.direction,
-                            "total_parts": r.total_parts,
-                            "transferred_parts": r.transferred_parts,
-                            "complete": r.complete,
-                        })
+    with_node(node, |n| match n.query(QueryRequest::Resources) {
+        Ok(QueryResponse::Resources(resources)) => {
+            let list: Vec<Value> = resources
+                .iter()
+                .map(|r| {
+                    json!({
+                        "link_id": to_hex(&r.link_id),
+                        "direction": r.direction,
+                        "total_parts": r.total_parts,
+                        "transferred_parts": r.transferred_parts,
+                        "complete": r.complete,
                     })
-                    .collect();
-                HttpResponse::ok(json!({"resources": list}))
-            }
-            _ => HttpResponse::internal_error("Query failed"),
+                })
+                .collect();
+            HttpResponse::ok(json!({"resources": list}))
         }
+        _ => HttpResponse::internal_error("Query failed"),
     })
 }
 
@@ -319,26 +308,25 @@ fn handle_recall_identity(hash_str: &str, node: &NodeHandle) -> HttpResponse {
         None => return HttpResponse::bad_request("Invalid dest_hash hex (expected 32 hex chars)"),
     };
 
-    with_node(node, |n| {
-        match n.recall_identity(&DestHash(dest_hash)) {
-            Ok(Some(ai)) => HttpResponse::ok(json!({
-                "dest_hash": to_hex(&ai.dest_hash.0),
-                "identity_hash": to_hex(&ai.identity_hash.0),
-                "public_key": to_hex(&ai.public_key),
-                "app_data": ai.app_data.as_ref().map(|d| to_base64(d)),
-                "hops": ai.hops,
-                "received_at": ai.received_at,
-            })),
-            Ok(None) => HttpResponse::not_found(),
-            Err(_) => HttpResponse::internal_error("Query failed"),
-        }
+    with_node(node, |n| match n.recall_identity(&DestHash(dest_hash)) {
+        Ok(Some(ai)) => HttpResponse::ok(json!({
+            "dest_hash": to_hex(&ai.dest_hash.0),
+            "identity_hash": to_hex(&ai.identity_hash.0),
+            "public_key": to_hex(&ai.public_key),
+            "app_data": ai.app_data.as_ref().map(|d| to_base64(d)),
+            "hops": ai.hops,
+            "received_at": ai.received_at,
+        })),
+        Ok(None) => HttpResponse::not_found(),
+        Err(_) => HttpResponse::internal_error("Query failed"),
     })
 }
 
 // --- Action handlers ---
 
 fn parse_json_body(req: &HttpRequest) -> Result<Value, HttpResponse> {
-    serde_json::from_slice(&req.body).map_err(|e| HttpResponse::bad_request(&format!("Invalid JSON: {}", e)))
+    serde_json::from_slice(&req.body)
+        .map_err(|e| HttpResponse::bad_request(&format!("Invalid JSON: {}", e)))
 }
 
 fn handle_post_destination(
@@ -385,7 +373,11 @@ fn handle_post_destination(
                 "out" => {
                     let dh_str = match body["dest_hash"].as_str() {
                         Some(s) => s,
-                        None => return HttpResponse::bad_request("OUT single requires dest_hash of remote"),
+                        None => {
+                            return HttpResponse::bad_request(
+                                "OUT single requires dest_hash of remote",
+                            )
+                        }
                     };
                     let dh: [u8; 16] = match hex_to_array(dh_str) {
                         Some(h) => h,
@@ -398,10 +390,13 @@ fn handle_post_destination(
                                 // Register in state
                                 let full_name = format_dest_name(app_name, &aspects);
                                 let mut s = state.write().unwrap();
-                                s.destinations.insert(dest.hash.0, DestinationEntry {
-                                    destination: dest.clone(),
-                                    full_name: full_name.clone(),
-                                });
+                                s.destinations.insert(
+                                    dest.hash.0,
+                                    DestinationEntry {
+                                        destination: dest.clone(),
+                                        full_name: full_name.clone(),
+                                    },
+                                );
                                 HttpResponse::created(json!({
                                     "dest_hash": to_hex(&dest.hash.0),
                                     "name": full_name,
@@ -409,7 +404,9 @@ fn handle_post_destination(
                                     "direction": "out",
                                 }))
                             }
-                            Ok(None) => HttpResponse::bad_request("No recalled identity for dest_hash"),
+                            Ok(None) => {
+                                HttpResponse::bad_request("No recalled identity for dest_hash")
+                            }
                             Err(_) => HttpResponse::internal_error("Query failed"),
                         }
                     });
@@ -447,9 +444,7 @@ fn handle_post_destination(
             Ok(()) => {
                 // For inbound single dests, also register with link manager
                 // so incoming LINKREQUEST packets are accepted.
-                if dest_type_str == "single"
-                    && body["direction"].as_str().unwrap_or("in") == "in"
-                {
+                if dest_type_str == "single" && body["direction"].as_str().unwrap_or("in") == "in" {
                     if let (Some(prv), Some(pubk)) = (identity_prv_key, identity_pub_key) {
                         let mut sig_prv = [0u8; 32];
                         sig_prv.copy_from_slice(&prv[32..64]);
@@ -500,9 +495,7 @@ fn handle_post_announce(req: &HttpRequest, node: &NodeHandle, state: &SharedStat
         None => return HttpResponse::bad_request("Invalid dest_hash"),
     };
 
-    let app_data: Option<Vec<u8>> = body["app_data"]
-        .as_str()
-        .and_then(from_base64);
+    let app_data: Option<Vec<u8>> = body["app_data"].as_str().and_then(from_base64);
 
     let (dest, identity) = {
         let s = state.read().unwrap();
@@ -551,14 +544,12 @@ fn handle_post_send(req: &HttpRequest, node: &NodeHandle, state: &SharedState) -
     };
     drop(s);
 
-    with_node(node, |n| {
-        match n.send_packet(&dest, &data) {
-            Ok(ph) => HttpResponse::ok(json!({
-                "status": "sent",
-                "packet_hash": to_hex(&ph.0),
-            })),
-            Err(_) => HttpResponse::internal_error("Send failed"),
-        }
+    with_node(node, |n| match n.send_packet(&dest, &data) {
+        Ok(ph) => HttpResponse::ok(json!({
+            "status": "sent",
+            "packet_hash": to_hex(&ph.0),
+        })),
+        Err(_) => HttpResponse::internal_error("Send failed"),
     })
 }
 
@@ -603,10 +594,7 @@ fn handle_post_link_send(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
         Err(r) => return r,
     };
 
-    let link_id: [u8; 16] = match body["link_id"]
-        .as_str()
-        .and_then(|s| hex_to_array(s))
-    {
+    let link_id: [u8; 16] = match body["link_id"].as_str().and_then(|s| hex_to_array(s)) {
         Some(h) => h,
         None => return HttpResponse::bad_request("Missing or invalid link_id"),
     };
@@ -616,11 +604,9 @@ fn handle_post_link_send(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
     };
     let context = body["context"].as_u64().unwrap_or(0) as u8;
 
-    with_node(node, |n| {
-        match n.send_on_link(link_id, data, context) {
-            Ok(()) => HttpResponse::ok(json!({"status": "sent"})),
-            Err(_) => HttpResponse::internal_error("Send on link failed"),
-        }
+    with_node(node, |n| match n.send_on_link(link_id, data, context) {
+        Ok(()) => HttpResponse::ok(json!({"status": "sent"})),
+        Err(_) => HttpResponse::internal_error("Send on link failed"),
     })
 }
 
@@ -630,19 +616,14 @@ fn handle_post_link_close(req: &HttpRequest, node: &NodeHandle) -> HttpResponse 
         Err(r) => return r,
     };
 
-    let link_id: [u8; 16] = match body["link_id"]
-        .as_str()
-        .and_then(|s| hex_to_array(s))
-    {
+    let link_id: [u8; 16] = match body["link_id"].as_str().and_then(|s| hex_to_array(s)) {
         Some(h) => h,
         None => return HttpResponse::bad_request("Missing or invalid link_id"),
     };
 
-    with_node(node, |n| {
-        match n.teardown_link(link_id) {
-            Ok(()) => HttpResponse::ok(json!({"status": "closed"})),
-            Err(_) => HttpResponse::internal_error("Teardown link failed"),
-        }
+    with_node(node, |n| match n.teardown_link(link_id) {
+        Ok(()) => HttpResponse::ok(json!({"status": "closed"})),
+        Err(_) => HttpResponse::internal_error("Teardown link failed"),
     })
 }
 
@@ -652,10 +633,7 @@ fn handle_post_channel(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
         Err(r) => return r,
     };
 
-    let link_id: [u8; 16] = match body["link_id"]
-        .as_str()
-        .and_then(|s| hex_to_array(s))
-    {
+    let link_id: [u8; 16] = match body["link_id"].as_str().and_then(|s| hex_to_array(s)) {
         Some(h) => h,
         None => return HttpResponse::bad_request("Missing or invalid link_id"),
     };
@@ -679,10 +657,7 @@ fn handle_post_resource(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
         Err(r) => return r,
     };
 
-    let link_id: [u8; 16] = match body["link_id"]
-        .as_str()
-        .and_then(|s| hex_to_array(s))
-    {
+    let link_id: [u8; 16] = match body["link_id"].as_str().and_then(|s| hex_to_array(s)) {
         Some(h) => h,
         None => return HttpResponse::bad_request("Missing or invalid link_id"),
     };
@@ -690,15 +665,11 @@ fn handle_post_resource(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
         Some(d) => d,
         None => return HttpResponse::bad_request("Missing or invalid base64 data"),
     };
-    let metadata = body["metadata"]
-        .as_str()
-        .and_then(from_base64);
+    let metadata = body["metadata"].as_str().and_then(from_base64);
 
-    with_node(node, |n| {
-        match n.send_resource(link_id, data, metadata) {
-            Ok(()) => HttpResponse::ok(json!({"status": "sent"})),
-            Err(_) => HttpResponse::internal_error("Resource send failed"),
-        }
+    with_node(node, |n| match n.send_resource(link_id, data, metadata) {
+        Ok(()) => HttpResponse::ok(json!({"status": "sent"})),
+        Err(_) => HttpResponse::internal_error("Resource send failed"),
     })
 }
 
@@ -717,11 +688,9 @@ fn handle_post_path_request(req: &HttpRequest, node: &NodeHandle) -> HttpRespons
         None => return HttpResponse::bad_request("Invalid dest_hash"),
     };
 
-    with_node(node, |n| {
-        match n.request_path(&DestHash(dh)) {
-            Ok(()) => HttpResponse::ok(json!({"status": "requested"})),
-            Err(_) => HttpResponse::internal_error("Path request failed"),
-        }
+    with_node(node, |n| match n.request_path(&DestHash(dh)) {
+        Ok(()) => HttpResponse::ok(json!({"status": "requested"})),
+        Err(_) => HttpResponse::internal_error("Path request failed"),
     })
 }
 
@@ -740,36 +709,32 @@ fn handle_post_direct_connect(req: &HttpRequest, node: &NodeHandle) -> HttpRespo
         None => return HttpResponse::bad_request("Invalid link_id"),
     };
 
-    with_node(node, |n| {
-        match n.propose_direct_connect(link_id) {
-            Ok(()) => HttpResponse::ok(json!({"status": "proposed"})),
-            Err(_) => HttpResponse::internal_error("Direct connect proposal failed"),
-        }
+    with_node(node, |n| match n.propose_direct_connect(link_id) {
+        Ok(()) => HttpResponse::ok(json!({"status": "proposed"})),
+        Err(_) => HttpResponse::internal_error("Direct connect proposal failed"),
     })
 }
 
 // --- Hook handlers ---
 
 fn handle_list_hooks(node: &NodeHandle) -> HttpResponse {
-    with_node(node, |n| {
-        match n.list_hooks() {
-            Ok(hooks) => {
-                let list: Vec<Value> = hooks
-                    .iter()
-                    .map(|h| {
-                        json!({
-                            "name": h.name,
-                            "attach_point": h.attach_point,
-                            "priority": h.priority,
-                            "enabled": h.enabled,
-                            "consecutive_traps": h.consecutive_traps,
-                        })
+    with_node(node, |n| match n.list_hooks() {
+        Ok(hooks) => {
+            let list: Vec<Value> = hooks
+                .iter()
+                .map(|h| {
+                    json!({
+                        "name": h.name,
+                        "attach_point": h.attach_point,
+                        "priority": h.priority,
+                        "enabled": h.enabled,
+                        "consecutive_traps": h.consecutive_traps,
                     })
-                    .collect();
-                HttpResponse::ok(json!({"hooks": list}))
-            }
-            Err(_) => HttpResponse::internal_error("Query failed"),
+                })
+                .collect();
+            HttpResponse::ok(json!({"hooks": list}))
         }
+        Err(_) => HttpResponse::internal_error("Query failed"),
     })
 }
 
@@ -828,12 +793,10 @@ fn handle_unload_hook(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
         None => return HttpResponse::bad_request("Missing attach_point"),
     };
 
-    with_node(node, |n| {
-        match n.unload_hook(name, attach_point) {
-            Ok(Ok(())) => HttpResponse::ok(json!({"status": "unloaded"})),
-            Ok(Err(e)) => HttpResponse::bad_request(&e),
-            Err(_) => HttpResponse::internal_error("Driver unavailable"),
-        }
+    with_node(node, |n| match n.unload_hook(name, attach_point) {
+        Ok(Ok(())) => HttpResponse::ok(json!({"status": "unloaded"})),
+        Ok(Err(e)) => HttpResponse::bad_request(&e),
+        Err(_) => HttpResponse::internal_error("Driver unavailable"),
     })
 }
 

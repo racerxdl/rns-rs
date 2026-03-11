@@ -239,7 +239,9 @@ pub struct WsBuf {
 
 impl WsBuf {
     pub fn new() -> Self {
-        WsBuf { buf: Vec::with_capacity(4096) }
+        WsBuf {
+            buf: Vec::with_capacity(4096),
+        }
     }
 
     /// Try to read a complete frame. Returns:
@@ -257,14 +259,16 @@ impl WsBuf {
         let mut tmp = [0u8; 4096];
         match stream.read(&mut tmp) {
             Ok(0) => {
-                return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "connection closed"));
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "connection closed",
+                ));
             }
             Ok(n) => {
                 self.buf.extend_from_slice(&tmp[..n]);
             }
             Err(e)
-                if e.kind() == io::ErrorKind::WouldBlock
-                    || e.kind() == io::ErrorKind::TimedOut =>
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
             {
                 return Ok(None);
             }

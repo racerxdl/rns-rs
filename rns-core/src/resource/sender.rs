@@ -3,13 +3,13 @@ use alloc::vec::Vec;
 
 use rns_crypto::Rng;
 
+use super::advertisement::ResourceAdvertisement;
+use super::parts::{build_hashmap, has_collision, prepend_metadata, split_into_parts};
+use super::proof::{compute_expected_proof, compute_resource_hash, validate_proof};
+use super::types::*;
+use crate::buffer::types::Compressor;
 use crate::constants::*;
 use crate::hash::get_random_hash;
-use crate::buffer::types::Compressor;
-use super::types::*;
-use super::advertisement::ResourceAdvertisement;
-use super::parts::{split_into_parts, build_hashmap, has_collision, prepend_metadata};
-use super::proof::{compute_resource_hash, compute_expected_proof, validate_proof};
 
 /// Resource sender state machine.
 ///
@@ -141,7 +141,8 @@ impl ResourceSender {
             buf.copy_from_slice(&rh[..RESOURCE_RANDOM_HASH_SIZE]);
             buf
         };
-        let mut data_with_random = Vec::with_capacity(RESOURCE_RANDOM_HASH_SIZE + working_data.len());
+        let mut data_with_random =
+            Vec::with_capacity(RESOURCE_RANDOM_HASH_SIZE + working_data.len());
         data_with_random.extend_from_slice(&random_prefix);
         data_with_random.extend_from_slice(&working_data);
 
@@ -371,8 +372,11 @@ impl ResourceSender {
         }
 
         // Update receiver min consecutive height
-        self.receiver_min_consecutive_height =
-            if part_index > RESOURCE_WINDOW_MAX { part_index - 1 - RESOURCE_WINDOW_MAX } else { 0 };
+        self.receiver_min_consecutive_height = if part_index > RESOURCE_WINDOW_MAX {
+            part_index - 1 - RESOURCE_WINDOW_MAX
+        } else {
+            0
+        };
 
         // Verify alignment
         if part_index % RESOURCE_HASHMAP_MAX_LEN != 0 {
@@ -381,14 +385,14 @@ impl ResourceSender {
 
         let segment = part_index / RESOURCE_HASHMAP_MAX_LEN;
         let hashmap_start = segment * RESOURCE_HASHMAP_MAX_LEN;
-        let hashmap_end = core::cmp::min(
-            (segment + 1) * RESOURCE_HASHMAP_MAX_LEN,
-            self.total_parts,
-        );
+        let hashmap_end =
+            core::cmp::min((segment + 1) * RESOURCE_HASHMAP_MAX_LEN, self.total_parts);
 
         let mut hashmap_segment = Vec::new();
         for i in hashmap_start..hashmap_end {
-            hashmap_segment.extend_from_slice(&self.hashmap[i * RESOURCE_MAPHASH_LEN..(i + 1) * RESOURCE_MAPHASH_LEN]);
+            hashmap_segment.extend_from_slice(
+                &self.hashmap[i * RESOURCE_MAPHASH_LEN..(i + 1) * RESOURCE_MAPHASH_LEN],
+            );
         }
 
         // Build HMU: resource_hash + msgpack([segment, hashmap])
@@ -437,7 +441,9 @@ impl ResourceSender {
     pub fn cancel(&mut self) -> Vec<ResourceAction> {
         if self.status < ResourceStatus::Complete {
             self.status = ResourceStatus::Failed;
-            vec![ResourceAction::SendCancelInitiator(self.resource_hash.to_vec())]
+            vec![ResourceAction::SendCancelInitiator(
+                self.resource_hash.to_vec(),
+            )]
         } else {
             vec![]
         }
@@ -581,7 +587,9 @@ mod tests {
         let actions = sender.handle_request(&request, 1001.0);
         assert!(!actions.is_empty());
         // Should have sent a part
-        let has_part = actions.iter().any(|a| matches!(a, ResourceAction::SendPart(_)));
+        let has_part = actions
+            .iter()
+            .any(|a| matches!(a, ResourceAction::SendPart(_)));
         assert!(has_part);
     }
 
@@ -608,13 +616,13 @@ mod tests {
         let mut sender = make_sender(b"data");
         sender.advertise(1000.0);
 
-        let proof_data = super::super::proof::build_proof_data(
-            &sender.resource_hash,
-            &sender.expected_proof,
-        );
+        let proof_data =
+            super::super::proof::build_proof_data(&sender.resource_hash, &sender.expected_proof);
         let actions = sender.handle_proof(&proof_data, 1002.0);
         assert_eq!(sender.status, ResourceStatus::Complete);
-        assert!(actions.iter().any(|a| matches!(a, ResourceAction::Completed)));
+        assert!(actions
+            .iter()
+            .any(|a| matches!(a, ResourceAction::Completed)));
     }
 
     #[test]
@@ -623,10 +631,7 @@ mod tests {
         sender.advertise(1000.0);
 
         let wrong_proof = [0xFF; 32];
-        let proof_data = super::super::proof::build_proof_data(
-            &sender.resource_hash,
-            &wrong_proof,
-        );
+        let proof_data = super::super::proof::build_proof_data(&sender.resource_hash, &wrong_proof);
         let _actions = sender.handle_proof(&proof_data, 1002.0);
         assert_eq!(sender.status, ResourceStatus::Failed);
     }
@@ -645,7 +650,9 @@ mod tests {
         sender.advertise(1000.0);
         let actions = sender.cancel();
         assert_eq!(sender.status, ResourceStatus::Failed);
-        assert!(actions.iter().any(|a| matches!(a, ResourceAction::SendCancelInitiator(_))));
+        assert!(actions
+            .iter()
+            .any(|a| matches!(a, ResourceAction::SendCancelInitiator(_))));
     }
 
     #[test]
@@ -675,7 +682,9 @@ mod tests {
 
         let actions = sender.tick(2000.0);
         // Should retry advertisement
-        assert!(actions.iter().any(|a| matches!(a, ResourceAction::SendAdvertisement(_))));
+        assert!(actions
+            .iter()
+            .any(|a| matches!(a, ResourceAction::SendAdvertisement(_))));
     }
 
     #[test]

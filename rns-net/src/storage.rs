@@ -58,9 +58,9 @@ pub fn ensure_storage_dirs(config_dir: &Path) -> io::Result<StoragePaths> {
 
 /// Save an identity's private key to a file (64 bytes).
 pub fn save_identity(identity: &Identity, path: &Path) -> io::Result<()> {
-    let private_key = identity.get_private_key().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidData, "Identity has no private key")
-    })?;
+    let private_key = identity
+        .get_private_key()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Identity has no private key"))?;
     fs::write(path, &private_key)
 }
 
@@ -114,9 +114,7 @@ pub fn save_known_destinations(
 }
 
 /// Load known destinations from a msgpack file.
-pub fn load_known_destinations(
-    path: &Path,
-) -> io::Result<HashMap<[u8; 16], KnownDestination>> {
+pub fn load_known_destinations(path: &Path) -> io::Result<HashMap<[u8; 16], KnownDestination>> {
     use rns_core::msgpack;
 
     let data = fs::read(path)?;
@@ -124,20 +122,19 @@ pub fn load_known_destinations(
         return Ok(HashMap::new());
     }
 
-    let (value, _) = msgpack::unpack(&data).map_err(|e| {
-        io::Error::new(io::ErrorKind::InvalidData, format!("msgpack error: {}", e))
-    })?;
+    let (value, _) = msgpack::unpack(&data)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("msgpack error: {}", e)))?;
 
-    let map = value.as_map().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidData, "Expected msgpack map")
-    })?;
+    let map = value
+        .as_map()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Expected msgpack map"))?;
 
     let mut result = HashMap::new();
 
     for (k, v) in map {
-        let hash_bytes = k.as_bin().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "Expected bin key")
-        })?;
+        let hash_bytes = k
+            .as_bin()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Expected bin key"))?;
 
         if hash_bytes.len() != 16 {
             continue; // Skip invalid entries like Python does
@@ -146,9 +143,9 @@ pub fn load_known_destinations(
         let mut dest_hash = [0u8; 16];
         dest_hash.copy_from_slice(hash_bytes);
 
-        let arr = v.as_array().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "Expected array value")
-        })?;
+        let arr = v
+            .as_array()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Expected array value"))?;
 
         if arr.len() < 3 {
             continue;
@@ -165,9 +162,9 @@ pub fn load_known_destinations(
         let mut packet_hash = [0u8; 32];
         packet_hash.copy_from_slice(pkt_hash_bytes);
 
-        let pub_key_bytes = arr[2].as_bin().ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidData, "Expected bin public_key")
-        })?;
+        let pub_key_bytes = arr[2]
+            .as_bin()
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "Expected bin public_key"))?;
         if pub_key_bytes.len() != 64 {
             continue;
         }
@@ -226,11 +223,7 @@ mod tests {
 
     fn temp_dir() -> PathBuf {
         let id = TEST_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!(
-            "rns-test-{}-{}",
-            std::process::id(),
-            id
-        ));
+        let dir = std::env::temp_dir().join(format!("rns-test-{}-{}", std::process::id(), id));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir

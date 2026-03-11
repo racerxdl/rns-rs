@@ -1,18 +1,18 @@
-pub mod types;
 pub mod envelope;
+pub mod types;
 
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 
-use crate::constants::{
-    CHANNEL_ENVELOPE_OVERHEAD, CHANNEL_FAST_RATE_THRESHOLD, CHANNEL_MAX_TRIES,
-    CHANNEL_RTT_FAST, CHANNEL_RTT_MEDIUM, CHANNEL_RTT_SLOW,
-    CHANNEL_SEQ_MODULUS, CHANNEL_WINDOW, CHANNEL_WINDOW_FLEXIBILITY, CHANNEL_WINDOW_MAX_FAST,
-    CHANNEL_WINDOW_MAX_MEDIUM, CHANNEL_WINDOW_MAX_SLOW, CHANNEL_WINDOW_MIN,
-    CHANNEL_WINDOW_MIN_LIMIT_FAST, CHANNEL_WINDOW_MIN_LIMIT_MEDIUM,
-};
 #[cfg(test)]
 use crate::constants::CHANNEL_SEQ_MAX;
+use crate::constants::{
+    CHANNEL_ENVELOPE_OVERHEAD, CHANNEL_FAST_RATE_THRESHOLD, CHANNEL_MAX_TRIES, CHANNEL_RTT_FAST,
+    CHANNEL_RTT_MEDIUM, CHANNEL_RTT_SLOW, CHANNEL_SEQ_MODULUS, CHANNEL_WINDOW,
+    CHANNEL_WINDOW_FLEXIBILITY, CHANNEL_WINDOW_MAX_FAST, CHANNEL_WINDOW_MAX_MEDIUM,
+    CHANNEL_WINDOW_MAX_SLOW, CHANNEL_WINDOW_MIN, CHANNEL_WINDOW_MIN_LIMIT_FAST,
+    CHANNEL_WINDOW_MIN_LIMIT_MEDIUM,
+};
 
 pub use types::{ChannelAction, ChannelError, MessageType, Sequence};
 
@@ -49,7 +49,8 @@ pub struct Channel {
 impl Channel {
     /// Create a new Channel with initial RTT.
     pub fn new(initial_rtt: f64) -> Self {
-        let (window, window_max, window_min, window_flexibility) = if initial_rtt > CHANNEL_RTT_SLOW {
+        let (window, window_max, window_min, window_flexibility) = if initial_rtt > CHANNEL_RTT_SLOW
+        {
             (1, 1, 1, 1)
         } else {
             (
@@ -89,9 +90,7 @@ impl Channel {
 
     /// Check if channel is ready to send (has window capacity).
     pub fn is_ready_to_send(&self) -> bool {
-        let outstanding = self.tx_ring.iter()
-            .filter(|e| !e.delivered)
-            .count() as u16;
+        let outstanding = self.tx_ring.iter().filter(|e| !e.delivered).count() as u16;
         outstanding < self.window
     }
 
@@ -224,7 +223,8 @@ impl Channel {
 
     /// Get the current try count for a given sequence.
     pub fn get_tries(&self, sequence: Sequence) -> Option<u8> {
-        self.tx_ring.iter()
+        self.tx_ring
+            .iter()
             .find(|e| e.sequence == sequence)
             .map(|e| e.tries)
     }
@@ -254,7 +254,8 @@ impl Channel {
 
     fn is_behind_rx_window(&self, sequence: Sequence) -> bool {
         if sequence < self.next_rx_sequence {
-            let window_overflow = (self.next_rx_sequence as u32 + CHANNEL_WINDOW_MAX_FAST as u32) % CHANNEL_SEQ_MODULUS;
+            let window_overflow = (self.next_rx_sequence as u32 + CHANNEL_WINDOW_MAX_FAST as u32)
+                % CHANNEL_SEQ_MODULUS;
             let overflow = window_overflow as u16;
             if overflow < self.next_rx_sequence {
                 // Wrapped around — sequence is valid if > overflow
@@ -291,7 +292,9 @@ impl Channel {
         let mut actions = Vec::new();
 
         loop {
-            let front_match = self.rx_ring.front()
+            let front_match = self
+                .rx_ring
+                .front()
                 .map(|e| e.sequence == self.next_rx_sequence)
                 .unwrap_or(false);
 
@@ -310,7 +313,8 @@ impl Channel {
                 });
             }
 
-            self.next_rx_sequence = ((self.next_rx_sequence as u32 + 1) % CHANNEL_SEQ_MODULUS) as u16;
+            self.next_rx_sequence =
+                ((self.next_rx_sequence as u32 + 1) % CHANNEL_SEQ_MODULUS) as u16;
 
             // After wrapping to 0, check if 0 is also in the ring
             if self.next_rx_sequence == 0 {
@@ -383,7 +387,11 @@ mod tests {
                 let recv_actions = ch2.receive(raw, 1.1);
                 assert_eq!(recv_actions.len(), 1);
                 match &recv_actions[0] {
-                    ChannelAction::MessageReceived { msgtype, payload, sequence } => {
+                    ChannelAction::MessageReceived {
+                        msgtype,
+                        payload,
+                        sequence,
+                    } => {
                         assert_eq!(*msgtype, 0x01);
                         assert_eq!(payload, b"hello");
                         assert_eq!(*sequence, 0);
@@ -563,7 +571,10 @@ mod tests {
         let mut ch = Channel::new(0.1);
         let big = vec![0u8; 500];
         // link_mdu = 10, message + header won't fit
-        assert_eq!(ch.send(0x01, &big, 1.0, 10), Err(ChannelError::MessageTooBig));
+        assert_eq!(
+            ch.send(0x01, &big, 1.0, 10),
+            Err(ChannelError::MessageTooBig)
+        );
     }
 
     #[test]
@@ -606,21 +617,27 @@ mod tests {
         let actions = ch.receive(&raw_fffe, 1.2);
         assert_eq!(actions.len(), 3); // all three delivered in order
         match &actions[0] {
-            ChannelAction::MessageReceived { sequence, payload, .. } => {
+            ChannelAction::MessageReceived {
+                sequence, payload, ..
+            } => {
                 assert_eq!(*sequence, 0xFFFE);
                 assert_eq!(payload, b"a");
             }
             _ => panic!("Expected MessageReceived"),
         }
         match &actions[1] {
-            ChannelAction::MessageReceived { sequence, payload, .. } => {
+            ChannelAction::MessageReceived {
+                sequence, payload, ..
+            } => {
                 assert_eq!(*sequence, 0xFFFF);
                 assert_eq!(payload, b"b");
             }
             _ => panic!("Expected MessageReceived"),
         }
         match &actions[2] {
-            ChannelAction::MessageReceived { sequence, payload, .. } => {
+            ChannelAction::MessageReceived {
+                sequence, payload, ..
+            } => {
                 assert_eq!(*sequence, 0x0000);
                 assert_eq!(payload, b"c");
             }
@@ -648,7 +665,9 @@ mod tests {
             let recv_actions = receiver.receive(&raw, i as f64 + 0.1);
             assert_eq!(recv_actions.len(), 1);
             match &recv_actions[0] {
-                ChannelAction::MessageReceived { payload, sequence, .. } => {
+                ChannelAction::MessageReceived {
+                    payload, sequence, ..
+                } => {
                     assert_eq!(*sequence, i);
                     assert_eq!(payload, &[i as u8]);
                 }

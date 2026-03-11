@@ -37,9 +37,8 @@ fn transport_fixture_path(name: &str) -> PathBuf {
 
 fn load_transport_fixture(name: &str) -> Vec<Value> {
     let path = transport_fixture_path(name);
-    let data = fs::read_to_string(&path).unwrap_or_else(|e| {
-        panic!("Failed to read fixture {}: {}", path.display(), e)
-    });
+    let data = fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("Failed to read fixture {}: {}", path.display(), e));
     serde_json::from_str(&data).unwrap()
 }
 
@@ -116,7 +115,8 @@ impl TestHarness {
     }
 
     fn inbound(&mut self, raw: &[u8], iface: InterfaceId) -> Vec<TransportAction> {
-        self.engine.handle_inbound(raw, iface, self.now, &mut self.rng)
+        self.engine
+            .handle_inbound(raw, iface, self.now, &mut self.rng)
     }
 
     fn outbound(
@@ -125,7 +125,8 @@ impl TestHarness {
         dest_type: u8,
         attached: Option<InterfaceId>,
     ) -> Vec<TransportAction> {
-        self.engine.handle_outbound(packet, dest_type, attached, self.now)
+        self.engine
+            .handle_outbound(packet, dest_type, attached, self.now)
     }
 
     fn add_interface(&mut self, id: u64, mode: u8) {
@@ -163,15 +164,8 @@ fn build_announce_packet(
     hops: u8,
     app_data: Option<&[u8]>,
 ) -> Vec<u8> {
-    let (announce_data, _) = AnnounceData::pack(
-        identity,
-        dest_hash,
-        name_hash,
-        random_hash,
-        None,
-        app_data,
-    )
-    .unwrap();
+    let (announce_data, _) =
+        AnnounceData::pack(identity, dest_hash, name_hash, random_hash, None, app_data).unwrap();
 
     let flags = PacketFlags {
         header_type: constants::HEADER_1,
@@ -200,8 +194,7 @@ fn make_test_identity() -> (Identity, [u8; 16], [u8; 10], [u8; 16]) {
     let id_hash = *identity.hash();
 
     let name_hash = rns_core::destination::name_hash("testapp", &["aspect"]);
-    let dest_hash =
-        rns_core::destination::destination_hash("testapp", &["aspect"], Some(&id_hash));
+    let dest_hash = rns_core::destination::destination_hash("testapp", &["aspect"], Some(&id_hash));
 
     (identity, dest_hash, name_hash, id_hash)
 }
@@ -292,10 +285,8 @@ fn test_announce_retransmit_interop() {
             attached_interface: None,
         };
 
-        let raw = rns_core::transport::announce_proc::build_retransmit_announce(
-            &entry,
-            &transport_id,
-        );
+        let raw =
+            rns_core::transport::announce_proc::build_retransmit_announce(&entry, &transport_id);
 
         assert_eq!(
             raw[0], expected_flags,
@@ -349,14 +340,14 @@ fn test_transport_routing_interop() {
                     announce_rate_target: None,
                     announce_rate_grace: 0,
                     announce_rate_penalty: 0.0,
-            announce_cap: rns_core::constants::ANNOUNCE_CAP,
-            is_local_client: false,
-            wants_tunnel: false,
-            tunnel_id: None,
-            mtu: rns_core::constants::MTU as u32,
-            ingress_control: false,
-            ia_freq: 0.0,
-            started: 0.0,
+                    announce_cap: rns_core::constants::ANNOUNCE_CAP,
+                    is_local_client: false,
+                    wants_tunnel: false,
+                    tunnel_id: None,
+                    mtu: rns_core::constants::MTU as u32,
+                    ingress_control: false,
+                    ia_freq: 0.0,
+                    started: 0.0,
                 });
 
                 // Use route_outbound directly with a known path
@@ -401,15 +392,16 @@ fn test_transport_routing_interop() {
                             "expected HEADER_2 for {}",
                             desc
                         );
-                        assert_eq!(
-                            raw[0], expected_flags,
-                            "flags mismatch for {}",
-                            desc
-                        );
+                        assert_eq!(raw[0], expected_flags, "flags mismatch for {}", desc);
                         // Transport ID should be next_hop
                         assert_eq!(&raw[2..18], &next_hop, "transport_id mismatch for {}", desc);
                         // Rest should match
-                        assert_eq!(raw.as_slice(), expected_raw.as_slice(), "raw mismatch for {}", desc);
+                        assert_eq!(
+                            raw.as_slice(),
+                            expected_raw.as_slice(),
+                            "raw mismatch for {}",
+                            desc
+                        );
                     }
                     _ => panic!("Expected SendOnInterface for {}", desc),
                 }
@@ -517,7 +509,10 @@ fn test_full_announce_pipeline_from_python() {
                     identity_hash_bytes.as_slice(),
                     "AnnounceReceived identity_hash mismatch"
                 );
-                assert_eq!(*hops, 1, "AnnounceReceived hops should be 1 (incremented from 0)");
+                assert_eq!(
+                    *hops, 1,
+                    "AnnounceReceived hops should be 1 (incremented from 0)"
+                );
                 has_announce_received = true;
             }
             TransportAction::PathUpdated {
@@ -575,13 +570,33 @@ fn test_full_announce_pipeline_from_python() {
         _ => unreachable!(),
     };
     let retransmit_flags = PacketFlags::unpack(retransmit_raw[0]);
-    assert_eq!(retransmit_flags.header_type, constants::HEADER_2, "Retransmit should be HEADER_2");
-    assert_eq!(retransmit_flags.transport_type, constants::TRANSPORT_TRANSPORT, "Retransmit should be TRANSPORT");
-    assert_eq!(retransmit_flags.packet_type, constants::PACKET_TYPE_ANNOUNCE, "Retransmit should be ANNOUNCE");
+    assert_eq!(
+        retransmit_flags.header_type,
+        constants::HEADER_2,
+        "Retransmit should be HEADER_2"
+    );
+    assert_eq!(
+        retransmit_flags.transport_type,
+        constants::TRANSPORT_TRANSPORT,
+        "Retransmit should be TRANSPORT"
+    );
+    assert_eq!(
+        retransmit_flags.packet_type,
+        constants::PACKET_TYPE_ANNOUNCE,
+        "Retransmit should be ANNOUNCE"
+    );
     // Transport ID (bytes 2..18) should be our identity hash
-    assert_eq!(&retransmit_raw[2..18], &[0xFF; 16], "Transport ID should be engine identity");
+    assert_eq!(
+        &retransmit_raw[2..18],
+        &[0xFF; 16],
+        "Transport ID should be engine identity"
+    );
     // Destination hash (bytes 18..34) should match
-    assert_eq!(&retransmit_raw[18..34], &dest_hash, "Destination hash in retransmit should match");
+    assert_eq!(
+        &retransmit_raw[18..34],
+        &dest_hash,
+        "Destination hash in retransmit should match"
+    );
 }
 
 // =============================================================================
@@ -612,10 +627,7 @@ fn test_announce_retransmit_lifecycle() {
     // Tick to trigger retransmit
     harness.advance_time(2.0);
     let tick_actions = harness.tick();
-    assert!(
-        !tick_actions.is_empty(),
-        "Should retransmit after tick"
-    );
+    assert!(!tick_actions.is_empty(), "Should retransmit after tick");
 
     // Find the retransmit action and verify its contents
     let retransmit = tick_actions.iter().find(|a| {
@@ -639,9 +651,17 @@ fn test_announce_retransmit_lifecycle() {
     assert_eq!(flags.transport_type, constants::TRANSPORT_TRANSPORT);
     assert_eq!(flags.packet_type, constants::PACKET_TYPE_ANNOUNCE);
     // Transport ID should be our identity
-    assert_eq!(&retransmit_raw[2..18], &[0xFF; 16], "Transport ID should be engine identity");
+    assert_eq!(
+        &retransmit_raw[2..18],
+        &[0xFF; 16],
+        "Transport ID should be engine identity"
+    );
     // Destination hash should be preserved
-    assert_eq!(&retransmit_raw[18..34], &dest_hash, "Dest hash should be preserved in retransmit");
+    assert_eq!(
+        &retransmit_raw[18..34],
+        &dest_hash,
+        "Dest hash should be preserved in retransmit"
+    );
 }
 
 // =============================================================================
@@ -909,8 +929,15 @@ fn test_local_delivery() {
         destination_type: constants::DESTINATION_SINGLE,
         packet_type: constants::PACKET_TYPE_DATA,
     };
-    let packet = RawPacket::pack(flags, 0, &dest_hash, None, constants::CONTEXT_NONE, b"local data")
-        .unwrap();
+    let packet = RawPacket::pack(
+        flags,
+        0,
+        &dest_hash,
+        None,
+        constants::CONTEXT_NONE,
+        b"local data",
+    )
+    .unwrap();
 
     let actions = harness.inbound(&packet.raw, InterfaceId(1));
 
@@ -944,8 +971,15 @@ fn test_deduplication() {
         destination_type: constants::DESTINATION_SINGLE,
         packet_type: constants::PACKET_TYPE_DATA,
     };
-    let packet = RawPacket::pack(flags, 0, &dest_hash, None, constants::CONTEXT_NONE, b"test data")
-        .unwrap();
+    let packet = RawPacket::pack(
+        flags,
+        0,
+        &dest_hash,
+        None,
+        constants::CONTEXT_NONE,
+        b"test data",
+    )
+    .unwrap();
 
     // First delivery
     let actions1 = harness.inbound(&packet.raw, InterfaceId(1));
@@ -1017,15 +1051,18 @@ fn test_no_path_broadcasts() {
         destination_type: constants::DESTINATION_SINGLE,
         packet_type: constants::PACKET_TYPE_DATA,
     };
-    let packet = RawPacket::pack(flags, 0, &dest_hash, None, constants::CONTEXT_NONE, b"data")
-        .unwrap();
+    let packet =
+        RawPacket::pack(flags, 0, &dest_hash, None, constants::CONTEXT_NONE, b"data").unwrap();
 
     let actions = harness.outbound(&packet, constants::DESTINATION_SINGLE, None);
 
     // No path known → should broadcast
     assert_eq!(actions.len(), 1);
     assert!(
-        matches!(&actions[0], TransportAction::BroadcastOnAllInterfaces { .. }),
+        matches!(
+            &actions[0],
+            TransportAction::BroadcastOnAllInterfaces { .. }
+        ),
         "Should broadcast when no path"
     );
 }
@@ -1116,16 +1153,19 @@ fn test_multipath_stores_alternatives() {
     use rns_core::transport::tables::{PathEntry, PathSet};
 
     // Test PathSet API directly (engine internals are tested via unit tests)
-    let mut ps = PathSet::from_single(PathEntry {
-        timestamp: 1000.0,
-        next_hop: [0x01; 16],
-        hops: 3,
-        expires: 9999.0,
-        random_blobs: vec![[0xA1; 10]],
-        receiving_interface: InterfaceId(1),
-        packet_hash: [0; 32],
-        announce_raw: None,
-    }, 3);
+    let mut ps = PathSet::from_single(
+        PathEntry {
+            timestamp: 1000.0,
+            next_hop: [0x01; 16],
+            hops: 3,
+            expires: 9999.0,
+            random_blobs: vec![[0xA1; 10]],
+            receiving_interface: InterfaceId(1),
+            packet_hash: [0; 32],
+            announce_raw: None,
+        },
+        3,
+    );
 
     ps.upsert(PathEntry {
         timestamp: 1100.0,
@@ -1160,16 +1200,19 @@ fn test_multipath_failover() {
     use rns_core::transport::tables::{PathEntry, PathSet};
 
     // Test failover through PathSet API
-    let mut ps = PathSet::from_single(PathEntry {
-        timestamp: 1000.0,
-        next_hop: [0x01; 16],
-        hops: 2,
-        expires: 9999.0,
-        random_blobs: Vec::new(),
-        receiving_interface: InterfaceId(1),
-        packet_hash: [0; 32],
-        announce_raw: None,
-    }, 3);
+    let mut ps = PathSet::from_single(
+        PathEntry {
+            timestamp: 1000.0,
+            next_hop: [0x01; 16],
+            hops: 2,
+            expires: 9999.0,
+            random_blobs: Vec::new(),
+            receiving_interface: InterfaceId(1),
+            packet_hash: [0; 32],
+            announce_raw: None,
+        },
+        3,
+    );
 
     ps.upsert(PathEntry {
         timestamp: 1100.0,
@@ -1194,16 +1237,19 @@ fn test_multipath_failover() {
     let mut harness = TestHarness::new_multipath(3);
     harness.add_interface(1, constants::MODE_FULL);
     let dest = [0xE2; 16];
-    harness.engine.inject_path(dest, PathEntry {
-        timestamp: 1000.0,
-        next_hop: [0x01; 16],
-        hops: 2,
-        expires: 9999.0,
-        random_blobs: Vec::new(),
-        receiving_interface: InterfaceId(1),
-        packet_hash: [0; 32],
-        announce_raw: None,
-    });
+    harness.engine.inject_path(
+        dest,
+        PathEntry {
+            timestamp: 1000.0,
+            next_hop: [0x01; 16],
+            hops: 2,
+            expires: 9999.0,
+            random_blobs: Vec::new(),
+            receiving_interface: InterfaceId(1),
+            packet_hash: [0; 32],
+            announce_raw: None,
+        },
+    );
     harness.engine.mark_path_unresponsive(&dest, None);
     assert!(harness.engine.path_is_unresponsive(&dest));
 }
@@ -1225,7 +1271,9 @@ fn test_multipath_announce_stores_alternative_via_different_nexthop() {
 
     // Should store the path
     assert!(
-        actions1.iter().any(|a| matches!(a, TransportAction::PathUpdated { .. })),
+        actions1
+            .iter()
+            .any(|a| matches!(a, TransportAction::PathUpdated { .. })),
         "First announce should create path"
     );
     assert!(harness.engine.has_path(&dest_hash));
@@ -1238,7 +1286,9 @@ fn test_multipath_announce_stores_alternative_via_different_nexthop() {
 
     // Should also store (as alternative since it's a different next_hop via different interface)
     assert!(
-        actions2.iter().any(|a| matches!(a, TransportAction::PathUpdated { .. })),
+        actions2
+            .iter()
+            .any(|a| matches!(a, TransportAction::PathUpdated { .. })),
         "Second announce should be accepted as alternative"
     );
 
@@ -1254,16 +1304,19 @@ fn test_multipath_capacity_eviction() {
     use rns_core::transport::tables::{PathEntry, PathSet};
 
     // Test that capacity is enforced
-    let mut ps = PathSet::from_single(PathEntry {
-        timestamp: 100.0,
-        next_hop: [0x01; 16],
-        hops: 1,
-        expires: 9999.0,
-        random_blobs: Vec::new(),
-        receiving_interface: InterfaceId(1),
-        packet_hash: [0; 32],
-        announce_raw: None,
-    }, 2);
+    let mut ps = PathSet::from_single(
+        PathEntry {
+            timestamp: 100.0,
+            next_hop: [0x01; 16],
+            hops: 1,
+            expires: 9999.0,
+            random_blobs: Vec::new(),
+            receiving_interface: InterfaceId(1),
+            packet_hash: [0; 32],
+            announce_raw: None,
+        },
+        2,
+    );
 
     ps.upsert(PathEntry {
         timestamp: 200.0,
@@ -1304,16 +1357,19 @@ fn test_multipath_capacity_eviction() {
 fn test_multipath_same_nexthop_updates_in_place() {
     use rns_core::transport::tables::{PathEntry, PathSet};
 
-    let mut ps = PathSet::from_single(PathEntry {
-        timestamp: 100.0,
-        next_hop: [0x01; 16],
-        hops: 3,
-        expires: 9999.0,
-        random_blobs: Vec::new(),
-        receiving_interface: InterfaceId(1),
-        packet_hash: [0; 32],
-        announce_raw: None,
-    }, 3);
+    let mut ps = PathSet::from_single(
+        PathEntry {
+            timestamp: 100.0,
+            next_hop: [0x01; 16],
+            hops: 3,
+            expires: 9999.0,
+            random_blobs: Vec::new(),
+            receiving_interface: InterfaceId(1),
+            packet_hash: [0; 32],
+            announce_raw: None,
+        },
+        3,
+    );
 
     // Upsert with same next_hop but better hops
     ps.upsert(PathEntry {
@@ -1346,12 +1402,18 @@ fn test_multipath_max1_backward_compat() {
     let actions = harness.inbound(&raw, InterfaceId(1));
 
     assert!(
-        actions.iter().any(|a| matches!(a, TransportAction::PathUpdated { .. })),
+        actions
+            .iter()
+            .any(|a| matches!(a, TransportAction::PathUpdated { .. })),
         "Announce should be accepted"
     );
 
     // With max_paths=1, should have exactly 1 path
-    let (_h, ps) = harness.engine.path_table_sets().find(|(h, _)| *h == &dest_hash).unwrap();
+    let (_h, ps) = harness
+        .engine
+        .path_table_sets()
+        .find(|(h, _)| *h == &dest_hash)
+        .unwrap();
     assert_eq!(ps.len(), 1, "max_paths=1 should store exactly 1 path");
 }
 
@@ -1365,16 +1427,19 @@ fn test_multipath_drop_all_via_partial() {
     let dest = [0xE5; 16];
 
     // Inject a path with next_hop [0x01]
-    harness.engine.inject_path(dest, PathEntry {
-        timestamp: 1000.0,
-        next_hop: [0x01; 16],
-        hops: 2,
-        expires: 9999.0,
-        random_blobs: Vec::new(),
-        receiving_interface: InterfaceId(1),
-        packet_hash: [0; 32],
-        announce_raw: None,
-    });
+    harness.engine.inject_path(
+        dest,
+        PathEntry {
+            timestamp: 1000.0,
+            next_hop: [0x01; 16],
+            hops: 2,
+            expires: 9999.0,
+            random_blobs: Vec::new(),
+            receiving_interface: InterfaceId(1),
+            packet_hash: [0; 32],
+            announce_raw: None,
+        },
+    );
 
     // drop_all_via [0x01] should remove the path
     let removed = harness.engine.drop_all_via(&[0x01; 16]);
@@ -1382,16 +1447,19 @@ fn test_multipath_drop_all_via_partial() {
     assert!(!harness.engine.has_path(&dest));
 
     // drop_all_via for a non-matching hash should remove nothing
-    harness.engine.inject_path(dest, PathEntry {
-        timestamp: 1000.0,
-        next_hop: [0x02; 16],
-        hops: 2,
-        expires: 9999.0,
-        random_blobs: Vec::new(),
-        receiving_interface: InterfaceId(1),
-        packet_hash: [0; 32],
-        announce_raw: None,
-    });
+    harness.engine.inject_path(
+        dest,
+        PathEntry {
+            timestamp: 1000.0,
+            next_hop: [0x02; 16],
+            hops: 2,
+            expires: 9999.0,
+            random_blobs: Vec::new(),
+            receiving_interface: InterfaceId(1),
+            packet_hash: [0; 32],
+            announce_raw: None,
+        },
+    );
 
     let removed = harness.engine.drop_all_via(&[0xFF; 16]);
     assert_eq!(removed, 0);
@@ -1406,16 +1474,19 @@ fn test_multipath_cull_individual_paths() {
     harness.add_interface(1, constants::MODE_FULL);
 
     // Create a PathSet with one expired and one valid path
-    let mut ps = PathSet::from_single(PathEntry {
-        timestamp: 100.0,
-        next_hop: [0x01; 16],
-        hops: 2,
-        expires: 500.0, // will expire
-        random_blobs: Vec::new(),
-        receiving_interface: InterfaceId(1),
-        packet_hash: [0; 32],
-        announce_raw: None,
-    }, 3);
+    let mut ps = PathSet::from_single(
+        PathEntry {
+            timestamp: 100.0,
+            next_hop: [0x01; 16],
+            hops: 2,
+            expires: 500.0, // will expire
+            random_blobs: Vec::new(),
+            receiving_interface: InterfaceId(1),
+            packet_hash: [0; 32],
+            announce_raw: None,
+        },
+        3,
+    );
 
     ps.upsert(PathEntry {
         timestamp: 200.0,

@@ -44,8 +44,13 @@ impl HookPoint {
 /// This enum carries the relevant data for each hook invocation.
 /// The WASM runtime serializes this into the guest's linear memory.
 pub enum HookContext<'a> {
-    Packet { ctx: &'a crate::context::PacketContext, raw: &'a [u8] },
-    Interface { interface_id: u64 },
+    Packet {
+        ctx: &'a crate::context::PacketContext,
+        raw: &'a [u8],
+    },
+    Interface {
+        interface_id: u64,
+    },
     Tick,
     Announce {
         destination_hash: [u8; 16],
@@ -137,10 +142,7 @@ pub fn create_hook_slots() -> [HookSlot; HookPoint::COUNT] {
 #[macro_export]
 macro_rules! run_hook {
     ($driver:expr, $point:expr, $ctx:expr) => {{
-        ($driver.hook_slots[$point as usize].runner)(
-            &$driver.hook_slots[$point as usize],
-            &$ctx,
-        )
+        ($driver.hook_slots[$point as usize].runner)(&$driver.hook_slots[$point as usize], &$ctx)
     }};
 }
 

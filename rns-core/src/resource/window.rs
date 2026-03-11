@@ -36,7 +36,9 @@ impl WindowState {
     pub fn on_window_complete(&mut self) {
         if self.window < self.window_max {
             self.window += 1;
-            if (self.window as isize - self.window_min as isize) > (self.window_flexibility as isize - 1) {
+            if (self.window as isize - self.window_min as isize)
+                > (self.window_flexibility as isize - 1)
+            {
                 self.window_min += 1;
             }
         }
@@ -49,7 +51,9 @@ impl WindowState {
             self.window -= 1;
             if self.window_max > self.window_min {
                 self.window_max -= 1;
-                if (self.window_max as isize - self.window as isize) > (self.window_flexibility as isize - 1) {
+                if (self.window_max as isize - self.window as isize)
+                    > (self.window_flexibility as isize - 1)
+                {
                     self.window_max -= 1;
                 }
             }

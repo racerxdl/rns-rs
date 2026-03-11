@@ -111,7 +111,13 @@ fn reader_loop(
             }
             Ok(n) => {
                 for frame in decoder.feed(&buf[..n]) {
-                    if tx.send(Event::Frame { interface_id: id, data: frame }).is_err() {
+                    if tx
+                        .send(Event::Frame {
+                            interface_id: id,
+                            data: frame,
+                        })
+                        .is_err()
+                    {
                         return; // driver shut down
                     }
                 }
@@ -133,13 +139,14 @@ fn reader_loop(
 }
 
 /// Attempt to reconnect the serial port. Returns new reader file on success.
-fn reconnect(
-    config: &SerialIfaceConfig,
-    tx: &EventSender,
-) -> Option<std::fs::File> {
+fn reconnect(config: &SerialIfaceConfig, tx: &EventSender) -> Option<std::fs::File> {
     loop {
         thread::sleep(Duration::from_secs(5));
-        log::info!("[{}] attempting to reconnect serial port {}...", config.name, config.port);
+        log::info!(
+            "[{}] attempting to reconnect serial port {}...",
+            config.name,
+            config.port
+        );
 
         let serial_config = SerialConfig {
             path: config.port.clone(),
@@ -150,20 +157,25 @@ fn reconnect(
         };
 
         match SerialPort::open(&serial_config) {
-            Ok(port) => {
-                match (port.reader(), port.writer()) {
-                    (Ok(reader), Ok(writer_file)) => {
-                        log::info!("[{}] serial port reconnected", config.name);
-                        let new_writer: Box<dyn Writer> = Box::new(SerialWriter { file: writer_file });
-                        let _ = tx.send(Event::InterfaceUp(config.interface_id, Some(new_writer), None));
-                        thread::sleep(Duration::from_millis(500));
-                        return Some(reader);
-                    }
-                    _ => {
-                        log::warn!("[{}] failed to get reader/writer from serial port", config.name);
-                    }
+            Ok(port) => match (port.reader(), port.writer()) {
+                (Ok(reader), Ok(writer_file)) => {
+                    log::info!("[{}] serial port reconnected", config.name);
+                    let new_writer: Box<dyn Writer> = Box::new(SerialWriter { file: writer_file });
+                    let _ = tx.send(Event::InterfaceUp(
+                        config.interface_id,
+                        Some(new_writer),
+                        None,
+                    ));
+                    thread::sleep(Duration::from_millis(500));
+                    return Some(reader);
                 }
-            }
+                _ => {
+                    log::warn!(
+                        "[{}] failed to get reader/writer from serial port",
+                        config.name
+                    );
+                }
+            },
             Err(e) => {
                 log::warn!("[{}] serial reconnect failed: {}", config.name, e);
             }
@@ -173,17 +185,21 @@ fn reconnect(
 
 // --- Factory implementation ---
 
-use std::collections::HashMap;
+use super::{InterfaceConfigData, InterfaceFactory, StartContext, StartResult};
 use rns_core::transport::types::InterfaceInfo;
-use super::{InterfaceFactory, InterfaceConfigData, StartContext, StartResult};
+use std::collections::HashMap;
 
 /// Factory for `SerialInterface`.
 pub struct SerialFactory;
 
 impl InterfaceFactory for SerialFactory {
-    fn type_name(&self) -> &str { "SerialInterface" }
+    fn type_name(&self) -> &str {
+        "SerialInterface"
+    }
 
-    fn default_ifac_size(&self) -> usize { 8 }
+    fn default_ifac_size(&self) -> usize {
+        8
+    }
 
     fn parse_config(
         &self,
@@ -191,19 +207,23 @@ impl InterfaceFactory for SerialFactory {
         id: InterfaceId,
         params: &HashMap<String, String>,
     ) -> Result<Box<dyn InterfaceConfigData>, String> {
-        let port = params.get("port")
+        let port = params
+            .get("port")
             .cloned()
             .ok_or_else(|| "SerialInterface requires 'port'".to_string())?;
 
-        let speed = params.get("speed")
+        let speed = params
+            .get("speed")
             .and_then(|v| v.parse().ok())
             .unwrap_or(9600u32);
 
-        let data_bits = params.get("databits")
+        let data_bits = params
+            .get("databits")
             .and_then(|v| v.parse().ok())
             .unwrap_or(8u8);
 
-        let parity = params.get("parity")
+        let parity = params
+            .get("parity")
             .map(|v| match v.to_lowercase().as_str() {
                 "e" | "even" => crate::serial::Parity::Even,
                 "o" | "odd" => crate::serial::Parity::Odd,
@@ -211,7 +231,8 @@ impl InterfaceFactory for SerialFactory {
             })
             .unwrap_or(crate::serial::Parity::None);
 
-        let stop_bits = params.get("stopbits")
+        let stop_bits = params
+            .get("stopbits")
             .and_then(|v| v.parse().ok())
             .unwrap_or(1u8);
 
@@ -231,8 +252,12 @@ impl InterfaceFactory for SerialFactory {
         config: Box<dyn InterfaceConfigData>,
         ctx: StartContext,
     ) -> std::io::Result<StartResult> {
-        let serial_config = *config.into_any().downcast::<SerialIfaceConfig>()
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "wrong config type"))?;
+        let serial_config = *config
+            .into_any()
+            .downcast::<SerialIfaceConfig>()
+            .map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "wrong config type")
+            })?;
 
         let id = serial_config.interface_id;
         let name = serial_config.name.clone();
@@ -301,7 +326,10 @@ mod tests {
         master_file.flush().unwrap();
 
         // Read from slave using HDLC decoder
-        assert!(poll_read(slave_file.as_raw_fd(), 2000), "should have data available");
+        assert!(
+            poll_read(slave_file.as_raw_fd(), 2000),
+            "should have data available"
+        );
 
         let mut decoder = hdlc::Decoder::new();
         let mut buf = [0u8; 4096];
@@ -354,7 +382,10 @@ mod tests {
                 match reader.read(&mut buf) {
                     Ok(n) if n > 0 => {
                         for frame in decoder.feed(&buf[..n]) {
-                            let _ = tx.send(Event::Frame { interface_id: InterfaceId(0), data: frame });
+                            let _ = tx.send(Event::Frame {
+                                interface_id: InterfaceId(0),
+                                data: frame,
+                            });
                             return;
                         }
                     }
@@ -402,7 +433,10 @@ mod tests {
                     }
                     Ok(n) => {
                         for frame in decoder.feed(&buf[..n]) {
-                            let _ = tx.send(Event::Frame { interface_id: id, data: frame });
+                            let _ = tx.send(Event::Frame {
+                                interface_id: id,
+                                data: frame,
+                            });
                         }
                     }
                     Err(_) => {

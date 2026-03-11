@@ -252,8 +252,10 @@ mod tests {
 
     #[test]
     fn display_hex() {
-        let dh = DestHash([0xAB, 0xCD, 0x01, 0x23, 0x45, 0x67, 0x89, 0xEF,
-                           0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77]);
+        let dh = DestHash([
+            0xAB, 0xCD, 0x01, 0x23, 0x45, 0x67, 0x89, 0xEF, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55,
+            0x66, 0x77,
+        ]);
         assert_eq!(format!("{}", dh), "abcd0123456789ef0011223344556677");
 
         let ph = PacketHash([0xFF; 32]);
@@ -304,9 +306,13 @@ mod tests {
         use core::hash::{Hash, Hasher};
         struct DummyHasher(u64);
         impl Hasher for DummyHasher {
-            fn finish(&self) -> u64 { self.0 }
+            fn finish(&self) -> u64 {
+                self.0
+            }
             fn write(&mut self, bytes: &[u8]) {
-                for b in bytes { self.0 = self.0.wrapping_mul(31).wrapping_add(*b as u64); }
+                for b in bytes {
+                    self.0 = self.0.wrapping_mul(31).wrapping_add(*b as u64);
+                }
             }
         }
 
@@ -321,7 +327,11 @@ mod tests {
 
     #[test]
     fn destination_type_wire_roundtrip() {
-        for dt in [DestinationType::Single, DestinationType::Group, DestinationType::Plain] {
+        for dt in [
+            DestinationType::Single,
+            DestinationType::Group,
+            DestinationType::Plain,
+        ] {
             let wire = dt.to_wire_constant();
             let back = DestinationType::from_wire_constant(wire).unwrap();
             assert_eq!(dt, back);

@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
-use crate::constants::CHANNEL_ENVELOPE_OVERHEAD;
 use super::types::ChannelError;
+use crate::constants::CHANNEL_ENVELOPE_OVERHEAD;
 
 /// Pack envelope: `[msgtype:u16 BE][sequence:u16 BE][length:u16 BE][payload]`.
 pub fn pack_envelope(msgtype: u16, sequence: u16, payload: &[u8]) -> Vec<u8> {
@@ -69,7 +69,10 @@ mod tests {
 
     #[test]
     fn test_truncated_header() {
-        assert_eq!(unpack_envelope(&[0, 1, 2]), Err(ChannelError::InvalidEnvelope));
+        assert_eq!(
+            unpack_envelope(&[0, 1, 2]),
+            Err(ChannelError::InvalidEnvelope)
+        );
     }
 
     #[test]

@@ -70,8 +70,10 @@ impl core::fmt::Display for TunnelError {
 
 /// Expected length of tunnel synthesis data:
 /// public_key(64) + interface_hash(32) + random_hash(16) + signature(64) = 176
-pub const TUNNEL_SYNTH_LENGTH: usize =
-    constants::KEYSIZE / 8 + constants::HASHLENGTH / 8 + constants::TRUNCATED_HASHLENGTH / 8 + constants::SIGLENGTH / 8;
+pub const TUNNEL_SYNTH_LENGTH: usize = constants::KEYSIZE / 8
+    + constants::HASHLENGTH / 8
+    + constants::TRUNCATED_HASHLENGTH / 8
+    + constants::SIGLENGTH / 8;
 
 /// Compute tunnel_id from public key and interface hash.
 ///
@@ -239,9 +241,7 @@ impl TunnelTable {
     pub fn cull(&mut self, now: f64) -> Vec<[u8; 32]> {
         // Cull expired paths within each tunnel
         for entry in self.tunnels.values_mut() {
-            entry.paths.retain(|_, path| {
-                path.expires > now
-            });
+            entry.paths.retain(|_, path| path.expires > now);
         }
 
         // Cull expired tunnels
@@ -356,10 +356,7 @@ mod tests {
 
         let validated = validate_tunnel_synthesize_data(&data).unwrap();
         assert_eq!(validated.tunnel_id, tunnel_id);
-        assert_eq!(
-            validated.public_key,
-            identity.get_public_key().unwrap()
-        );
+        assert_eq!(validated.public_key, identity.get_public_key().unwrap());
         assert_eq!(validated.interface_hash, iface_hash);
     }
 
@@ -394,8 +391,7 @@ mod tests {
         let iface_hash = [0xDD; 32];
         let mut rng = rns_crypto::FixedRng::new(&[0x66; 32]);
 
-        let (mut data, _) =
-            build_tunnel_synthesize_data(&identity, &iface_hash, &mut rng).unwrap();
+        let (mut data, _) = build_tunnel_synthesize_data(&identity, &iface_hash, &mut rng).unwrap();
 
         // Tamper with the random_hash
         data[100] ^= 0xFF;

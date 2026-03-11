@@ -4,17 +4,17 @@
 //! sends TNC configuration commands, handles KISS framing with
 //! optional flow control.
 
+use std::collections::VecDeque;
 use std::io::{self, Read, Write};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use std::collections::VecDeque;
 
 use rns_core::transport::types::InterfaceId;
 
 use crate::event::{Event, EventSender};
-use crate::kiss;
 use crate::interface::Writer;
+use crate::kiss;
 use crate::serial::{Parity, SerialConfig, SerialPort};
 
 /// Configuration for a KISS interface.
@@ -26,13 +26,13 @@ pub struct KissIfaceConfig {
     pub data_bits: u8,
     pub parity: Parity,
     pub stop_bits: u8,
-    pub preamble: u16,       // ms, default 350
-    pub txtail: u16,         // ms, default 20
-    pub persistence: u8,     // 0-255, default 64
-    pub slottime: u16,       // ms, default 20
-    pub flow_control: bool,  // default false
-    pub beacon_interval: Option<u32>,  // seconds
-    pub beacon_data: Option<Vec<u8>>,  // padded to 15 bytes
+    pub preamble: u16,                // ms, default 350
+    pub txtail: u16,                  // ms, default 20
+    pub persistence: u8,              // 0-255, default 64
+    pub slottime: u16,                // ms, default 20
+    pub flow_control: bool,           // default false
+    pub beacon_interval: Option<u32>, // seconds
+    pub beacon_data: Option<Vec<u8>>, // padded to 15 bytes
     pub interface_id: InterfaceId,
 }
 
@@ -130,7 +130,14 @@ pub fn start(config: KissIfaceConfig, tx: EventSender) -> io::Result<Box<dyn Wri
     thread::Builder::new()
         .name(format!("kiss-reader-{}", id.0))
         .spawn(move || {
-            reader_loop(reader_file, flow_writer_file, id, reader_config, tx, reader_flow_state);
+            reader_loop(
+                reader_file,
+                flow_writer_file,
+                id,
+                reader_config,
+                tx,
+                reader_flow_state,
+            );
         })?;
 
     Ok(Box::new(KissWriter {
@@ -200,7 +207,13 @@ fn reader_loop(
                 for event in decoder.feed(&buf[..n]) {
                     match event {
                         kiss::KissEvent::DataFrame(data) => {
-                            if tx.send(Event::Frame { interface_id: id, data }).is_err() {
+                            if tx
+                                .send(Event::Frame {
+                                    interface_id: id,
+                                    data,
+                                })
+                                .is_err()
+                            {
                                 return;
                             }
                         }
@@ -236,7 +249,9 @@ fn reader_loop(
         }
 
         // Beacon check
-        if let (Some(interval), Some(ref beacon_data)) = (config.beacon_interval, &config.beacon_data) {
+        if let (Some(interval), Some(ref beacon_data)) =
+            (config.beacon_interval, &config.beacon_data)
+        {
             if let Some(first) = first_tx {
                 if first.elapsed() > Duration::from_secs(interval as u64) {
                     log::debug!("[{}] transmitting beacon data", config.name);
@@ -282,7 +297,11 @@ fn reconnect(
 ) -> Option<(std::fs::File, std::fs::File)> {
     loop {
         thread::sleep(Duration::from_secs(5));
-        log::info!("[{}] attempting to reconnect KISS port {}...", config.name, config.port);
+        log::info!(
+            "[{}] attempting to reconnect KISS port {}...",
+            config.name,
+            config.port
+        );
 
         let serial_config = SerialConfig {
             path: config.port.clone(),
@@ -313,7 +332,11 @@ fn reconnect(
                             flow_control: config.flow_control,
                             flow_state: flow_state.clone(),
                         });
-                        let _ = tx.send(Event::InterfaceUp(config.interface_id, Some(new_writer), None));
+                        let _ = tx.send(Event::InterfaceUp(
+                            config.interface_id,
+                            Some(new_writer),
+                            None,
+                        ));
                         log::info!("[{}] KISS port reconnected", config.name);
                         return Some((reader, flow_writer));
                     }
@@ -331,17 +354,21 @@ fn reconnect(
 
 // --- Factory implementation ---
 
-use std::collections::HashMap;
+use super::{InterfaceConfigData, InterfaceFactory, StartContext, StartResult};
 use rns_core::transport::types::InterfaceInfo;
-use super::{InterfaceFactory, InterfaceConfigData, StartContext, StartResult};
+use std::collections::HashMap;
 
 /// Factory for `KISSInterface`.
 pub struct KissFactory;
 
 impl InterfaceFactory for KissFactory {
-    fn type_name(&self) -> &str { "KISSInterface" }
+    fn type_name(&self) -> &str {
+        "KISSInterface"
+    }
 
-    fn default_ifac_size(&self) -> usize { 8 }
+    fn default_ifac_size(&self) -> usize {
+        8
+    }
 
     fn parse_config(
         &self,
@@ -349,19 +376,23 @@ impl InterfaceFactory for KissFactory {
         id: InterfaceId,
         params: &HashMap<String, String>,
     ) -> Result<Box<dyn InterfaceConfigData>, String> {
-        let port = params.get("port")
+        let port = params
+            .get("port")
             .cloned()
             .ok_or_else(|| "KISSInterface requires 'port'".to_string())?;
 
-        let speed = params.get("speed")
+        let speed = params
+            .get("speed")
             .and_then(|v| v.parse().ok())
             .unwrap_or(9600u32);
 
-        let data_bits = params.get("databits")
+        let data_bits = params
+            .get("databits")
             .and_then(|v| v.parse().ok())
             .unwrap_or(8u8);
 
-        let parity = params.get("parity")
+        let parity = params
+            .get("parity")
             .map(|v| match v.to_lowercase().as_str() {
                 "e" | "even" => crate::serial::Parity::Even,
                 "o" | "odd" => crate::serial::Parity::Odd,
@@ -369,35 +400,43 @@ impl InterfaceFactory for KissFactory {
             })
             .unwrap_or(crate::serial::Parity::None);
 
-        let stop_bits = params.get("stopbits")
+        let stop_bits = params
+            .get("stopbits")
             .and_then(|v| v.parse().ok())
             .unwrap_or(1u8);
 
-        let preamble = params.get("preamble")
+        let preamble = params
+            .get("preamble")
             .and_then(|v| v.parse().ok())
             .unwrap_or(350u16);
 
-        let txtail = params.get("txtail")
+        let txtail = params
+            .get("txtail")
             .and_then(|v| v.parse().ok())
             .unwrap_or(20u16);
 
-        let persistence = params.get("persistence")
+        let persistence = params
+            .get("persistence")
             .and_then(|v| v.parse().ok())
             .unwrap_or(64u8);
 
-        let slottime = params.get("slottime")
+        let slottime = params
+            .get("slottime")
             .and_then(|v| v.parse().ok())
             .unwrap_or(20u16);
 
-        let flow_control = params.get("flow_control")
+        let flow_control = params
+            .get("flow_control")
             .and_then(|v| crate::config::parse_bool_pub(v))
             .unwrap_or(false);
 
-        let beacon_interval = params.get("id_interval")
+        let beacon_interval = params
+            .get("id_interval")
             .or_else(|| params.get("beacon_interval"))
             .and_then(|v| v.parse().ok());
 
-        let beacon_data = params.get("id_callsign")
+        let beacon_data = params
+            .get("id_callsign")
             .or_else(|| params.get("beacon_data"))
             .map(|v| v.as_bytes().to_vec());
 
@@ -424,8 +463,12 @@ impl InterfaceFactory for KissFactory {
         config: Box<dyn InterfaceConfigData>,
         ctx: StartContext,
     ) -> std::io::Result<StartResult> {
-        let kiss_config = *config.into_any().downcast::<KissIfaceConfig>()
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "wrong config type"))?;
+        let kiss_config = *config
+            .into_any()
+            .downcast::<KissIfaceConfig>()
+            .map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "wrong config type")
+            })?;
 
         let id = kiss_config.interface_id;
         let name = kiss_config.name.clone();
@@ -557,24 +600,40 @@ mod tests {
 
         // Should contain TXDELAY command: FEND, CMD_TXDELAY, value, FEND
         // preamble: 350/10 = 35
-        assert!(data.windows(4).any(|w|
-            w[0] == kiss::FEND && w[1] == kiss::CMD_TXDELAY && w[2] == 35 && w[3] == kiss::FEND
-        ), "should contain TXDELAY command");
+        assert!(
+            data.windows(4).any(|w| w[0] == kiss::FEND
+                && w[1] == kiss::CMD_TXDELAY
+                && w[2] == 35
+                && w[3] == kiss::FEND),
+            "should contain TXDELAY command"
+        );
 
         // TXTAIL: 20/10 = 2
-        assert!(data.windows(4).any(|w|
-            w[0] == kiss::FEND && w[1] == kiss::CMD_TXTAIL && w[2] == 2 && w[3] == kiss::FEND
-        ), "should contain TXTAIL command");
+        assert!(
+            data.windows(4).any(|w| w[0] == kiss::FEND
+                && w[1] == kiss::CMD_TXTAIL
+                && w[2] == 2
+                && w[3] == kiss::FEND),
+            "should contain TXTAIL command"
+        );
 
         // Persistence: 64
-        assert!(data.windows(4).any(|w|
-            w[0] == kiss::FEND && w[1] == kiss::CMD_P && w[2] == 64 && w[3] == kiss::FEND
-        ), "should contain P command");
+        assert!(
+            data.windows(4).any(|w| w[0] == kiss::FEND
+                && w[1] == kiss::CMD_P
+                && w[2] == 64
+                && w[3] == kiss::FEND),
+            "should contain P command"
+        );
 
         // Slottime: 20/10 = 2
-        assert!(data.windows(4).any(|w|
-            w[0] == kiss::FEND && w[1] == kiss::CMD_SLOTTIME && w[2] == 2 && w[3] == kiss::FEND
-        ), "should contain SLOTTIME command");
+        assert!(
+            data.windows(4).any(|w| w[0] == kiss::FEND
+                && w[1] == kiss::CMD_SLOTTIME
+                && w[2] == 2
+                && w[3] == kiss::FEND),
+            "should contain SLOTTIME command"
+        );
     }
 
     #[test]

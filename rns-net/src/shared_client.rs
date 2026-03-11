@@ -123,13 +123,11 @@ impl RnsNode {
         let timer_interval = Arc::clone(&tick_interval_ms);
         thread::Builder::new()
             .name("rns-timer-client".into())
-            .spawn(move || {
-                loop {
-                    let ms = timer_interval.load(Ordering::Relaxed);
-                    thread::sleep(Duration::from_millis(ms));
-                    if timer_tx.send(event::Event::Tick).is_err() {
-                        break;
-                    }
+            .spawn(move || loop {
+                let ms = timer_interval.load(Ordering::Relaxed);
+                thread::sleep(Duration::from_millis(ms));
+                if timer_tx.send(event::Event::Tick).is_err() {
+                    break;
                 }
             })?;
 
@@ -140,7 +138,12 @@ impl RnsNode {
                 driver.run();
             })?;
 
-        Ok(RnsNode::from_parts(tx, driver_handle, None, tick_interval_ms))
+        Ok(RnsNode::from_parts(
+            tx,
+            driver_handle,
+            None,
+            tick_interval_ms,
+        ))
     }
 
     /// Connect to a shared instance, with config loaded from a config directory.
@@ -155,13 +158,11 @@ impl RnsNode {
         // Parse config file for instance settings
         let config_file = config_dir.join("config");
         let rns_config = if config_file.exists() {
-            crate::config::parse_file(&config_file).map_err(|e| {
-                io::Error::new(io::ErrorKind::InvalidData, format!("{}", e))
-            })?
+            crate::config::parse_file(&config_file)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{}", e)))?
         } else {
-            crate::config::parse("").map_err(|e| {
-                io::Error::new(io::ErrorKind::InvalidData, format!("{}", e))
-            })?
+            crate::config::parse("")
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, format!("{}", e)))?
         };
 
         let shared_config = SharedClientConfig {
@@ -187,7 +188,13 @@ mod tests {
     impl Callbacks for NoopCallbacks {
         fn on_announce(&mut self, _: crate::destination::AnnouncedIdentity) {}
         fn on_path_updated(&mut self, _: rns_core::types::DestHash, _: u8) {}
-        fn on_local_delivery(&mut self, _: rns_core::types::DestHash, _: Vec<u8>, _: rns_core::types::PacketHash) {}
+        fn on_local_delivery(
+            &mut self,
+            _: rns_core::types::DestHash,
+            _: Vec<u8>,
+            _: rns_core::types::PacketHash,
+        ) {
+        }
     }
 
     fn find_free_port() -> u16 {
@@ -255,11 +262,8 @@ mod tests {
 
         // Register a destination
         let dest_hash = [0xAA; 16];
-        node.register_destination(
-            dest_hash,
-            rns_core::constants::DESTINATION_SINGLE,
-        )
-        .unwrap();
+        node.register_destination(dest_hash, rns_core::constants::DESTINATION_SINGLE)
+            .unwrap();
 
         // Give time for event processing
         thread::sleep(Duration::from_millis(100));

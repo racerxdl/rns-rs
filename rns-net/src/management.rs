@@ -6,13 +6,13 @@ pub use crate::common::management::*;
 mod tests {
     use super::*;
     use crate::interface::{InterfaceEntry, InterfaceStats, Writer};
+    use crate::time;
     use rns_core::constants;
     use rns_core::msgpack::{self, Value};
     use rns_core::transport::types::{InterfaceId, InterfaceInfo, TransportConfig};
     use rns_core::transport::TransportEngine;
     use std::collections::HashMap;
     use std::io;
-    use crate::time;
 
     struct NullWriter;
     impl Writer for NullWriter {
@@ -52,31 +52,36 @@ mod tests {
             started: 0.0,
             ingress_control: false,
         };
-        map.insert(id, InterfaceEntry {
+        map.insert(
             id,
-            info,
-            writer: Box::new(NullWriter),
-            online: true,
-            dynamic: false,
-            ifac: None,
-            stats: InterfaceStats {
-                rxb: 1234,
-                txb: 5678,
-                rx_packets: 10,
-                tx_packets: 20,
-                started: 1000.0,
-                ia_timestamps: vec![],
-                oa_timestamps: vec![],
+            InterfaceEntry {
+                id,
+                info,
+                writer: Box::new(NullWriter),
+                online: true,
+                dynamic: false,
+                ifac: None,
+                stats: InterfaceStats {
+                    rxb: 1234,
+                    txb: 5678,
+                    rx_packets: 10,
+                    tx_packets: 20,
+                    started: 1000.0,
+                    ia_timestamps: vec![],
+                    oa_timestamps: vec![],
+                },
+                interface_type: "TestInterface".to_string(),
             },
-            interface_type: "TestInterface".to_string(),
-        });
+        );
         let ids: Vec<InterfaceId> = map.keys().copied().collect();
         (map, ids)
     }
 
     /// Helper: collect InterfaceEntry refs as trait object refs.
     fn as_views(map: &HashMap<InterfaceId, InterfaceEntry>) -> Vec<&dyn InterfaceStatusView> {
-        map.values().map(|e| e as &dyn InterfaceStatusView).collect()
+        map.values()
+            .map(|e| e as &dyn InterfaceStatusView)
+            .collect()
     }
 
     #[test]
@@ -138,22 +143,26 @@ mod tests {
                 assert_eq!(arr.len(), 1);
                 match &arr[0] {
                     Value::Map(map) => {
-                        let transport_id = map.iter()
+                        let transport_id = map
+                            .iter()
                             .find(|(k, _)| *k == Value::Str("transport_id".into()))
                             .map(|(_, v)| v);
                         assert!(transport_id.is_some());
 
-                        let rxb = map.iter()
+                        let rxb = map
+                            .iter()
                             .find(|(k, _)| *k == Value::Str("rxb".into()))
                             .map(|(_, v)| v.as_uint().unwrap());
                         assert_eq!(rxb, Some(1234));
 
-                        let txb = map.iter()
+                        let txb = map
+                            .iter()
                             .find(|(k, _)| *k == Value::Str("txb".into()))
                             .map(|(_, v)| v.as_uint().unwrap());
                         assert_eq!(txb, Some(5678));
 
-                        let ifaces = map.iter()
+                        let ifaces = map
+                            .iter()
                             .find(|(k, _)| *k == Value::Str("interfaces".into()))
                             .map(|(_, v)| v);
                         match ifaces {
@@ -163,7 +172,8 @@ mod tests {
                             _ => panic!("Expected interfaces array"),
                         }
 
-                        let uptime = map.iter()
+                        let uptime = map
+                            .iter()
                             .find(|(k, _)| *k == Value::Str("transport_uptime".into()))
                             .and_then(|(_, v)| v.as_float());
                         assert!(uptime.unwrap() >= 100.0);
@@ -303,7 +313,11 @@ mod tests {
         assert!(validated.is_ok(), "Announce data should unpack");
         let ann = validated.unwrap();
         let result = ann.validate(&pkt.destination_hash);
-        assert!(result.is_ok(), "Announce should validate: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Announce should validate: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -316,7 +330,11 @@ mod tests {
         let pkt = rns_core::packet::RawPacket::unpack(&raw).unwrap();
         let ann = rns_core::announce::AnnounceData::unpack(&pkt.data, false).unwrap();
         let result = ann.validate(&pkt.destination_hash);
-        assert!(result.is_ok(), "Blackhole announce should validate: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Blackhole announce should validate: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -355,7 +373,11 @@ mod tests {
         let pkt = rns_core::packet::RawPacket::unpack(&raw).unwrap();
         let ann = rns_core::announce::AnnounceData::unpack(&pkt.data, false).unwrap();
         let result = ann.validate(&pkt.destination_hash);
-        assert!(result.is_ok(), "Probe announce should validate: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Probe announce should validate: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -370,7 +392,9 @@ mod tests {
         let mgmt_pkt = rns_core::packet::RawPacket::unpack(&mgmt_raw).unwrap();
         let bh_pkt = rns_core::packet::RawPacket::unpack(&bh_raw).unwrap();
 
-        assert_ne!(mgmt_pkt.destination_hash, bh_pkt.destination_hash,
-            "Management and blackhole should have different dest hashes");
+        assert_ne!(
+            mgmt_pkt.destination_hash, bh_pkt.destination_hash,
+            "Management and blackhole should have different dest hashes"
+        );
     }
 }

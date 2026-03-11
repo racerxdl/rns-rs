@@ -53,9 +53,18 @@ const CMD_INT11_DATA: u8 = 0xF0;
 
 /// All subinterface data command bytes, indexed by subinterface number.
 const DATA_CMDS: [u8; 12] = [
-    CMD_INT0_DATA, CMD_INT1_DATA, CMD_INT2_DATA, CMD_INT3_DATA,
-    CMD_INT4_DATA, CMD_INT5_DATA, CMD_INT6_DATA, CMD_INT7_DATA,
-    CMD_INT8_DATA, CMD_INT9_DATA, CMD_INT10_DATA, CMD_INT11_DATA,
+    CMD_INT0_DATA,
+    CMD_INT1_DATA,
+    CMD_INT2_DATA,
+    CMD_INT3_DATA,
+    CMD_INT4_DATA,
+    CMD_INT5_DATA,
+    CMD_INT6_DATA,
+    CMD_INT7_DATA,
+    CMD_INT8_DATA,
+    CMD_INT9_DATA,
+    CMD_INT10_DATA,
+    CMD_INT11_DATA,
 ];
 
 /// Map a command byte to a subinterface data index, or None.
@@ -182,7 +191,8 @@ impl RNodeDecoder {
                 {
                     // First byte after FEND is the command
                     self.command = byte;
-                } else if self.command == kiss::CMD_DATA || data_cmd_to_index(self.command).is_some()
+                } else if self.command == kiss::CMD_DATA
+                    || data_cmd_to_index(self.command).is_some()
                 {
                     // Data frame: accumulate with KISS unescaping
                     if byte == kiss::FESC {
@@ -269,8 +279,10 @@ impl RNodeDecoder {
             }
             CMD_FREQUENCY => {
                 if buf.len() >= 4 {
-                    let freq =
-                        (buf[0] as u32) << 24 | (buf[1] as u32) << 16 | (buf[2] as u32) << 8 | buf[3] as u32;
+                    let freq = (buf[0] as u32) << 24
+                        | (buf[1] as u32) << 16
+                        | (buf[2] as u32) << 8
+                        | buf[3] as u32;
                     events.push(RNodeEvent::Frequency(freq));
                     self.command = kiss::CMD_UNKNOWN;
                     self.in_frame = false;
@@ -278,8 +290,10 @@ impl RNodeDecoder {
             }
             CMD_BANDWIDTH => {
                 if buf.len() >= 4 {
-                    let bw =
-                        (buf[0] as u32) << 24 | (buf[1] as u32) << 16 | (buf[2] as u32) << 8 | buf[3] as u32;
+                    let bw = (buf[0] as u32) << 24
+                        | (buf[1] as u32) << 16
+                        | (buf[2] as u32) << 8
+                        | buf[3] as u32;
                     events.push(RNodeEvent::Bandwidth(bw));
                     self.command = kiss::CMD_UNKNOWN;
                     self.in_frame = false;

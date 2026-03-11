@@ -120,9 +120,9 @@ fn udp_reader_loop(socket: UdpSocket, id: InterfaceId, name: String, tx: EventSe
 
 // --- Factory implementation ---
 
-use std::collections::HashMap;
+use super::{InterfaceConfigData, InterfaceFactory, StartContext, StartResult};
 use rns_core::transport::types::InterfaceInfo;
-use super::{InterfaceFactory, InterfaceConfigData, StartContext, StartResult};
+use std::collections::HashMap;
 
 /// A no-op writer used when UDP is started in listen-only mode (no forward address).
 /// Preserves engine registration while signalling that outbound writes are not supported.
@@ -141,7 +141,9 @@ impl Writer for NoopWriter {
 pub struct UdpFactory;
 
 impl InterfaceFactory for UdpFactory {
-    fn type_name(&self) -> &str { "UDPInterface" }
+    fn type_name(&self) -> &str {
+        "UDPInterface"
+    }
 
     fn parse_config(
         &self,
@@ -152,9 +154,7 @@ impl InterfaceFactory for UdpFactory {
         let listen_ip = params.get("listen_ip").cloned();
 
         // 'port' is a shorthand that sets both listen_port and forward_port
-        let port_shorthand: Option<u16> = params
-            .get("port")
-            .and_then(|v| v.parse().ok());
+        let port_shorthand: Option<u16> = params.get("port").and_then(|v| v.parse().ok());
 
         let listen_port: Option<u16> = params
             .get("listen_port")
@@ -183,7 +183,9 @@ impl InterfaceFactory for UdpFactory {
         config: Box<dyn InterfaceConfigData>,
         ctx: StartContext,
     ) -> io::Result<StartResult> {
-        let udp_config = *config.into_any().downcast::<UdpConfig>()
+        let udp_config = *config
+            .into_any()
+            .downcast::<UdpConfig>()
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "wrong config type"))?;
 
         let id = udp_config.interface_id;
@@ -367,9 +369,7 @@ mod tests {
 
         let sender = UdpSocket::bind("127.0.0.1:0").unwrap();
         for i in 0..5u8 {
-            sender
-                .send_to(&[i], format!("127.0.0.1:{}", port))
-                .unwrap();
+            sender.send_to(&[i], format!("127.0.0.1:{}", port)).unwrap();
         }
 
         for i in 0..5u8 {

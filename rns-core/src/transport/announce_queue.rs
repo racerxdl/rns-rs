@@ -89,9 +89,7 @@ impl InterfaceAnnounceQueue {
         let mut best_time = self.entries[0].time;
 
         for (i, entry) in self.entries.iter().enumerate().skip(1) {
-            if entry.hops < best_hops
-                || (entry.hops == best_hops && entry.time < best_time)
-            {
+            if entry.hops < best_hops || (entry.hops == best_hops && entry.time < best_time) {
                 best_idx = i;
                 best_hops = entry.hops;
                 best_time = entry.time;
@@ -109,7 +107,12 @@ impl InterfaceAnnounceQueue {
     /// `raw_len`: size of the announce in bytes
     /// `bitrate`: interface bitrate in bits/second
     /// `announce_cap`: fraction of bitrate reserved for announces
-    pub fn calculate_next_allowed(now: f64, raw_len: usize, bitrate: u64, announce_cap: f64) -> f64 {
+    pub fn calculate_next_allowed(
+        now: f64,
+        raw_len: usize,
+        bitrate: u64,
+        announce_cap: f64,
+    ) -> f64 {
         if bitrate == 0 || announce_cap <= 0.0 {
             return now; // no cap
         }
@@ -157,17 +160,18 @@ impl AnnounceQueues {
         let bitrate = match bitrate {
             Some(br) if br > 0 => br,
             _ => {
-                return Some(TransportAction::SendOnInterface {
-                    interface,
-                    raw,
-                });
+                return Some(TransportAction::SendOnInterface { interface, raw });
             }
         };
 
         if queue.is_allowed(now) {
             // Bandwidth available — send now and update allowed_at
-            queue.announce_allowed_at =
-                InterfaceAnnounceQueue::calculate_next_allowed(now, raw.len(), bitrate, announce_cap);
+            queue.announce_allowed_at = InterfaceAnnounceQueue::calculate_next_allowed(
+                now,
+                raw.len(),
+                bitrate,
+                announce_cap,
+            );
             Some(TransportAction::SendOnInterface { interface, raw })
         } else {
             // Queue the announce
@@ -201,21 +205,19 @@ impl AnnounceQueues {
                     let entry = queue.entries.remove(idx);
 
                     // Look up bitrate for this interface
-                    let (bitrate, announce_cap) =
-                        if let Some(info) = interfaces.get(iface_id) {
-                            (info.bitrate.unwrap_or(0), info.announce_cap)
-                        } else {
-                            (0, constants::ANNOUNCE_CAP)
-                        };
+                    let (bitrate, announce_cap) = if let Some(info) = interfaces.get(iface_id) {
+                        (info.bitrate.unwrap_or(0), info.announce_cap)
+                    } else {
+                        (0, constants::ANNOUNCE_CAP)
+                    };
 
                     if bitrate > 0 {
-                        queue.announce_allowed_at =
-                            InterfaceAnnounceQueue::calculate_next_allowed(
-                                now,
-                                entry.raw.len(),
-                                bitrate,
-                                announce_cap,
-                            );
+                        queue.announce_allowed_at = InterfaceAnnounceQueue::calculate_next_allowed(
+                            now,
+                            entry.raw.len(),
+                            bitrate,
+                            announce_cap,
+                        );
                     }
 
                     actions.push(TransportAction::SendOnInterface {
@@ -504,7 +506,10 @@ mod tests {
         interfaces.insert(InterfaceId(1), make_interface_info(1, Some(1000)));
 
         // Process at a future time when bandwidth is available
-        let allowed_at = queues.queue_for(&InterfaceId(1)).unwrap().announce_allowed_at;
+        let allowed_at = queues
+            .queue_for(&InterfaceId(1))
+            .unwrap()
+            .announce_allowed_at;
         let actions = queues.process_queues(allowed_at + 1.0, &interfaces);
 
         assert_eq!(actions.len(), 1);

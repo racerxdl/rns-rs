@@ -35,11 +35,7 @@ impl StoreData {
     }
 
     /// Reset per-call fields while preserving the store (and WASM linear memory).
-    pub fn reset_per_call(
-        &mut self,
-        engine_access: *const dyn EngineAccess,
-        now: f64,
-    ) {
+    pub fn reset_per_call(&mut self, engine_access: *const dyn EngineAccess, now: f64) {
         self.engine_access = engine_access;
         self.now = now;
         self.injected_actions.clear();

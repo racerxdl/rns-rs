@@ -166,7 +166,9 @@ impl Destination {
     pub fn decrypt(&self, ciphertext: &[u8]) -> Result<Vec<u8>, GroupKeyError> {
         let key = self.group_key.as_ref().ok_or(GroupKeyError::NoKey)?;
         let token = Token::new(key).map_err(|_| GroupKeyError::DecryptionFailed)?;
-        token.decrypt(ciphertext).map_err(|_| GroupKeyError::DecryptionFailed)
+        token
+            .decrypt(ciphertext)
+            .map_err(|_| GroupKeyError::DecryptionFailed)
     }
 
     /// Set the proof strategy for this destination.
@@ -270,8 +272,7 @@ mod tests {
 
     #[test]
     fn proof_strategy_builder() {
-        let dest = Destination::plain("app", &["a"])
-            .set_proof_strategy(ProofStrategy::ProveAll);
+        let dest = Destination::plain("app", &["a"]).set_proof_strategy(ProofStrategy::ProveAll);
         assert_eq!(dest.proof_strategy, ProofStrategy::ProveAll);
     }
 
@@ -410,7 +411,10 @@ mod tests {
         dest2.load_private_key(vec![0xBBu8; 64]).unwrap();
 
         let ciphertext = dest1.encrypt(b"secret").unwrap();
-        assert_eq!(dest2.decrypt(&ciphertext), Err(GroupKeyError::DecryptionFailed));
+        assert_eq!(
+            dest2.decrypt(&ciphertext),
+            Err(GroupKeyError::DecryptionFailed)
+        );
     }
 
     #[test]

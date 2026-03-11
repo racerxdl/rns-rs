@@ -100,7 +100,10 @@ impl Token {
             return Err(TokenError::InvalidToken);
         }
 
-        if !self.verify_hmac(token).map_err(|_| TokenError::InvalidToken)? {
+        if !self
+            .verify_hmac(token)
+            .map_err(|_| TokenError::InvalidToken)?
+        {
             return Err(TokenError::HmacMismatch);
         }
 
@@ -138,7 +141,10 @@ mod tests {
     #[test]
     fn test_token_new_48byte_key() {
         let key = [0u8; 48];
-        assert!(matches!(Token::new(&key), Err(TokenError::InvalidKeyLength)));
+        assert!(matches!(
+            Token::new(&key),
+            Err(TokenError::InvalidKeyLength)
+        ));
     }
 
     #[test]
@@ -178,7 +184,10 @@ mod tests {
     fn test_token_decrypt_truncated() {
         let key = [0x42u8; 64];
         let token = Token::new(&key).unwrap();
-        assert!(matches!(token.decrypt(&[0u8; 10]), Err(TokenError::InvalidToken)));
+        assert!(matches!(
+            token.decrypt(&[0u8; 10]),
+            Err(TokenError::InvalidToken)
+        ));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use alloc::vec::Vec;
 
-use crate::hash::full_hash;
 use super::types::ResourceError;
+use crate::hash::full_hash;
 
 /// Compute resource hash: SHA-256(unencrypted_data + random_hash).
 /// `unencrypted_data` is the metadata-prefixed data BEFORE encryption.
@@ -90,7 +90,10 @@ mod tests {
         let resource_hash = compute_resource_hash(data, &random);
         let expected = compute_expected_proof(data, &resource_hash);
         let proof_data = build_proof_data(&resource_hash, &expected);
-        assert_eq!(validate_proof(&proof_data, &resource_hash, &expected), Ok(true));
+        assert_eq!(
+            validate_proof(&proof_data, &resource_hash, &expected),
+            Ok(true)
+        );
     }
 
     #[test]
@@ -103,7 +106,10 @@ mod tests {
         let wrong_hash = [0xFF; 32];
         let proof_data = build_proof_data(&wrong_hash, &expected);
         // Proof is still valid because we only check bytes 32..64
-        assert_eq!(validate_proof(&proof_data, &resource_hash, &expected), Ok(true));
+        assert_eq!(
+            validate_proof(&proof_data, &resource_hash, &expected),
+            Ok(true)
+        );
     }
 
     #[test]
@@ -114,7 +120,10 @@ mod tests {
         let expected = compute_expected_proof(data, &resource_hash);
         let wrong_proof = [0xFF; 32];
         let proof_data = build_proof_data(&resource_hash, &wrong_proof);
-        assert_eq!(validate_proof(&proof_data, &resource_hash, &expected), Ok(false));
+        assert_eq!(
+            validate_proof(&proof_data, &resource_hash, &expected),
+            Ok(false)
+        );
     }
 
     #[test]

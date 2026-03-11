@@ -1,17 +1,17 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 extern crate alloc;
 
+pub mod aes128;
+pub mod aes256;
+pub mod ed25519;
+pub mod hkdf;
+pub mod hmac;
+pub mod identity;
 pub mod pkcs7;
 pub mod sha256;
 pub mod sha512;
-pub mod hmac;
-pub mod hkdf;
-pub mod aes128;
-pub mod aes256;
 pub mod token;
 pub mod x25519;
-pub mod ed25519;
-pub mod identity;
 
 /// Trait for random number generation.
 /// Callers provide an implementation; in `std` builds this wraps OS randomness.
@@ -54,15 +54,16 @@ impl Rng for OsRng {
         #[cfg(target_os = "espidf")]
         {
             unsafe {
-                esp_idf_sys::esp_fill_random(dest.as_mut_ptr() as *mut core::ffi::c_void, dest.len());
+                esp_idf_sys::esp_fill_random(
+                    dest.as_mut_ptr() as *mut core::ffi::c_void,
+                    dest.len(),
+                );
             }
         }
         // Use getrandom(2) syscall directly on Linux
         #[cfg(target_os = "linux")]
         {
-            let ret = unsafe {
-                libc_getrandom(dest.as_mut_ptr(), dest.len(), 0)
-            };
+            let ret = unsafe { libc_getrandom(dest.as_mut_ptr(), dest.len(), 0) };
             assert!(ret == dest.len() as isize, "getrandom failed");
         }
         #[cfg(not(any(target_os = "linux", target_os = "espidf")))]
@@ -70,7 +71,8 @@ impl Rng for OsRng {
             // Fallback: read from /dev/urandom
             use std::io::Read;
             let mut f = std::fs::File::open("/dev/urandom").expect("Failed to open /dev/urandom");
-            f.read_exact(dest).expect("Failed to read from /dev/urandom");
+            f.read_exact(dest)
+                .expect("Failed to read from /dev/urandom");
         }
     }
 }

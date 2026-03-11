@@ -12,10 +12,10 @@ use std::time::Duration;
 
 use rns_core::transport::types::{InterfaceId, InterfaceInfo};
 
+use super::{InterfaceConfigData, InterfaceFactory, StartContext, StartResult};
 use crate::event::{Event, EventSender};
 use crate::hdlc;
 use crate::interface::Writer;
-use super::{InterfaceFactory, InterfaceConfigData, StartContext, StartResult};
 
 /// Configuration for a pipe interface.
 #[derive(Debug, Clone)]
@@ -63,7 +63,11 @@ pub fn start(config: PipeConfig, tx: EventSender) -> io::Result<Box<dyn Writer>>
         .take()
         .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "no stdin from child"))?;
 
-    log::info!("[{}] pipe interface started: {}", config.name, config.command);
+    log::info!(
+        "[{}] pipe interface started: {}",
+        config.name,
+        config.command
+    );
 
     // Signal interface up
     let _ = tx.send(Event::InterfaceUp(id, None, None));
@@ -184,7 +188,11 @@ fn respawn(
 
                 let new_writer: Box<dyn Writer> = Box::new(PipeWriter { stdin });
                 if tx
-                    .send(Event::InterfaceUp(config.interface_id, Some(new_writer), None))
+                    .send(Event::InterfaceUp(
+                        config.interface_id,
+                        Some(new_writer),
+                        None,
+                    ))
                     .is_err()
                 {
                     return None; // Driver shut down
@@ -298,7 +306,10 @@ mod tests {
 
         // Drain InterfaceUp
         let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
-        assert!(matches!(event, Event::InterfaceUp(InterfaceId(100), None, None)));
+        assert!(matches!(
+            event,
+            Event::InterfaceUp(InterfaceId(100), None, None)
+        ));
 
         // Send a packet (>= 19 bytes for HDLC minimum)
         let payload: Vec<u8> = (0..32).collect();
@@ -348,7 +359,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let config = PipeConfig {
             name: "test-pipe-exit".into(),
-            command: "true".into(), // exits immediately with 0
+            command: "true".into(),                 // exits immediately with 0
             respawn_delay: Duration::from_secs(60), // long delay so we catch InterfaceDown
             interface_id: InterfaceId(102),
         };
@@ -367,7 +378,10 @@ mod tests {
                 Err(_) => break,
             }
         }
-        assert!(got_down, "should receive InterfaceDown after subprocess exits");
+        assert!(
+            got_down,
+            "should receive InterfaceDown after subprocess exits"
+        );
     }
 
     #[test]

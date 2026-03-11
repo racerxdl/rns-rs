@@ -6,8 +6,8 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::path::Path;
 use std::io;
+use std::path::Path;
 
 /// Parsed RNS configuration.
 #[derive(Debug, Clone)]
@@ -362,9 +362,7 @@ pub fn parse_hook_point(s: &str) -> Option<usize> {
     }
 }
 
-fn build_reticulum_section(
-    kvs: &HashMap<String, String>,
-) -> Result<ReticulumSection, ConfigError> {
+fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSection, ConfigError> {
     let mut section = ReticulumSection::default();
 
     if let Some(v) = kvs.get("enable_transport") {
@@ -383,11 +381,10 @@ fn build_reticulum_section(
         section.instance_name = v.clone();
     }
     if let Some(v) = kvs.get("shared_instance_port") {
-        section.shared_instance_port =
-            v.parse::<u16>().map_err(|_| ConfigError::InvalidValue {
-                key: "shared_instance_port".into(),
-                value: v.clone(),
-            })?;
+        section.shared_instance_port = v.parse::<u16>().map_err(|_| ConfigError::InvalidValue {
+            key: "shared_instance_port".into(),
+            value: v.clone(),
+        })?;
     }
     if let Some(v) = kvs.get("instance_control_port") {
         section.instance_control_port =
@@ -419,10 +416,11 @@ fn build_reticulum_section(
         })?;
     }
     if let Some(v) = kvs.get("enable_remote_management") {
-        section.enable_remote_management = parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
-            key: "enable_remote_management".into(),
-            value: v.clone(),
-        })?;
+        section.enable_remote_management =
+            parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
+                key: "enable_remote_management".into(),
+                value: v.clone(),
+            })?;
     }
     if let Some(v) = kvs.get("remote_management_allowed") {
         // Value is a comma-separated list of hex identity hashes
@@ -461,10 +459,11 @@ fn build_reticulum_section(
         })?;
     }
     if let Some(v) = kvs.get("required_discovery_value") {
-        section.required_discovery_value = Some(v.parse::<u8>().map_err(|_| ConfigError::InvalidValue {
-            key: "required_discovery_value".into(),
-            value: v.clone(),
-        })?);
+        section.required_discovery_value =
+            Some(v.parse::<u8>().map_err(|_| ConfigError::InvalidValue {
+                key: "required_discovery_value".into(),
+                value: v.clone(),
+            })?);
     }
     if let Some(v) = kvs.get("prefer_shorter_path") {
         section.prefer_shorter_path = parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
@@ -824,7 +823,10 @@ instance_name = test
     networkname = testnet
 "#;
         let config = parse(input).unwrap();
-        assert_eq!(config.interfaces[0].params.get("networkname").unwrap(), "testnet");
+        assert_eq!(
+            config.interfaces[0].params.get("networkname").unwrap(),
+            "testnet"
+        );
     }
 
     #[test]
@@ -839,7 +841,10 @@ instance_name = test
     ifac_size = 64
 "#;
         let config = parse(input).unwrap();
-        assert_eq!(config.interfaces[0].params.get("passphrase").unwrap(), "secret123");
+        assert_eq!(
+            config.interfaces[0].params.get("passphrase").unwrap(),
+            "secret123"
+        );
         assert_eq!(config.interfaces[0].params.get("ifac_size").unwrap(), "64");
     }
 
@@ -956,13 +961,37 @@ enable_transport = True
         assert_eq!(iface.name, "Public Entrypoint");
         assert_eq!(iface.interface_type, "BackboneInterface");
         // After removing type, enabled, interface_mode, remaining params should include discovery keys
-        assert_eq!(iface.params.get("discoverable").map(|s| s.as_str()), Some("Yes"));
-        assert_eq!(iface.params.get("discovery_name").map(|s| s.as_str()), Some("PizzaSpaghettiMandolino"));
-        assert_eq!(iface.params.get("announce_interval").map(|s| s.as_str()), Some("600"));
-        assert_eq!(iface.params.get("discovery_stamp_value").map(|s| s.as_str()), Some("24"));
-        assert_eq!(iface.params.get("reachable_on").map(|s| s.as_str()), Some("87.106.8.245"));
-        assert_eq!(iface.params.get("listen_ip").map(|s| s.as_str()), Some("0.0.0.0"));
-        assert_eq!(iface.params.get("listen_port").map(|s| s.as_str()), Some("4242"));
+        assert_eq!(
+            iface.params.get("discoverable").map(|s| s.as_str()),
+            Some("Yes")
+        );
+        assert_eq!(
+            iface.params.get("discovery_name").map(|s| s.as_str()),
+            Some("PizzaSpaghettiMandolino")
+        );
+        assert_eq!(
+            iface.params.get("announce_interval").map(|s| s.as_str()),
+            Some("600")
+        );
+        assert_eq!(
+            iface
+                .params
+                .get("discovery_stamp_value")
+                .map(|s| s.as_str()),
+            Some("24")
+        );
+        assert_eq!(
+            iface.params.get("reachable_on").map(|s| s.as_str()),
+            Some("87.106.8.245")
+        );
+        assert_eq!(
+            iface.params.get("listen_ip").map(|s| s.as_str()),
+            Some("0.0.0.0")
+        );
+        assert_eq!(
+            iface.params.get("listen_port").map(|s| s.as_str()),
+            Some("4242")
+        );
     }
 
     #[test]
@@ -973,7 +1002,10 @@ probe_addr = 1.2.3.4:19302
 probe_protocol = stun
 "#;
         let config = parse(input).unwrap();
-        assert_eq!(config.reticulum.probe_addr.as_deref(), Some("1.2.3.4:19302"));
+        assert_eq!(
+            config.reticulum.probe_addr.as_deref(),
+            Some("1.2.3.4:19302")
+        );
         assert_eq!(config.reticulum.probe_protocol.as_deref(), Some("stun"));
     }
 

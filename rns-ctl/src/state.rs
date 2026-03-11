@@ -4,8 +4,8 @@ use std::time::Instant;
 
 use serde::Serialize;
 
-use rns_net::{Destination, RnsNode};
 use rns_crypto::identity::Identity;
+use rns_net::{Destination, RnsNode};
 
 use crate::encode::to_hex;
 
@@ -202,7 +202,10 @@ pub fn make_announce_record(announced: &rns_net::AnnouncedIdentity) -> AnnounceR
         dest_hash: to_hex(&announced.dest_hash.0),
         identity_hash: to_hex(&announced.identity_hash.0),
         hops: announced.hops,
-        app_data: announced.app_data.as_ref().map(|d| crate::encode::to_base64(d)),
+        app_data: announced
+            .app_data
+            .as_ref()
+            .map(|d| crate::encode::to_base64(d)),
         received_at: announced.received_at,
     }
 }

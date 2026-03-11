@@ -144,7 +144,9 @@ mod tests {
 
     #[test]
     fn config_from_args() {
-        let a = args(&["--port", "3000", "--host", "0.0.0.0", "--token", "secret", "--daemon"]);
+        let a = args(&[
+            "--port", "3000", "--host", "0.0.0.0", "--token", "secret", "--daemon",
+        ]);
         let cfg = from_args_and_env(&a);
         assert_eq!(cfg.port, 3000);
         assert_eq!(cfg.host, "0.0.0.0");

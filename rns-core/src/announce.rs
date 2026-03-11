@@ -319,8 +319,7 @@ mod tests {
         let dh = destination::destination_hash("testapp", &["aspect"], Some(&id_hash));
         let random = [0xFF; 10];
 
-        let (mut data, _) =
-            AnnounceData::pack(&identity, &dh, &nh, &random, None, None).unwrap();
+        let (mut data, _) = AnnounceData::pack(&identity, &dh, &nh, &random, None, None).unwrap();
 
         // Tamper with the signature (located at offset 84 = 64 + 10 + 10)
         data[84] ^= 0xFF;
@@ -338,8 +337,7 @@ mod tests {
         let dh = destination::destination_hash("testapp", &["aspect"], Some(&id_hash));
         let random = [0x11; 10];
 
-        let (data, _) =
-            AnnounceData::pack(&identity, &dh, &nh, &random, None, None).unwrap();
+        let (data, _) = AnnounceData::pack(&identity, &dh, &nh, &random, None, None).unwrap();
 
         let parsed = AnnounceData::unpack(&data, false).unwrap();
         let wrong_hash = [0x00; 16];

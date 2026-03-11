@@ -176,8 +176,8 @@ pub fn decide_announce_multipath(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::types::InterfaceId;
+    use super::*;
 
     fn make_blob(timebase: u64) -> [u8; 10] {
         let mut blob = [0u8; 10];
@@ -447,7 +447,16 @@ mod tests {
 
         // Same next_hop, newer blob → ReplacePrimary
         assert_eq!(
-            decide_announce_multipath(Some(&ps), 2, 200, &blob_new, &[0xAA; 16], false, 1000.0, false),
+            decide_announce_multipath(
+                Some(&ps),
+                2,
+                200,
+                &blob_new,
+                &[0xAA; 16],
+                false,
+                1000.0,
+                false
+            ),
             MultiPathDecision::ReplacePrimary
         );
     }
@@ -474,7 +483,16 @@ mod tests {
 
         // Different next_hop, novel blob, newer emission → AddAlternative
         assert_eq!(
-            decide_announce_multipath(Some(&ps), 4, 200, &blob_new, &[0xCC; 16], false, 1000.0, false),
+            decide_announce_multipath(
+                Some(&ps),
+                4,
+                200,
+                &blob_new,
+                &[0xCC; 16],
+                false,
+                1000.0,
+                false
+            ),
             MultiPathDecision::AddAlternative
         );
     }
@@ -501,7 +519,16 @@ mod tests {
 
         // Novel blob but older emission timestamp → Reject
         assert_eq!(
-            decide_announce_multipath(Some(&ps), 4, 100, &blob_new, &[0xCC; 16], false, 1000.0, false),
+            decide_announce_multipath(
+                Some(&ps),
+                4,
+                100,
+                &blob_new,
+                &[0xCC; 16],
+                false,
+                1000.0,
+                false
+            ),
             MultiPathDecision::Reject
         );
     }

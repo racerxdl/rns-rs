@@ -171,7 +171,11 @@ fn connect_with_device(
 ) -> io::Result<TcpStream> {
     use std::os::unix::io::{FromRawFd, RawFd};
 
-    let domain = if addr.is_ipv4() { libc::AF_INET } else { libc::AF_INET6 };
+    let domain = if addr.is_ipv4() {
+        libc::AF_INET
+    } else {
+        libc::AF_INET6
+    };
     let fd: RawFd = unsafe { libc::socket(domain, libc::SOCK_STREAM, 0) };
     if fd < 0 {
         return Err(io::Error::last_os_error());
@@ -256,7 +260,10 @@ fn socket_addr_to_raw(addr: &std::net::SocketAddr) -> (libc::sockaddr_storage, l
             sin.sin_addr = libc::in_addr {
                 s_addr: u32::from_ne_bytes(v4.ip().octets()),
             };
-            (storage, std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t)
+            (
+                storage,
+                std::mem::size_of::<libc::sockaddr_in>() as libc::socklen_t,
+            )
         }
         std::net::SocketAddr::V6(v6) => {
             let sin6: &mut libc::sockaddr_in6 = unsafe {
@@ -269,7 +276,10 @@ fn socket_addr_to_raw(addr: &std::net::SocketAddr) -> (libc::sockaddr_storage, l
             };
             sin6.sin6_flowinfo = v6.flowinfo();
             sin6.sin6_scope_id = v6.scope_id();
-            (storage, std::mem::size_of::<libc::sockaddr_in6>() as libc::socklen_t)
+            (
+                storage,
+                std::mem::size_of::<libc::sockaddr_in6>() as libc::socklen_t,
+            )
         }
     }
 }
@@ -293,7 +303,9 @@ pub fn start(config: TcpClientConfig, tx: EventSender) -> io::Result<Box<dyn Wri
             reader_loop(reader_stream, reader_config, reader_tx);
         })?;
 
-    Ok(Box::new(TcpWriter { stream: writer_stream }))
+    Ok(Box::new(TcpWriter {
+        stream: writer_stream,
+    }))
 }
 
 /// Reader thread: reads from socket, HDLC-decodes, sends frames to driver.
@@ -323,7 +335,13 @@ fn reader_loop(mut stream: TcpStream, config: TcpClientConfig, tx: EventSender) 
             }
             Ok(n) => {
                 for frame in decoder.feed(&buf[..n]) {
-                    if tx.send(Event::Frame { interface_id: id, data: frame }).is_err() {
+                    if tx
+                        .send(Event::Frame {
+                            interface_id: id,
+                            data: frame,
+                        })
+                        .is_err()
+                    {
                         // Driver shut down
                         return;
                     }
@@ -363,11 +381,7 @@ fn reconnect(config: &TcpClientConfig, tx: &EventSender) -> Option<TcpStream> {
             }
         }
 
-        log::info!(
-            "[{}] reconnect attempt {} ...",
-            config.name,
-            attempts
-        );
+        log::info!("[{}] reconnect attempt {} ...", config.name, attempts);
 
         match try_connect(config) {
             Ok(new_stream) => {
@@ -381,8 +395,14 @@ fn reconnect(config: &TcpClientConfig, tx: &EventSender) -> Option<TcpStream> {
                 };
                 log::info!("[{}] reconnected", config.name);
                 // Send new writer to the driver so it can replace the stale one
-                let new_writer: Box<dyn Writer> = Box::new(TcpWriter { stream: writer_stream });
-                let _ = tx.send(Event::InterfaceUp(config.interface_id, Some(new_writer), None));
+                let new_writer: Box<dyn Writer> = Box::new(TcpWriter {
+                    stream: writer_stream,
+                });
+                let _ = tx.send(Event::InterfaceUp(
+                    config.interface_id,
+                    Some(new_writer),
+                    None,
+                ));
                 return Some(new_stream);
             }
             Err(e) => {
@@ -394,15 +414,17 @@ fn reconnect(config: &TcpClientConfig, tx: &EventSender) -> Option<TcpStream> {
 
 // --- Factory implementation ---
 
-use std::collections::HashMap;
+use super::{InterfaceConfigData, InterfaceFactory, StartContext, StartResult};
 use rns_core::transport::types::InterfaceInfo;
-use super::{InterfaceFactory, InterfaceConfigData, StartContext, StartResult};
+use std::collections::HashMap;
 
 /// Factory for `TCPClientInterface`.
 pub struct TcpClientFactory;
 
 impl InterfaceFactory for TcpClientFactory {
-    fn type_name(&self) -> &str { "TCPClientInterface" }
+    fn type_name(&self) -> &str {
+        "TCPClientInterface"
+    }
 
     fn parse_config(
         &self,
@@ -410,10 +432,12 @@ impl InterfaceFactory for TcpClientFactory {
         id: InterfaceId,
         params: &HashMap<String, String>,
     ) -> Result<Box<dyn InterfaceConfigData>, String> {
-        let target_host = params.get("target_host")
+        let target_host = params
+            .get("target_host")
             .cloned()
             .unwrap_or_else(|| "127.0.0.1".into());
-        let target_port = params.get("target_port")
+        let target_port = params
+            .get("target_port")
             .and_then(|v| v.parse().ok())
             .unwrap_or(4242);
 
@@ -432,7 +456,9 @@ impl InterfaceFactory for TcpClientFactory {
         config: Box<dyn InterfaceConfigData>,
         ctx: StartContext,
     ) -> io::Result<StartResult> {
-        let tcp_config = *config.into_any().downcast::<TcpClientConfig>()
+        let tcp_config = *config
+            .into_any()
+            .downcast::<TcpClientConfig>()
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "wrong config type"))?;
 
         let id = tcp_config.interface_id;
@@ -583,7 +609,9 @@ mod tests {
         let _ = rx.recv_timeout(Duration::from_secs(1)).unwrap();
 
         // Send multiple frames
-        let payloads: Vec<Vec<u8>> = (0..3).map(|i| (0..24).map(|j| j + i * 50).collect()).collect();
+        let payloads: Vec<Vec<u8>> = (0..3)
+            .map(|i| (0..24).map(|j| j + i * 50).collect())
+            .collect();
         for p in &payloads {
             server_stream.write_all(&hdlc::frame(p)).unwrap();
         }

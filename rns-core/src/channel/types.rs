@@ -43,6 +43,9 @@ mod tests {
 
     #[test]
     fn test_channel_error_display() {
-        assert_eq!(format!("{}", ChannelError::NotReady), "Channel is not ready to send");
+        assert_eq!(
+            format!("{}", ChannelError::NotReady),
+            "Channel is not ready to send"
+        );
     }
 }

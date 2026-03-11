@@ -18,7 +18,8 @@ impl Callbacks for LoggingCallbacks {
             announced.dest_hash,
             announced.identity_hash,
             announced.hops,
-            announced.app_data
+            announced
+                .app_data
                 .as_ref()
                 .map(|d| format!("{} bytes", d.len()))
                 .unwrap_or_else(|| "none".into())
@@ -30,11 +31,7 @@ impl Callbacks for LoggingCallbacks {
     }
 
     fn on_local_delivery(&mut self, dest_hash: DestHash, raw: Vec<u8>, _packet_hash: PacketHash) {
-        log::info!(
-            "Local delivery: dest={} size={}",
-            dest_hash,
-            raw.len()
-        );
+        log::info!("Local delivery: dest={} size={}", dest_hash, raw.len());
     }
 
     fn on_interface_up(&mut self, id: InterfaceId) {

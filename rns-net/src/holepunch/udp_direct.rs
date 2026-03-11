@@ -6,8 +6,8 @@
 
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -164,7 +164,9 @@ fn run_reader(
                     });
                 }
             }
-            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut => {
+            Err(ref e)
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
+            {
                 continue;
             }
             Err(e) => {
@@ -186,7 +188,9 @@ mod tests {
         let sock_a = UdpSocket::bind("127.0.0.1:0").unwrap();
         let sock_b = UdpSocket::bind("127.0.0.1:0").unwrap();
         let addr_b = sock_b.local_addr().unwrap();
-        sock_b.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        sock_b
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
 
         let mut writer = UdpDirectWriter {
             socket: Arc::new(sock_a),

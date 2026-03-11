@@ -1,23 +1,23 @@
 use alloc::vec::Vec;
 
-use rns_crypto::identity::Identity;
 use rns_crypto::ed25519::Ed25519PublicKey;
+use rns_crypto::identity::Identity;
 
-use crate::constants::{KEYSIZE, SIGLENGTH};
 use super::types::{LinkError, LinkId};
+use crate::constants::{KEYSIZE, SIGLENGTH};
 
 /// Build LINKIDENTIFY plaintext: `[public_key:64][signature:64]`.
 ///
 /// `signed_data = link_id + public_key`
 pub fn build_identify_data(identity: &Identity, link_id: &LinkId) -> Result<Vec<u8>, LinkError> {
-    let public_key = identity.get_public_key()
-        .ok_or(LinkError::CryptoError)?;
+    let public_key = identity.get_public_key().ok_or(LinkError::CryptoError)?;
 
     let mut signed_data = Vec::with_capacity(16 + 64);
     signed_data.extend_from_slice(link_id);
     signed_data.extend_from_slice(&public_key);
 
-    let signature = identity.sign(&signed_data)
+    let signature = identity
+        .sign(&signed_data)
         .map_err(|_| LinkError::CryptoError)?;
 
     let mut data = Vec::with_capacity(128);
@@ -93,7 +93,10 @@ mod tests {
         let wrong_id: LinkId = [0xBB; 16];
 
         let data = build_identify_data(&identity, &link_id).unwrap();
-        assert_eq!(validate_identify_data(&data, &wrong_id), Err(LinkError::InvalidSignature));
+        assert_eq!(
+            validate_identify_data(&data, &wrong_id),
+            Err(LinkError::InvalidSignature)
+        );
     }
 
     #[test]
@@ -104,13 +107,19 @@ mod tests {
 
         let mut data = build_identify_data(&identity, &link_id).unwrap();
         data[10] ^= 0xFF; // tamper with public key
-        assert_eq!(validate_identify_data(&data, &link_id), Err(LinkError::InvalidSignature));
+        assert_eq!(
+            validate_identify_data(&data, &link_id),
+            Err(LinkError::InvalidSignature)
+        );
     }
 
     #[test]
     fn test_identify_invalid_length() {
         let link_id: LinkId = [0xAA; 16];
-        assert_eq!(validate_identify_data(&[0u8; 64], &link_id), Err(LinkError::InvalidData));
+        assert_eq!(
+            validate_identify_data(&[0u8; 64], &link_id),
+            Err(LinkError::InvalidData)
+        );
     }
 
     #[test]

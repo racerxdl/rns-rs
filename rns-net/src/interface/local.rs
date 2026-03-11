@@ -119,10 +119,7 @@ pub fn start_server(
                 return Ok(());
             }
             Err(e) => {
-                log::info!(
-                    "Unix socket bind failed ({}), falling back to TCP",
-                    e
-                );
+                log::info!("Unix socket bind failed ({}), falling back to TCP", e);
             }
         }
     }
@@ -191,7 +188,9 @@ fn unix_server_loop(
         };
 
         let info = make_local_interface_info(client_id);
-        let writer: Box<dyn Writer> = Box::new(UnixLocalWriter { stream: writer_stream });
+        let writer: Box<dyn Writer> = Box::new(UnixLocalWriter {
+            stream: writer_stream,
+        });
 
         if tx
             .send(Event::InterfaceUp(client_id, Some(writer), Some(info)))
@@ -224,11 +223,7 @@ impl Writer for UnixLocalWriter {
 }
 
 #[cfg(target_os = "linux")]
-fn unix_reader_loop(
-    mut stream: std::os::unix::net::UnixStream,
-    id: InterfaceId,
-    tx: EventSender,
-) {
+fn unix_reader_loop(mut stream: std::os::unix::net::UnixStream, id: InterfaceId, tx: EventSender) {
     use std::io::Read;
     let mut decoder = hdlc::Decoder::new();
     let mut buf = [0u8; 4096];
@@ -271,7 +266,9 @@ fn spawn_local_client_handler(stream: TcpStream, client_id: InterfaceId, tx: Eve
     };
 
     let info = make_local_interface_info(client_id);
-    let writer: Box<dyn Writer> = Box::new(LocalWriter { stream: writer_stream });
+    let writer: Box<dyn Writer> = Box::new(LocalWriter {
+        stream: writer_stream,
+    });
 
     if tx
         .send(Event::InterfaceUp(client_id, Some(writer), Some(info)))
@@ -372,7 +369,9 @@ pub fn start_client(config: LocalClientConfig, tx: EventSender) -> io::Result<Bo
                         unix_reader_loop(stream, id, client_tx);
                     })?;
 
-                return Ok(Box::new(UnixLocalWriter { stream: writer_stream }));
+                return Ok(Box::new(UnixLocalWriter {
+                    stream: writer_stream,
+                }));
             }
             Err(e) => {
                 log::info!(
@@ -389,7 +388,11 @@ pub fn start_client(config: LocalClientConfig, tx: EventSender) -> io::Result<Bo
     let stream = TcpStream::connect(&addr)?;
     stream.set_nodelay(true)?;
 
-    log::info!("[{}] Connected to shared instance via TCP {}", config.name, addr);
+    log::info!(
+        "[{}] Connected to shared instance via TCP {}",
+        config.name,
+        addr
+    );
 
     let reader_stream = stream.try_clone()?;
     let writer_stream = stream.try_clone()?;
@@ -402,19 +405,23 @@ pub fn start_client(config: LocalClientConfig, tx: EventSender) -> io::Result<Bo
             tcp_reader_loop(reader_stream, id, tx);
         })?;
 
-    Ok(Box::new(LocalWriter { stream: writer_stream }))
+    Ok(Box::new(LocalWriter {
+        stream: writer_stream,
+    }))
 }
 
 // --- Factory implementations ---
 
+use super::{InterfaceConfigData, InterfaceFactory, StartContext, StartResult};
 use std::collections::HashMap;
-use super::{InterfaceFactory, InterfaceConfigData, StartContext, StartResult};
 
 /// Factory for `LocalServerInterface`.
 pub struct LocalServerFactory;
 
 impl InterfaceFactory for LocalServerFactory {
-    fn type_name(&self) -> &str { "LocalServerInterface" }
+    fn type_name(&self) -> &str {
+        "LocalServerInterface"
+    }
 
     fn parse_config(
         &self,
@@ -422,10 +429,12 @@ impl InterfaceFactory for LocalServerFactory {
         id: InterfaceId,
         params: &HashMap<String, String>,
     ) -> Result<Box<dyn InterfaceConfigData>, String> {
-        let instance_name = params.get("instance_name")
+        let instance_name = params
+            .get("instance_name")
             .cloned()
             .unwrap_or_else(|| "default".into());
-        let port = params.get("port")
+        let port = params
+            .get("port")
             .and_then(|v| v.parse().ok())
             .unwrap_or(37428);
 
@@ -441,8 +450,12 @@ impl InterfaceFactory for LocalServerFactory {
         config: Box<dyn InterfaceConfigData>,
         ctx: StartContext,
     ) -> std::io::Result<StartResult> {
-        let server_config = *config.into_any().downcast::<LocalServerConfig>()
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "wrong config type"))?;
+        let server_config = *config
+            .into_any()
+            .downcast::<LocalServerConfig>()
+            .map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "wrong config type")
+            })?;
 
         start_server(server_config, ctx.tx, ctx.next_dynamic_id)?;
         Ok(StartResult::Listener)
@@ -453,7 +466,9 @@ impl InterfaceFactory for LocalServerFactory {
 pub struct LocalClientFactory;
 
 impl InterfaceFactory for LocalClientFactory {
-    fn type_name(&self) -> &str { "LocalClientInterface" }
+    fn type_name(&self) -> &str {
+        "LocalClientInterface"
+    }
 
     fn parse_config(
         &self,
@@ -461,10 +476,12 @@ impl InterfaceFactory for LocalClientFactory {
         id: InterfaceId,
         params: &HashMap<String, String>,
     ) -> Result<Box<dyn InterfaceConfigData>, String> {
-        let instance_name = params.get("instance_name")
+        let instance_name = params
+            .get("instance_name")
             .cloned()
             .unwrap_or_else(|| "default".into());
-        let port = params.get("port")
+        let port = params
+            .get("port")
             .and_then(|v| v.parse().ok())
             .unwrap_or(37428);
 
@@ -481,8 +498,12 @@ impl InterfaceFactory for LocalClientFactory {
         config: Box<dyn InterfaceConfigData>,
         ctx: StartContext,
     ) -> std::io::Result<StartResult> {
-        let client_config = *config.into_any().downcast::<LocalClientConfig>()
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "wrong config type"))?;
+        let client_config = *config
+            .into_any()
+            .downcast::<LocalClientConfig>()
+            .map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "wrong config type")
+            })?;
 
         let id = client_config.interface_id;
         let name = client_config.name.clone();

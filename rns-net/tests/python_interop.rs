@@ -11,8 +11,8 @@ use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
 
+use rns_net::{AnnouncedIdentity, DestHash, PacketHash};
 use rns_net::{Callbacks, InterfaceConfig, NodeConfig, RnsNode, TcpClientConfig, MODE_FULL};
-use rns_net::{DestHash, PacketHash, AnnouncedIdentity};
 
 struct TestCallbacks {
     announce_tx: Sender<(DestHash, u8)>,
@@ -111,12 +111,17 @@ except (KeyboardInterrupt, SystemExit):
 
     // Read the port and dest_hash from Python
     let mut line = String::new();
-    reader.read_line(&mut line).expect("Failed to read from Python");
+    reader
+        .read_line(&mut line)
+        .expect("Failed to read from Python");
     let info: serde_json::Value = serde_json::from_str(line.trim()).expect("Failed to parse JSON");
     let port = info["port"].as_u64().unwrap() as u16;
     let expected_dest_hash_hex = info["dest_hash"].as_str().unwrap().to_string();
 
-    eprintln!("Python server on port {}, dest_hash={}", port, expected_dest_hash_hex);
+    eprintln!(
+        "Python server on port {}, dest_hash={}",
+        port, expected_dest_hash_hex
+    );
 
     // Start Rust node (before triggering announce)
     let (announce_tx, announce_rx): (Sender<(DestHash, u8)>, Receiver<(DestHash, u8)>) =

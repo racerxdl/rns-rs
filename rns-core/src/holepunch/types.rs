@@ -100,14 +100,9 @@ pub enum HolePunchAction {
         session_id: [u8; 16],
     },
     /// Direct connection succeeded.
-    Succeeded {
-        session_id: [u8; 16],
-    },
+    Succeeded { session_id: [u8; 16] },
     /// Hole punch failed.
-    Failed {
-        session_id: [u8; 16],
-        reason: u8,
-    },
+    Failed { session_id: [u8; 16], reason: u8 },
 }
 
 /// Errors from hole-punch operations.

@@ -14,7 +14,10 @@ pub fn run(args: Args) {
         .get("url")
         .unwrap_or("http://127.0.0.1:8080")
         .to_string();
-    let token = args.get("token").or_else(|| args.get("t")).map(|s| s.to_string());
+    let token = args
+        .get("token")
+        .or_else(|| args.get("t"))
+        .map(|s| s.to_string());
 
     match args.positional.first().map(|s| s.as_str()) {
         Some("list") => do_list(&base_url, token.as_deref()),
@@ -28,40 +31,38 @@ pub fn run(args: Args) {
 fn do_list(base_url: &str, token: Option<&str>) {
     let url = format!("{}/api/hooks", base_url);
     match simple_get(&url, token) {
-        Ok(body) => {
-            match serde_json::from_str::<serde_json::Value>(&body) {
-                Ok(val) => {
-                    if let Some(hooks) = val["hooks"].as_array() {
-                        if hooks.is_empty() {
-                            println!("No hooks loaded");
-                            return;
-                        }
+        Ok(body) => match serde_json::from_str::<serde_json::Value>(&body) {
+            Ok(val) => {
+                if let Some(hooks) = val["hooks"].as_array() {
+                    if hooks.is_empty() {
+                        println!("No hooks loaded");
+                        return;
+                    }
+                    println!(
+                        "{:<20} {:<28} {:>8} {:>8} {:>6}",
+                        "Name", "Attach Point", "Priority", "Traps", "On"
+                    );
+                    println!("{}", "-".repeat(74));
+                    for h in hooks {
                         println!(
                             "{:<20} {:<28} {:>8} {:>8} {:>6}",
-                            "Name", "Attach Point", "Priority", "Traps", "On"
+                            h["name"].as_str().unwrap_or(""),
+                            h["attach_point"].as_str().unwrap_or(""),
+                            h["priority"].as_i64().unwrap_or(0),
+                            h["consecutive_traps"].as_u64().unwrap_or(0),
+                            if h["enabled"].as_bool().unwrap_or(false) {
+                                "yes"
+                            } else {
+                                "no"
+                            },
                         );
-                        println!("{}", "-".repeat(74));
-                        for h in hooks {
-                            println!(
-                                "{:<20} {:<28} {:>8} {:>8} {:>6}",
-                                h["name"].as_str().unwrap_or(""),
-                                h["attach_point"].as_str().unwrap_or(""),
-                                h["priority"].as_i64().unwrap_or(0),
-                                h["consecutive_traps"].as_u64().unwrap_or(0),
-                                if h["enabled"].as_bool().unwrap_or(false) {
-                                    "yes"
-                                } else {
-                                    "no"
-                                },
-                            );
-                        }
-                    } else {
-                        println!("{}", body);
                     }
+                } else {
+                    println!("{}", body);
                 }
-                Err(_) => println!("{}", body),
             }
-        }
+            Err(_) => println!("{}", body),
+        },
         Err(e) => {
             eprintln!("Error: {}", e);
             std::process::exit(1);
@@ -90,16 +91,13 @@ fn do_load(args: &Args, base_url: &str, token: Option<&str>) {
         .get("priority")
         .and_then(|s| s.parse().ok())
         .unwrap_or(0);
-    let name = args
-        .get("name")
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| {
-            std::path::Path::new(path)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("hook")
-                .to_string()
-        });
+    let name = args.get("name").map(|s| s.to_string()).unwrap_or_else(|| {
+        std::path::Path::new(path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("hook")
+            .to_string()
+    });
 
     let body = serde_json::json!({
         "name": name,
@@ -197,8 +195,8 @@ fn do_reload(args: &Args, base_url: &str, token: Option<&str>) {
 fn simple_get(url: &str, token: Option<&str>) -> Result<String, String> {
     let (host, port, path) = parse_url(url)?;
     let addr = format!("{}:{}", host, port);
-    let mut stream = std::net::TcpStream::connect(&addr)
-        .map_err(|e| format!("connect to {}: {}", addr, e))?;
+    let mut stream =
+        std::net::TcpStream::connect(&addr).map_err(|e| format!("connect to {}: {}", addr, e))?;
 
     use std::io::{Read, Write};
     let auth = match token {
@@ -225,8 +223,8 @@ fn simple_get(url: &str, token: Option<&str>) -> Result<String, String> {
 fn simple_post(url: &str, body: &str, token: Option<&str>) -> Result<String, String> {
     let (host, port, path) = parse_url(url)?;
     let addr = format!("{}:{}", host, port);
-    let mut stream = std::net::TcpStream::connect(&addr)
-        .map_err(|e| format!("connect to {}: {}", addr, e))?;
+    let mut stream =
+        std::net::TcpStream::connect(&addr).map_err(|e| format!("connect to {}: {}", addr, e))?;
 
     use std::io::{Read, Write};
     let auth = match token {

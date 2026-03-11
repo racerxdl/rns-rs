@@ -54,10 +54,7 @@ pub fn expand_name(
 /// Compute name hash from app_name and aspects.
 ///
 /// = SHA-256("app_name.aspect1.aspect2".as_bytes())[:10]
-pub fn name_hash(
-    app_name: &str,
-    aspects: &[&str],
-) -> [u8; constants::NAME_HASH_LENGTH / 8] {
+pub fn name_hash(app_name: &str, aspects: &[&str]) -> [u8; constants::NAME_HASH_LENGTH / 8] {
     hash::name_hash(app_name, aspects)
 }
 
@@ -100,8 +97,10 @@ mod tests {
 
     #[test]
     fn test_expand_name_with_identity() {
-        let hash = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-                     0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10];
+        let hash = [
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
+            0x0f, 0x10,
+        ];
         let name = expand_name("app", &["a", "b"], Some(&hash)).unwrap();
         assert_eq!(name, "app.a.b.0102030405060708090a0b0c0d0e0f10");
     }

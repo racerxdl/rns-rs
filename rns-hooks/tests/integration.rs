@@ -28,7 +28,9 @@ fn load_example(mgr: &HookManager, name: &str) -> Option<rns_hooks::LoadedProgra
 #[test]
 fn announce_filter_continue_low_hops() {
     let mgr = HookManager::new().unwrap();
-    let Some(mut prog) = load_example(&mgr, "announce_filter") else { return };
+    let Some(mut prog) = load_example(&mgr, "announce_filter") else {
+        return;
+    };
 
     let ctx = HookContext::Announce {
         destination_hash: [0xAA; 16],
@@ -45,7 +47,9 @@ fn announce_filter_continue_low_hops() {
 #[test]
 fn announce_filter_drop_high_hops() {
     let mgr = HookManager::new().unwrap();
-    let Some(mut prog) = load_example(&mgr, "announce_filter") else { return };
+    let Some(mut prog) = load_example(&mgr, "announce_filter") else {
+        return;
+    };
 
     let ctx = HookContext::Announce {
         destination_hash: [0xBB; 16],
@@ -62,7 +66,9 @@ fn announce_filter_drop_high_hops() {
 #[test]
 fn announce_filter_continue_non_announce() {
     let mgr = HookManager::new().unwrap();
-    let Some(mut prog) = load_example(&mgr, "announce_filter") else { return };
+    let Some(mut prog) = load_example(&mgr, "announce_filter") else {
+        return;
+    };
 
     let ctx = HookContext::Tick;
     let exec = mgr
@@ -77,7 +83,9 @@ fn announce_filter_continue_non_announce() {
 #[test]
 fn packet_logger_continue_on_packet() {
     let mgr = HookManager::new().unwrap();
-    let Some(mut prog) = load_example(&mgr, "packet_logger") else { return };
+    let Some(mut prog) = load_example(&mgr, "packet_logger") else {
+        return;
+    };
 
     let pkt = rns_hooks::PacketContext {
         flags: 0,
@@ -89,7 +97,10 @@ fn packet_logger_continue_on_packet() {
         data_offset: 0,
         data_len: 0,
     };
-    let ctx = HookContext::Packet { ctx: &pkt, raw: &[] };
+    let ctx = HookContext::Packet {
+        ctx: &pkt,
+        raw: &[],
+    };
     let exec = mgr
         .execute_program(&mut prog, &ctx, &NullEngine, 0.0, None)
         .unwrap();
@@ -100,7 +111,9 @@ fn packet_logger_continue_on_packet() {
 #[test]
 fn packet_logger_continue_on_tick() {
     let mgr = HookManager::new().unwrap();
-    let Some(mut prog) = load_example(&mgr, "packet_logger") else { return };
+    let Some(mut prog) = load_example(&mgr, "packet_logger") else {
+        return;
+    };
 
     let ctx = HookContext::Tick;
     let exec = mgr
@@ -113,7 +126,9 @@ fn packet_logger_continue_on_tick() {
 #[test]
 fn packet_logger_continue_on_announce() {
     let mgr = HookManager::new().unwrap();
-    let Some(mut prog) = load_example(&mgr, "packet_logger") else { return };
+    let Some(mut prog) = load_example(&mgr, "packet_logger") else {
+        return;
+    };
 
     let ctx = HookContext::Announce {
         destination_hash: [0xCC; 16],
@@ -132,7 +147,9 @@ fn packet_logger_continue_on_announce() {
 #[test]
 fn path_modifier_modify_on_packet() {
     let mgr = HookManager::new().unwrap();
-    let Some(mut prog) = load_example(&mgr, "path_modifier") else { return };
+    let Some(mut prog) = load_example(&mgr, "path_modifier") else {
+        return;
+    };
 
     let pkt = rns_hooks::PacketContext {
         flags: 0,
@@ -144,7 +161,10 @@ fn path_modifier_modify_on_packet() {
         data_offset: 0,
         data_len: 0,
     };
-    let ctx = HookContext::Packet { ctx: &pkt, raw: &[] };
+    let ctx = HookContext::Packet {
+        ctx: &pkt,
+        raw: &[],
+    };
     let exec = mgr
         .execute_program(&mut prog, &ctx, &NullEngine, 0.0, None)
         .unwrap();
@@ -158,7 +178,9 @@ fn path_modifier_modify_on_packet() {
 #[test]
 fn path_modifier_continue_on_non_packet() {
     let mgr = HookManager::new().unwrap();
-    let Some(mut prog) = load_example(&mgr, "path_modifier") else { return };
+    let Some(mut prog) = load_example(&mgr, "path_modifier") else {
+        return;
+    };
 
     let ctx = HookContext::Tick;
     let exec = mgr
@@ -175,7 +197,9 @@ fn chain_filter_drop_stops_logger() {
     let mgr = HookManager::new().unwrap();
     let filter = load_example(&mgr, "announce_filter");
     let logger = load_example(&mgr, "packet_logger");
-    let (Some(mut filter), Some(logger)) = (filter, logger) else { return };
+    let (Some(mut filter), Some(logger)) = (filter, logger) else {
+        return;
+    };
 
     // Set filter to high priority so it runs first
     filter.priority = 100;
@@ -213,10 +237,15 @@ fn make_packet_ctx() -> rns_hooks::PacketContext {
 #[test]
 fn rate_limiter_continues_below_threshold() {
     let mgr = HookManager::new().unwrap();
-    let Some(mut prog) = load_example(&mgr, "rate_limiter") else { return };
+    let Some(mut prog) = load_example(&mgr, "rate_limiter") else {
+        return;
+    };
 
     let pkt = make_packet_ctx();
-    let ctx = HookContext::Packet { ctx: &pkt, raw: &[] };
+    let ctx = HookContext::Packet {
+        ctx: &pkt,
+        raw: &[],
+    };
     // First call — well below MAX_PACKETS=100
     let exec = mgr
         .execute_program(&mut prog, &ctx, &NullEngine, 0.0, None)
@@ -227,10 +256,15 @@ fn rate_limiter_continues_below_threshold() {
 #[test]
 fn rate_limiter_drops_after_threshold() {
     let mgr = HookManager::new().unwrap();
-    let Some(mut prog) = load_example(&mgr, "rate_limiter") else { return };
+    let Some(mut prog) = load_example(&mgr, "rate_limiter") else {
+        return;
+    };
 
     let pkt = make_packet_ctx();
-    let ctx = HookContext::Packet { ctx: &pkt, raw: &[] };
+    let ctx = HookContext::Packet {
+        ctx: &pkt,
+        raw: &[],
+    };
     // Send 100 packets (all should continue)
     for _ in 0..100 {
         let exec = mgr
@@ -248,7 +282,9 @@ fn rate_limiter_drops_after_threshold() {
 #[test]
 fn rate_limiter_continues_on_non_packet() {
     let mgr = HookManager::new().unwrap();
-    let Some(mut prog) = load_example(&mgr, "rate_limiter") else { return };
+    let Some(mut prog) = load_example(&mgr, "rate_limiter") else {
+        return;
+    };
 
     let ctx = HookContext::Tick;
     let exec = mgr
@@ -262,7 +298,9 @@ fn rate_limiter_continues_on_non_packet() {
 #[test]
 fn allowlist_drops_unknown_announce() {
     let mgr = HookManager::new().unwrap();
-    let Some(mut prog) = load_example(&mgr, "allowlist") else { return };
+    let Some(mut prog) = load_example(&mgr, "allowlist") else {
+        return;
+    };
 
     // 0xAA prefix is not in the allowlist
     let ctx = HookContext::Announce {
@@ -279,7 +317,9 @@ fn allowlist_drops_unknown_announce() {
 #[test]
 fn allowlist_allows_known_prefix() {
     let mgr = HookManager::new().unwrap();
-    let Some(mut prog) = load_example(&mgr, "allowlist") else { return };
+    let Some(mut prog) = load_example(&mgr, "allowlist") else {
+        return;
+    };
 
     // 0x0000 prefix IS in the allowlist
     let mut dest = [0x00; 16];
@@ -298,7 +338,9 @@ fn allowlist_allows_known_prefix() {
 #[test]
 fn allowlist_drops_unknown_link() {
     let mgr = HookManager::new().unwrap();
-    let Some(mut prog) = load_example(&mgr, "allowlist") else { return };
+    let Some(mut prog) = load_example(&mgr, "allowlist") else {
+        return;
+    };
 
     let ctx = HookContext::Link {
         link_id: [0xBB; 16],
@@ -313,7 +355,9 @@ fn allowlist_drops_unknown_link() {
 #[test]
 fn allowlist_continues_on_tick() {
     let mgr = HookManager::new().unwrap();
-    let Some(mut prog) = load_example(&mgr, "allowlist") else { return };
+    let Some(mut prog) = load_example(&mgr, "allowlist") else {
+        return;
+    };
 
     let ctx = HookContext::Tick;
     let exec = mgr
@@ -327,10 +371,15 @@ fn allowlist_continues_on_tick() {
 #[test]
 fn packet_mirror_continues_and_injects_action() {
     let mgr = HookManager::new().unwrap();
-    let Some(mut prog) = load_example(&mgr, "packet_mirror") else { return };
+    let Some(mut prog) = load_example(&mgr, "packet_mirror") else {
+        return;
+    };
 
     let pkt = make_packet_ctx();
-    let ctx = HookContext::Packet { ctx: &pkt, raw: &[] };
+    let ctx = HookContext::Packet {
+        ctx: &pkt,
+        raw: &[],
+    };
     let exec = mgr
         .execute_program(&mut prog, &ctx, &NullEngine, 0.0, None)
         .unwrap();
@@ -342,7 +391,9 @@ fn packet_mirror_continues_and_injects_action() {
 #[test]
 fn packet_mirror_no_action_on_non_packet() {
     let mgr = HookManager::new().unwrap();
-    let Some(mut prog) = load_example(&mgr, "packet_mirror") else { return };
+    let Some(mut prog) = load_example(&mgr, "packet_mirror") else {
+        return;
+    };
 
     let ctx = HookContext::Tick;
     let exec = mgr
@@ -357,7 +408,9 @@ fn packet_mirror_no_action_on_non_packet() {
 #[test]
 fn link_guard_continues_below_threshold() {
     let mgr = HookManager::new().unwrap();
-    let Some(mut prog) = load_example(&mgr, "link_guard") else { return };
+    let Some(mut prog) = load_example(&mgr, "link_guard") else {
+        return;
+    };
 
     let ctx = HookContext::Link {
         link_id: [0x11; 16],
@@ -372,7 +425,9 @@ fn link_guard_continues_below_threshold() {
 #[test]
 fn link_guard_drops_after_threshold() {
     let mgr = HookManager::new().unwrap();
-    let Some(mut prog) = load_example(&mgr, "link_guard") else { return };
+    let Some(mut prog) = load_example(&mgr, "link_guard") else {
+        return;
+    };
 
     let ctx = HookContext::Link {
         link_id: [0x11; 16],
@@ -395,7 +450,9 @@ fn link_guard_drops_after_threshold() {
 #[test]
 fn link_guard_continues_on_non_link() {
     let mgr = HookManager::new().unwrap();
-    let Some(mut prog) = load_example(&mgr, "link_guard") else { return };
+    let Some(mut prog) = load_example(&mgr, "link_guard") else {
+        return;
+    };
 
     let ctx = HookContext::Tick;
     let exec = mgr
@@ -409,7 +466,9 @@ fn link_guard_continues_on_non_link() {
 #[test]
 fn announce_dedup_allows_first_few() {
     let mgr = HookManager::new().unwrap();
-    let Some(mut prog) = load_example(&mgr, "announce_dedup") else { return };
+    let Some(mut prog) = load_example(&mgr, "announce_dedup") else {
+        return;
+    };
 
     let ctx = HookContext::Announce {
         destination_hash: [0xAA; 16],
@@ -428,7 +487,9 @@ fn announce_dedup_allows_first_few() {
 #[test]
 fn announce_dedup_suppresses_after_threshold() {
     let mgr = HookManager::new().unwrap();
-    let Some(mut prog) = load_example(&mgr, "announce_dedup") else { return };
+    let Some(mut prog) = load_example(&mgr, "announce_dedup") else {
+        return;
+    };
 
     let ctx = HookContext::Announce {
         destination_hash: [0xBB; 16],
@@ -437,7 +498,8 @@ fn announce_dedup_suppresses_after_threshold() {
     };
     // First 3 continue
     for _ in 0..3 {
-        mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0, None).unwrap();
+        mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0, None)
+            .unwrap();
     }
     // 4th should be dropped
     let exec = mgr
@@ -449,7 +511,9 @@ fn announce_dedup_suppresses_after_threshold() {
 #[test]
 fn announce_dedup_different_dests_independent() {
     let mgr = HookManager::new().unwrap();
-    let Some(mut prog) = load_example(&mgr, "announce_dedup") else { return };
+    let Some(mut prog) = load_example(&mgr, "announce_dedup") else {
+        return;
+    };
 
     let ctx_a = HookContext::Announce {
         destination_hash: [0xCC; 16],
@@ -477,7 +541,9 @@ fn announce_dedup_different_dests_independent() {
 #[test]
 fn announce_dedup_continues_on_non_announce() {
     let mgr = HookManager::new().unwrap();
-    let Some(mut prog) = load_example(&mgr, "announce_dedup") else { return };
+    let Some(mut prog) = load_example(&mgr, "announce_dedup") else {
+        return;
+    };
 
     let ctx = HookContext::Tick;
     let exec = mgr
@@ -491,11 +557,16 @@ fn announce_dedup_continues_on_non_announce() {
 #[test]
 fn metrics_continues_on_all_context_types() {
     let mgr = HookManager::new().unwrap();
-    let Some(mut prog) = load_example(&mgr, "metrics") else { return };
+    let Some(mut prog) = load_example(&mgr, "metrics") else {
+        return;
+    };
 
     let pkt = make_packet_ctx();
     let contexts: Vec<HookContext> = vec![
-        HookContext::Packet { ctx: &pkt, raw: &[] },
+        HookContext::Packet {
+            ctx: &pkt,
+            raw: &[],
+        },
         HookContext::Tick,
         HookContext::Announce {
             destination_hash: [0x11; 16],
@@ -524,10 +595,15 @@ fn metrics_continues_on_all_context_types() {
 #[test]
 fn metrics_no_injected_actions() {
     let mgr = HookManager::new().unwrap();
-    let Some(mut prog) = load_example(&mgr, "metrics") else { return };
+    let Some(mut prog) = load_example(&mgr, "metrics") else {
+        return;
+    };
 
     let pkt = make_packet_ctx();
-    let ctx = HookContext::Packet { ctx: &pkt, raw: &[] };
+    let ctx = HookContext::Packet {
+        ctx: &pkt,
+        raw: &[],
+    };
     let exec = mgr
         .execute_program(&mut prog, &ctx, &NullEngine, 0.0, None)
         .unwrap();

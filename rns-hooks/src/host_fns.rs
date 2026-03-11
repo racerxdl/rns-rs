@@ -10,7 +10,11 @@ pub fn register_host_functions(linker: &mut Linker<StoreData>) -> Result<(), was
     linker.func_wrap("env", "host_is_blackholed", host_is_blackholed)?;
     linker.func_wrap("env", "host_get_interface_name", host_get_interface_name)?;
     linker.func_wrap("env", "host_get_interface_mode", host_get_interface_mode)?;
-    linker.func_wrap("env", "host_get_transport_identity", host_get_transport_identity)?;
+    linker.func_wrap(
+        "env",
+        "host_get_transport_identity",
+        host_get_transport_identity,
+    )?;
     linker.func_wrap("env", "host_get_announce_rate", host_get_announce_rate)?;
     linker.func_wrap("env", "host_get_link_state", host_get_link_state)?;
     linker.func_wrap("env", "host_inject_action", host_inject_action)?;
@@ -39,7 +43,9 @@ fn host_log(mut caller: Caller<'_, StoreData>, ptr: i32, len: i32) {
     if ptr < 0 || len < 0 {
         return;
     }
-    let Some(memory) = get_memory(&mut caller) else { return };
+    let Some(memory) = get_memory(&mut caller) else {
+        return;
+    };
     let data = memory.data(&caller);
     if let Some(bytes) = read_bytes(data, ptr as usize, len as usize) {
         let msg = String::from_utf8_lossy(bytes).to_string();
@@ -50,18 +56,26 @@ fn host_log(mut caller: Caller<'_, StoreData>, ptr: i32, len: i32) {
 
 /// Check if a path exists to the given destination.
 fn host_has_path(mut caller: Caller<'_, StoreData>, dest_ptr: i32) -> i32 {
-    let Some(memory) = get_memory(&mut caller) else { return 0 };
+    let Some(memory) = get_memory(&mut caller) else {
+        return 0;
+    };
     let data = memory.data(&caller);
-    let Some(dest) = read_16(data, dest_ptr as usize) else { return 0 };
+    let Some(dest) = read_16(data, dest_ptr as usize) else {
+        return 0;
+    };
     let result = unsafe { caller.data().engine().has_path(&dest) };
     result as i32
 }
 
 /// Get hop count to destination. Returns -1 if no path.
 fn host_get_hops(mut caller: Caller<'_, StoreData>, dest_ptr: i32) -> i32 {
-    let Some(memory) = get_memory(&mut caller) else { return -1 };
+    let Some(memory) = get_memory(&mut caller) else {
+        return -1;
+    };
     let data = memory.data(&caller);
-    let Some(dest) = read_16(data, dest_ptr as usize) else { return -1 };
+    let Some(dest) = read_16(data, dest_ptr as usize) else {
+        return -1;
+    };
     match unsafe { caller.data().engine().hops_to(&dest) } {
         Some(h) => h as i32,
         None => -1,
@@ -70,9 +84,13 @@ fn host_get_hops(mut caller: Caller<'_, StoreData>, dest_ptr: i32) -> i32 {
 
 /// Get next hop for a destination. Writes 16 bytes to out_ptr. Returns 1 if found, 0 otherwise.
 fn host_get_next_hop(mut caller: Caller<'_, StoreData>, dest_ptr: i32, out_ptr: i32) -> i32 {
-    let Some(memory) = get_memory(&mut caller) else { return 0 };
+    let Some(memory) = get_memory(&mut caller) else {
+        return 0;
+    };
     let data = memory.data(&caller);
-    let Some(dest) = read_16(data, dest_ptr as usize) else { return 0 };
+    let Some(dest) = read_16(data, dest_ptr as usize) else {
+        return 0;
+    };
     match unsafe { caller.data().engine().next_hop(&dest) } {
         Some(hop) => {
             let data = memory.data_mut(&mut caller);
@@ -89,9 +107,13 @@ fn host_get_next_hop(mut caller: Caller<'_, StoreData>, dest_ptr: i32, out_ptr: 
 
 /// Check if an identity is blackholed.
 fn host_is_blackholed(mut caller: Caller<'_, StoreData>, identity_ptr: i32) -> i32 {
-    let Some(memory) = get_memory(&mut caller) else { return 0 };
+    let Some(memory) = get_memory(&mut caller) else {
+        return 0;
+    };
     let data = memory.data(&caller);
-    let Some(identity) = read_16(data, identity_ptr as usize) else { return 0 };
+    let Some(identity) = read_16(data, identity_ptr as usize) else {
+        return 0;
+    };
     let result = unsafe { caller.data().engine().is_blackholed(&identity) };
     result as i32
 }
@@ -108,7 +130,9 @@ fn host_get_interface_name(
     }
     let name = unsafe { caller.data().engine().interface_name(id as u64) };
     let Some(name) = name else { return -1 };
-    let Some(memory) = get_memory(&mut caller) else { return -1 };
+    let Some(memory) = get_memory(&mut caller) else {
+        return -1;
+    };
     let bytes = name.as_bytes();
     let write_len = bytes.len().min(out_len as usize);
     let data = memory.data_mut(&mut caller);
@@ -132,7 +156,9 @@ fn host_get_interface_mode(caller: Caller<'_, StoreData>, id: i64) -> i32 {
 fn host_get_transport_identity(mut caller: Caller<'_, StoreData>, out_ptr: i32) -> i32 {
     let hash = unsafe { caller.data().engine().identity_hash() };
     let Some(hash) = hash else { return 0 };
-    let Some(memory) = get_memory(&mut caller) else { return 0 };
+    let Some(memory) = get_memory(&mut caller) else {
+        return 0;
+    };
     let data = memory.data_mut(&mut caller);
     let out = out_ptr as usize;
     if out + 16 > data.len() {
@@ -154,9 +180,13 @@ fn host_get_announce_rate(caller: Caller<'_, StoreData>, id: i64) -> i32 {
 /// Get the state of a link. Returns the state as u8 (Pending=0, Handshake=1, Active=2,
 /// Stale=3, Closed=4), or -1 if the link is not found.
 fn host_get_link_state(mut caller: Caller<'_, StoreData>, link_hash_ptr: i32) -> i32 {
-    let Some(memory) = get_memory(&mut caller) else { return -1 };
+    let Some(memory) = get_memory(&mut caller) else {
+        return -1;
+    };
     let data = memory.data(&caller);
-    let Some(hash) = read_16(data, link_hash_ptr as usize) else { return -1 };
+    let Some(hash) = read_16(data, link_hash_ptr as usize) else {
+        return -1;
+    };
     match unsafe { caller.data().engine().link_state(&hash) } {
         Some(state) => state as i32,
         None => -1,
@@ -173,7 +203,9 @@ fn host_inject_action(mut caller: Caller<'_, StoreData>, action_ptr: i32, action
     if action_ptr < 0 || action_len <= 0 {
         return -1;
     }
-    let Some(memory) = get_memory(&mut caller) else { return -1 };
+    let Some(memory) = get_memory(&mut caller) else {
+        return -1;
+    };
     let data = memory.data(&caller);
     match crate::arena::read_action_wire(data, action_ptr as usize, action_len as usize) {
         Some(action) => {

@@ -1,14 +1,14 @@
-pub mod types;
-pub mod parts;
 pub mod advertisement;
+pub mod parts;
 pub mod proof;
-pub mod window;
-pub mod sender;
 pub mod receiver;
+pub mod sender;
+pub mod types;
+pub mod window;
 
-pub use types::{ResourceStatus, ResourceAction, ResourceError, AdvFlags};
 pub use advertisement::ResourceAdvertisement;
-pub use proof::{compute_resource_hash, compute_expected_proof};
-pub use sender::ResourceSender;
+pub use proof::{compute_expected_proof, compute_resource_hash};
 pub use receiver::ResourceReceiver;
+pub use sender::ResourceSender;
+pub use types::{AdvFlags, ResourceAction, ResourceError, ResourceStatus};
 pub use window::WindowState;

@@ -1,11 +1,11 @@
 extern crate rns_core;
 extern crate rns_crypto;
 
-use rns_core::constants::*;
-use rns_core::resource::sender::ResourceSender;
-use rns_core::resource::receiver::ResourceReceiver;
-use rns_core::resource::types::*;
 use rns_core::buffer::types::NoopCompressor;
+use rns_core::constants::*;
+use rns_core::resource::receiver::ResourceReceiver;
+use rns_core::resource::sender::ResourceSender;
+use rns_core::resource::types::*;
 
 fn identity_encrypt(data: &[u8]) -> Vec<u8> {
     data.to_vec()
@@ -46,15 +46,9 @@ fn test_full_cycle_single_part() {
     let adv_data = sender.get_advertisement(0);
 
     // Receiver creates from advertisement
-    let mut receiver = ResourceReceiver::from_advertisement(
-        &adv_data,
-        RESOURCE_SDU,
-        0.5,
-        1000.0,
-        None,
-        None,
-    )
-    .unwrap();
+    let mut receiver =
+        ResourceReceiver::from_advertisement(&adv_data, RESOURCE_SDU, 0.5, 1000.0, None, None)
+            .unwrap();
 
     // Accept
     let req_actions = receiver.accept(1001.0);
@@ -106,7 +100,9 @@ fn test_full_cycle_single_part() {
     // Sender validates proof
     let proof_result = sender.handle_proof(&proof_data, 1004.0);
     assert_eq!(sender.status, ResourceStatus::Complete);
-    assert!(proof_result.iter().any(|a| matches!(a, ResourceAction::Completed)));
+    assert!(proof_result
+        .iter()
+        .any(|a| matches!(a, ResourceAction::Completed)));
 }
 
 /// Full cycle with multi-part data (> 3 * SDU).
@@ -142,15 +138,9 @@ fn test_full_cycle_multi_part() {
     assert!(sender.total_parts() >= 3);
 
     let adv_data = sender.get_advertisement(0);
-    let mut receiver = ResourceReceiver::from_advertisement(
-        &adv_data,
-        RESOURCE_SDU,
-        0.5,
-        1000.0,
-        None,
-        None,
-    )
-    .unwrap();
+    let mut receiver =
+        ResourceReceiver::from_advertisement(&adv_data, RESOURCE_SDU, 0.5, 1000.0, None, None)
+            .unwrap();
 
     // Transfer loop
     let req_actions = receiver.accept(1001.0);
@@ -254,15 +244,9 @@ fn test_full_cycle_with_metadata() {
     assert!(sender.flags.has_metadata);
 
     let adv_data = sender.get_advertisement(0);
-    let mut receiver = ResourceReceiver::from_advertisement(
-        &adv_data,
-        RESOURCE_SDU,
-        0.5,
-        1000.0,
-        None,
-        None,
-    )
-    .unwrap();
+    let mut receiver =
+        ResourceReceiver::from_advertisement(&adv_data, RESOURCE_SDU, 0.5, 1000.0, None, None)
+            .unwrap();
 
     assert!(receiver.has_metadata);
 
@@ -290,7 +274,9 @@ fn test_full_cycle_with_metadata() {
     let (recv_data, recv_meta) = assemble_actions
         .iter()
         .find_map(|a| match a {
-            ResourceAction::DataReceived { data, metadata } => Some((data.clone(), metadata.clone())),
+            ResourceAction::DataReceived { data, metadata } => {
+                Some((data.clone(), metadata.clone()))
+            }
             _ => None,
         })
         .unwrap();
@@ -337,7 +323,9 @@ fn test_cancel_from_sender() {
 
     let cancel_actions = sender.cancel();
     assert_eq!(sender.status, ResourceStatus::Failed);
-    assert!(cancel_actions.iter().any(|a| matches!(a, ResourceAction::SendCancelInitiator(_))));
+    assert!(cancel_actions
+        .iter()
+        .any(|a| matches!(a, ResourceAction::SendCancelInitiator(_))));
 
     // Receiver gets the cancel
     let adv_data = {
@@ -362,15 +350,9 @@ fn test_cancel_from_sender() {
         .unwrap();
         s.get_advertisement(0)
     };
-    let mut receiver = ResourceReceiver::from_advertisement(
-        &adv_data,
-        RESOURCE_SDU,
-        0.5,
-        1000.0,
-        None,
-        None,
-    )
-    .unwrap();
+    let mut receiver =
+        ResourceReceiver::from_advertisement(&adv_data, RESOURCE_SDU, 0.5, 1000.0, None, None)
+            .unwrap();
     receiver.accept(1001.0);
 
     let _cancel_result = receiver.handle_cancel();
@@ -401,19 +383,15 @@ fn test_reject_from_receiver() {
     .unwrap();
 
     let adv_data = sender.get_advertisement(0);
-    let mut receiver = ResourceReceiver::from_advertisement(
-        &adv_data,
-        RESOURCE_SDU,
-        0.5,
-        1000.0,
-        None,
-        None,
-    )
-    .unwrap();
+    let mut receiver =
+        ResourceReceiver::from_advertisement(&adv_data, RESOURCE_SDU, 0.5, 1000.0, None, None)
+            .unwrap();
 
     let reject_actions = receiver.reject();
     assert_eq!(receiver.status, ResourceStatus::Rejected);
-    assert!(reject_actions.iter().any(|a| matches!(a, ResourceAction::SendCancelReceiver(_))));
+    assert!(reject_actions
+        .iter()
+        .any(|a| matches!(a, ResourceAction::SendCancelReceiver(_))));
 
     // Sender handles the rejection
     let _reject_result = sender.handle_reject();
@@ -448,15 +426,9 @@ fn test_simulated_packet_loss() {
     .unwrap();
 
     let adv_data = sender.get_advertisement(0);
-    let mut receiver = ResourceReceiver::from_advertisement(
-        &adv_data,
-        RESOURCE_SDU,
-        0.5,
-        1000.0,
-        None,
-        None,
-    )
-    .unwrap();
+    let mut receiver =
+        ResourceReceiver::from_advertisement(&adv_data, RESOURCE_SDU, 0.5, 1000.0, None, None)
+            .unwrap();
 
     // Accept
     let req_actions = receiver.accept(1001.0);
@@ -570,7 +542,12 @@ fn test_hashmap_exhaustion_and_hmu() {
         data[i] = (pos ^ (pos >> 8) ^ (pos >> 16)) as u8;
     }
     // Need a large unique seed for 76+ parts to avoid hash collisions
-    let seed: Vec<u8> = (0u8..=255).cycle().take(1024).enumerate().map(|(i, b)| b.wrapping_add(i as u8)).collect();
+    let seed: Vec<u8> = (0u8..=255)
+        .cycle()
+        .take(1024)
+        .enumerate()
+        .map(|(i, b)| b.wrapping_add(i as u8))
+        .collect();
     let mut rng = rns_crypto::FixedRng::new(&seed);
 
     let mut sender = ResourceSender::new(
@@ -593,19 +570,16 @@ fn test_hashmap_exhaustion_and_hmu() {
     .unwrap();
 
     // Should have > 74 parts
-    assert!(sender.total_parts() > RESOURCE_HASHMAP_MAX_LEN,
-        "Expected > 74 parts, got {}", sender.total_parts());
+    assert!(
+        sender.total_parts() > RESOURCE_HASHMAP_MAX_LEN,
+        "Expected > 74 parts, got {}",
+        sender.total_parts()
+    );
 
     let adv_data = sender.get_advertisement(0);
-    let mut receiver = ResourceReceiver::from_advertisement(
-        &adv_data,
-        RESOURCE_SDU,
-        0.5,
-        1000.0,
-        None,
-        None,
-    )
-    .unwrap();
+    let mut receiver =
+        ResourceReceiver::from_advertisement(&adv_data, RESOURCE_SDU, 0.5, 1000.0, None, None)
+            .unwrap();
 
     // Accept and start transfer loop
     let req_actions = receiver.accept(1001.0);
@@ -624,8 +598,10 @@ fn test_hashmap_exhaustion_and_hmu() {
     loop {
         iteration += 1;
         if iteration > 200 {
-            panic!("Transfer loop exceeded max iterations at received={}/{}",
-                   receiver.received_count, receiver.total_parts);
+            panic!(
+                "Transfer loop exceeded max iterations at received={}/{}",
+                receiver.received_count, receiver.total_parts
+            );
         }
 
         if pending_requests.is_empty() {
@@ -661,7 +637,8 @@ fn test_hashmap_exhaustion_and_hmu() {
         for action in &send_actions {
             if let ResourceAction::SendHmu(hmu_data) = action {
                 hmu_count += 1;
-                let hmu_actions = receiver.handle_hashmap_update(hmu_data, 1003.0 + iteration as f64);
+                let hmu_actions =
+                    receiver.handle_hashmap_update(hmu_data, 1003.0 + iteration as f64);
                 for ha in &hmu_actions {
                     if let ResourceAction::SendRequest(rd) = ha {
                         pending_requests.push(rd.clone());

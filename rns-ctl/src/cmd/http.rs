@@ -4,12 +4,12 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use rns_crypto::Rng;
 use rns_crypto::identity::Identity;
+use rns_crypto::Rng;
 
-use crate::{bridge, config, encode, server, state};
 use crate::api;
 use crate::args::Args;
+use crate::{bridge, config, encode, server, state};
 
 pub fn run(args: Args) {
     if args.has("help") {
@@ -29,7 +29,13 @@ pub fn run(args: Args) {
         _ => "trace",
     };
     if std::env::var("RUST_LOG").is_err() {
-        std::env::set_var("RUST_LOG", format!("rns_ctl={},rns_net={},rns_hooks={}", log_level, log_level, log_level));
+        std::env::set_var(
+            "RUST_LOG",
+            format!(
+                "rns_ctl={},rns_net={},rns_hooks={}",
+                log_level, log_level, log_level
+            ),
+        );
     }
     env_logger::init();
 
@@ -124,18 +130,16 @@ pub fn run(args: Args) {
     #[cfg(feature = "tls")]
     let tls_config = {
         match (&cfg.tls_cert, &cfg.tls_key) {
-            (Some(cert), Some(key)) => {
-                match crate::tls::load_tls_config(cert, key) {
-                    Ok(config) => {
-                        log::info!("TLS enabled with cert={} key={}", cert, key);
-                        Some(config)
-                    }
-                    Err(e) => {
-                        log::error!("Failed to load TLS config: {}", e);
-                        std::process::exit(1);
-                    }
+            (Some(cert), Some(key)) => match crate::tls::load_tls_config(cert, key) {
+                Ok(config) => {
+                    log::info!("TLS enabled with cert={} key={}", cert, key);
+                    Some(config)
                 }
-            }
+                Err(e) => {
+                    log::error!("Failed to load TLS config: {}", e);
+                    std::process::exit(1);
+                }
+            },
             (Some(_), None) | (None, Some(_)) => {
                 log::error!("Both --tls-cert and --tls-key must be provided together");
                 std::process::exit(1);
@@ -147,7 +151,9 @@ pub fn run(args: Args) {
     #[cfg(not(feature = "tls"))]
     {
         if cfg.tls_cert.is_some() || cfg.tls_key.is_some() {
-            log::error!("TLS options require the 'tls' feature. Rebuild with: cargo build --features tls");
+            log::error!(
+                "TLS options require the 'tls' feature. Rebuild with: cargo build --features tls"
+            );
             std::process::exit(1);
         }
     }

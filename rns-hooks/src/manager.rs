@@ -49,15 +49,9 @@ impl HookManager {
 
     /// Check that the module exports `__rns_abi_version() -> i32` and that
     /// the returned value matches [`HOST_ABI_VERSION`].
-    fn validate_abi_version(
-        &self,
-        name: &str,
-        module: &wasmtime::Module,
-    ) -> Result<(), HookError> {
+    fn validate_abi_version(&self, name: &str, module: &wasmtime::Module) -> Result<(), HookError> {
         // Check if the export exists in the module's type information.
-        let has_export = module
-            .exports()
-            .any(|e| e.name() == "__rns_abi_version");
+        let has_export = module.exports().any(|e| e.name() == "__rns_abi_version");
         if !has_export {
             return Err(HookError::AbiVersionMismatch {
                 hook_name: name.to_string(),
@@ -68,12 +62,15 @@ impl HookManager {
 
         // Instantiate the module to call the function and read the version.
         static NULL_ENGINE: NullEngine = NullEngine;
-        let mut store = Store::new(self.runtime.engine(), StoreData {
-            engine_access: &NULL_ENGINE as *const dyn EngineAccess,
-            now: 0.0,
-            injected_actions: Vec::new(),
-            log_messages: Vec::new(),
-        });
+        let mut store = Store::new(
+            self.runtime.engine(),
+            StoreData {
+                engine_access: &NULL_ENGINE as *const dyn EngineAccess,
+                now: 0.0,
+                injected_actions: Vec::new(),
+                log_messages: Vec::new(),
+            },
+        );
         store
             .set_fuel(self.runtime.fuel())
             .map_err(|e| HookError::CompileError(e.to_string()))?;
@@ -85,15 +82,13 @@ impl HookManager {
 
         let func = instance
             .get_typed_func::<(), i32>(&mut store, "__rns_abi_version")
-            .map_err(|e| HookError::CompileError(format!(
-                "__rns_abi_version has wrong signature: {}", e
-            )))?;
+            .map_err(|e| {
+                HookError::CompileError(format!("__rns_abi_version has wrong signature: {}", e))
+            })?;
 
         let version = func
             .call(&mut store, ())
-            .map_err(|e| HookError::Trap(format!(
-                "__rns_abi_version trapped: {}", e
-            )))?;
+            .map_err(|e| HookError::Trap(format!("__rns_abi_version trapped: {}", e)))?;
 
         if version != HOST_ABI_VERSION {
             return Err(HookError::AbiVersionMismatch {
@@ -143,9 +138,8 @@ impl HookManager {
 
         // Safety: transmute erases the lifetime on the fat pointer. The pointer
         // is only dereferenced during this function call, while the borrow is valid.
-        let engine_access_ptr: *const dyn EngineAccess = unsafe {
-            std::mem::transmute(engine_access as *const dyn EngineAccess)
-        };
+        let engine_access_ptr: *const dyn EngineAccess =
+            unsafe { std::mem::transmute(engine_access as *const dyn EngineAccess) };
 
         // Take the cached store+instance out of program (or create fresh).
         // We take ownership to avoid borrow-checker conflicts with program.record_*().
@@ -474,7 +468,9 @@ mod tests {
     #[test]
     fn drop_hook() {
         let mgr = make_manager();
-        let mut prog = mgr.compile("dropper".into(), WAT_DROP.as_bytes(), 0).unwrap();
+        let mut prog = mgr
+            .compile("dropper".into(), WAT_DROP.as_bytes(), 0)
+            .unwrap();
         let ctx = HookContext::Tick;
         let result = mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0, None);
         let exec = result.unwrap();
@@ -553,9 +549,7 @@ mod tests {
         let p1 = mgr
             .compile("alpha".into(), WAT_CONTINUE.as_bytes(), 10)
             .unwrap();
-        let p2 = mgr
-            .compile("beta".into(), WAT_DROP.as_bytes(), 20)
-            .unwrap();
+        let p2 = mgr.compile("beta".into(), WAT_DROP.as_bytes(), 20).unwrap();
 
         slot.attach(p1);
         assert_eq!(slot.programs.len(), 1);
@@ -575,7 +569,10 @@ mod tests {
         let removed2 = slot.detach("alpha");
         assert!(removed2.is_some());
         assert!(slot.programs.is_empty());
-        assert_eq!(slot.runner as *const () as usize, crate::hooks::hook_noop as *const () as usize);
+        assert_eq!(
+            slot.runner as *const () as usize,
+            crate::hooks::hook_noop as *const () as usize
+        );
     }
 
     #[test]
@@ -648,15 +645,33 @@ mod tests {
     }
 
     impl EngineAccess for MockEngineCustom {
-        fn has_path(&self, _: &[u8; 16]) -> bool { false }
-        fn hops_to(&self, _: &[u8; 16]) -> Option<u8> { None }
-        fn next_hop(&self, _: &[u8; 16]) -> Option<[u8; 16]> { None }
-        fn is_blackholed(&self, _: &[u8; 16]) -> bool { false }
-        fn interface_name(&self, _: u64) -> Option<String> { None }
-        fn interface_mode(&self, _: u64) -> Option<u8> { None }
-        fn identity_hash(&self) -> Option<[u8; 16]> { None }
-        fn announce_rate(&self, _: u64) -> Option<i32> { self.announce_rate_val }
-        fn link_state(&self, _: &[u8; 16]) -> Option<u8> { self.link_state_val }
+        fn has_path(&self, _: &[u8; 16]) -> bool {
+            false
+        }
+        fn hops_to(&self, _: &[u8; 16]) -> Option<u8> {
+            None
+        }
+        fn next_hop(&self, _: &[u8; 16]) -> Option<[u8; 16]> {
+            None
+        }
+        fn is_blackholed(&self, _: &[u8; 16]) -> bool {
+            false
+        }
+        fn interface_name(&self, _: u64) -> Option<String> {
+            None
+        }
+        fn interface_mode(&self, _: u64) -> Option<u8> {
+            None
+        }
+        fn identity_hash(&self) -> Option<[u8; 16]> {
+            None
+        }
+        fn announce_rate(&self, _: u64) -> Option<i32> {
+            self.announce_rate_val
+        }
+        fn link_state(&self, _: &[u8; 16]) -> Option<u8> {
+            self.link_state_val
+        }
     }
 
     /// WAT: calls host_get_announce_rate(42), if result >= 0 → Drop, else Continue.
@@ -688,22 +703,36 @@ mod tests {
     #[test]
     fn host_get_announce_rate_found() {
         // announce_rate returns Some(1500) (1.5 Hz * 1000) → Drop
-        let engine = MockEngineCustom { announce_rate_val: Some(1500), link_state_val: None };
+        let engine = MockEngineCustom {
+            announce_rate_val: Some(1500),
+            link_state_val: None,
+        };
         let mgr = make_manager();
-        let mut prog = mgr.compile("rate".into(), WAT_ANNOUNCE_RATE.as_bytes(), 0).unwrap();
+        let mut prog = mgr
+            .compile("rate".into(), WAT_ANNOUNCE_RATE.as_bytes(), 0)
+            .unwrap();
         let ctx = HookContext::Tick;
-        let exec = mgr.execute_program(&mut prog, &ctx, &engine, 0.0, None).unwrap();
+        let exec = mgr
+            .execute_program(&mut prog, &ctx, &engine, 0.0, None)
+            .unwrap();
         assert!(exec.hook_result.unwrap().is_drop());
     }
 
     #[test]
     fn host_get_announce_rate_not_found() {
         // announce_rate returns None → -1 → Continue
-        let engine = MockEngineCustom { announce_rate_val: None, link_state_val: None };
+        let engine = MockEngineCustom {
+            announce_rate_val: None,
+            link_state_val: None,
+        };
         let mgr = make_manager();
-        let mut prog = mgr.compile("rate".into(), WAT_ANNOUNCE_RATE.as_bytes(), 0).unwrap();
+        let mut prog = mgr
+            .compile("rate".into(), WAT_ANNOUNCE_RATE.as_bytes(), 0)
+            .unwrap();
         let ctx = HookContext::Tick;
-        let exec = mgr.execute_program(&mut prog, &ctx, &engine, 0.0, None).unwrap();
+        let exec = mgr
+            .execute_program(&mut prog, &ctx, &engine, 0.0, None)
+            .unwrap();
         assert_eq!(exec.hook_result.unwrap().verdict, Verdict::Continue as u32);
     }
 
@@ -737,22 +766,36 @@ mod tests {
     #[test]
     fn host_get_link_state_active() {
         // link_state returns Some(2) (Active) → Drop
-        let engine = MockEngineCustom { announce_rate_val: None, link_state_val: Some(2) };
+        let engine = MockEngineCustom {
+            announce_rate_val: None,
+            link_state_val: Some(2),
+        };
         let mgr = make_manager();
-        let mut prog = mgr.compile("linkst".into(), WAT_LINK_STATE.as_bytes(), 0).unwrap();
+        let mut prog = mgr
+            .compile("linkst".into(), WAT_LINK_STATE.as_bytes(), 0)
+            .unwrap();
         let ctx = HookContext::Tick;
-        let exec = mgr.execute_program(&mut prog, &ctx, &engine, 0.0, None).unwrap();
+        let exec = mgr
+            .execute_program(&mut prog, &ctx, &engine, 0.0, None)
+            .unwrap();
         assert!(exec.hook_result.unwrap().is_drop());
     }
 
     #[test]
     fn host_get_link_state_not_found() {
         // link_state returns None → -1, which != 2 → Continue
-        let engine = MockEngineCustom { announce_rate_val: None, link_state_val: None };
+        let engine = MockEngineCustom {
+            announce_rate_val: None,
+            link_state_val: None,
+        };
         let mgr = make_manager();
-        let mut prog = mgr.compile("linkst".into(), WAT_LINK_STATE.as_bytes(), 0).unwrap();
+        let mut prog = mgr
+            .compile("linkst".into(), WAT_LINK_STATE.as_bytes(), 0)
+            .unwrap();
         let ctx = HookContext::Tick;
-        let exec = mgr.execute_program(&mut prog, &ctx, &engine, 0.0, None).unwrap();
+        let exec = mgr
+            .execute_program(&mut prog, &ctx, &engine, 0.0, None)
+            .unwrap();
         assert_eq!(exec.hook_result.unwrap().verdict, Verdict::Continue as u32);
     }
 
@@ -801,9 +844,13 @@ mod tests {
     #[test]
     fn host_inject_action_send() {
         let mgr = make_manager();
-        let mut prog = mgr.compile("inject".into(), WAT_INJECT_ACTION.as_bytes(), 0).unwrap();
+        let mut prog = mgr
+            .compile("inject".into(), WAT_INJECT_ACTION.as_bytes(), 0)
+            .unwrap();
         let ctx = HookContext::Tick;
-        let exec = mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0, None).unwrap();
+        let exec = mgr
+            .execute_program(&mut prog, &ctx, &NullEngine, 0.0, None)
+            .unwrap();
         assert_eq!(exec.hook_result.unwrap().verdict, Verdict::Continue as u32);
         assert_eq!(exec.injected_actions.len(), 1);
         match &exec.injected_actions[0] {
@@ -847,7 +894,9 @@ mod tests {
         let mgr = make_manager();
         let mut prog = mgr.compile("mod".into(), WAT_MODIFY.as_bytes(), 0).unwrap();
         let ctx = HookContext::Tick;
-        let exec = mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0, None).unwrap();
+        let exec = mgr
+            .execute_program(&mut prog, &ctx, &NullEngine, 0.0, None)
+            .unwrap();
         let r = exec.hook_result.unwrap();
         assert_eq!(r.verdict, Verdict::Modify as u32);
         let data = exec.modified_data.unwrap();
@@ -859,13 +908,19 @@ mod tests {
         // Chain: inject_action module (Continue) + Drop module
         // Both should contribute to the result; injected actions should be accumulated
         let mgr = make_manager();
-        let injector = mgr.compile("injector".into(), WAT_INJECT_ACTION.as_bytes(), 100).unwrap();
-        let dropper = mgr.compile("dropper".into(), WAT_DROP.as_bytes(), 0).unwrap();
+        let injector = mgr
+            .compile("injector".into(), WAT_INJECT_ACTION.as_bytes(), 100)
+            .unwrap();
+        let dropper = mgr
+            .compile("dropper".into(), WAT_DROP.as_bytes(), 0)
+            .unwrap();
         let mut programs = vec![injector, dropper];
         programs.sort_by(|a, b| b.priority.cmp(&a.priority));
 
         let ctx = HookContext::Tick;
-        let exec = mgr.run_chain(&mut programs, &ctx, &NullEngine, 0.0).unwrap();
+        let exec = mgr
+            .run_chain(&mut programs, &ctx, &NullEngine, 0.0)
+            .unwrap();
         // Chain should drop (second hook)
         assert!(exec.hook_result.unwrap().is_drop());
         // But injected action from first hook should be present
@@ -912,36 +967,51 @@ mod tests {
     #[test]
     fn instance_persistence_counter() {
         let mgr = make_manager();
-        let mut prog = mgr.compile("counter".into(), WAT_COUNTER.as_bytes(), 0).unwrap();
+        let mut prog = mgr
+            .compile("counter".into(), WAT_COUNTER.as_bytes(), 0)
+            .unwrap();
         let ctx = HookContext::Tick;
 
         // Call 3 times — counter should increment across calls
-        let exec1 = mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0, None).unwrap();
+        let exec1 = mgr
+            .execute_program(&mut prog, &ctx, &NullEngine, 0.0, None)
+            .unwrap();
         assert_eq!(extract_counter(&exec1), 1);
 
-        let exec2 = mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0, None).unwrap();
+        let exec2 = mgr
+            .execute_program(&mut prog, &ctx, &NullEngine, 0.0, None)
+            .unwrap();
         assert_eq!(extract_counter(&exec2), 2);
 
-        let exec3 = mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0, None).unwrap();
+        let exec3 = mgr
+            .execute_program(&mut prog, &ctx, &NullEngine, 0.0, None)
+            .unwrap();
         assert_eq!(extract_counter(&exec3), 3);
     }
 
     #[test]
     fn instance_persistence_resets_on_drop_cache() {
         let mgr = make_manager();
-        let mut prog = mgr.compile("counter".into(), WAT_COUNTER.as_bytes(), 0).unwrap();
+        let mut prog = mgr
+            .compile("counter".into(), WAT_COUNTER.as_bytes(), 0)
+            .unwrap();
         let ctx = HookContext::Tick;
 
         // Increment twice
-        mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0, None).unwrap();
-        let exec2 = mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0, None).unwrap();
+        mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0, None)
+            .unwrap();
+        let exec2 = mgr
+            .execute_program(&mut prog, &ctx, &NullEngine, 0.0, None)
+            .unwrap();
         assert_eq!(extract_counter(&exec2), 2);
 
         // Drop cache (simulates reload)
         prog.drop_cache();
 
         // Counter should restart at 1
-        let exec3 = mgr.execute_program(&mut prog, &ctx, &NullEngine, 0.0, None).unwrap();
+        let exec3 = mgr
+            .execute_program(&mut prog, &ctx, &NullEngine, 0.0, None)
+            .unwrap();
         assert_eq!(extract_counter(&exec3), 1);
     }
 
@@ -987,12 +1057,19 @@ mod tests {
         let mgr = make_manager();
         let result = mgr.compile("no_abi".into(), WAT_NO_ABI_VERSION.as_bytes(), 0);
         match result {
-            Err(HookError::AbiVersionMismatch { hook_name, expected, found }) => {
+            Err(HookError::AbiVersionMismatch {
+                hook_name,
+                expected,
+                found,
+            }) => {
                 assert_eq!(hook_name, "no_abi");
                 assert_eq!(expected, HOST_ABI_VERSION);
                 assert_eq!(found, None);
             }
-            other => panic!("expected AbiVersionMismatch with found=None, got {:?}", other.err()),
+            other => panic!(
+                "expected AbiVersionMismatch with found=None, got {:?}",
+                other.err()
+            ),
         }
     }
 
@@ -1001,12 +1078,19 @@ mod tests {
         let mgr = make_manager();
         let result = mgr.compile("bad_abi".into(), WAT_WRONG_ABI_VERSION.as_bytes(), 0);
         match result {
-            Err(HookError::AbiVersionMismatch { hook_name, expected, found }) => {
+            Err(HookError::AbiVersionMismatch {
+                hook_name,
+                expected,
+                found,
+            }) => {
                 assert_eq!(hook_name, "bad_abi");
                 assert_eq!(expected, HOST_ABI_VERSION);
                 assert_eq!(found, Some(9999));
             }
-            other => panic!("expected AbiVersionMismatch with found=Some(9999), got {:?}", other.err()),
+            other => panic!(
+                "expected AbiVersionMismatch with found=Some(9999), got {:?}",
+                other.err()
+            ),
         }
     }
 
@@ -1014,6 +1098,9 @@ mod tests {
     fn accepts_correct_abi_version() {
         let mgr = make_manager();
         let result = mgr.compile("good_abi".into(), WAT_CONTINUE.as_bytes(), 0);
-        assert!(result.is_ok(), "compile should succeed with correct ABI version");
+        assert!(
+            result.is_ok(),
+            "compile should succeed with correct ABI version"
+        );
     }
 }

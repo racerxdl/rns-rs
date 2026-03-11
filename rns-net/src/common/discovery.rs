@@ -357,8 +357,12 @@ fn generate_config_entry(
     ifac_netkey: Option<&str>,
 ) -> Option<String> {
     let transport_id_hex = hex_encode(transport_id);
-    let netname_str = ifac_netname.map(|n| format!("\n  network_name = {}", n)).unwrap_or_default();
-    let netkey_str = ifac_netkey.map(|k| format!("\n  passphrase = {}", k)).unwrap_or_default();
+    let netname_str = ifac_netname
+        .map(|n| format!("\n  network_name = {}", n))
+        .unwrap_or_default();
+    let netkey_str = ifac_netkey
+        .map(|k| format!("\n  passphrase = {}", k))
+        .unwrap_or_default();
     let identity_str = format!("\n  transport_identity = {}", transport_id_hex);
 
     match interface_type {
@@ -378,30 +382,42 @@ fn generate_config_entry(
             ))
         }
         "RNodeInterface" => {
-            let freq_str = frequency.map(|f| format!("\n  frequency = {}", f)).unwrap_or_default();
-            let bw_str = bandwidth.map(|b| format!("\n  bandwidth = {}", b)).unwrap_or_default();
-            let sf_str = spreading_factor.map(|s| format!("\n  spreadingfactor = {}", s)).unwrap_or_default();
-            let cr_str = coding_rate.map(|c| format!("\n  codingrate = {}", c)).unwrap_or_default();
+            let freq_str = frequency
+                .map(|f| format!("\n  frequency = {}", f))
+                .unwrap_or_default();
+            let bw_str = bandwidth
+                .map(|b| format!("\n  bandwidth = {}", b))
+                .unwrap_or_default();
+            let sf_str = spreading_factor
+                .map(|s| format!("\n  spreadingfactor = {}", s))
+                .unwrap_or_default();
+            let cr_str = coding_rate
+                .map(|c| format!("\n  codingrate = {}", c))
+                .unwrap_or_default();
             Some(format!(
                 "[[{}]]\n  type = RNodeInterface\n  enabled = yes\n  port = {}{}{}{}{}{}{}{}",
                 name, "", freq_str, bw_str, sf_str, cr_str, identity_str, netname_str, netkey_str
             ))
         }
         "KISSInterface" => {
-            let freq_str = frequency.map(|f| format!("\n  # Frequency: {}", f)).unwrap_or_default();
-            let bw_str = bandwidth.map(|b| format!("\n  # Bandwidth: {}", b)).unwrap_or_default();
-            let mod_str = modulation.map(|m| format!("\n  # Modulation: {}", m)).unwrap_or_default();
+            let freq_str = frequency
+                .map(|f| format!("\n  # Frequency: {}", f))
+                .unwrap_or_default();
+            let bw_str = bandwidth
+                .map(|b| format!("\n  # Bandwidth: {}", b))
+                .unwrap_or_default();
+            let mod_str = modulation
+                .map(|m| format!("\n  # Modulation: {}", m))
+                .unwrap_or_default();
             Some(format!(
                 "[[{}]]\n  type = KISSInterface\n  enabled = yes\n  port = {}{}{}{}{}{}{}",
                 name, "", freq_str, bw_str, mod_str, identity_str, netname_str, netkey_str
             ))
         }
-        "WeaveInterface" => {
-            Some(format!(
-                "[[{}]]\n  type = WeaveInterface\n  enabled = yes\n  port = {}{}{}{}",
-                name, "", identity_str, netname_str, netkey_str
-            ))
-        }
+        "WeaveInterface" => Some(format!(
+            "[[{}]]\n  type = WeaveInterface\n  enabled = yes\n  port = {}{}{}{}",
+            name, "", identity_str, netname_str, netkey_str
+        )),
         _ => None,
     }
 }
@@ -431,7 +447,11 @@ pub fn is_hostname(s: &str) -> bool {
         return false;
     }
     // Last component should not be all numeric
-    if components.last().map(|c| c.chars().all(|ch| ch.is_ascii_digit())).unwrap_or(false) {
+    if components
+        .last()
+        .map(|c| c.chars().all(|ch| ch.is_ascii_digit()))
+        .unwrap_or(false)
+    {
         return false;
     }
     components.iter().all(|c| {
@@ -484,7 +504,9 @@ pub fn filter_and_sort_interfaces(
         if value_cmp != std::cmp::Ordering::Equal {
             return value_cmp;
         }
-        b.last_heard.partial_cmp(&a.last_heard).unwrap_or(std::cmp::Ordering::Equal)
+        b.last_heard
+            .partial_cmp(&a.last_heard)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 }
 

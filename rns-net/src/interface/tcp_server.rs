@@ -53,11 +53,7 @@ impl Writer for TcpServerWriter {
 ///
 /// `next_id` is shared with the node for allocating unique InterfaceIds
 /// for each connected client.
-pub fn start(
-    config: TcpServerConfig,
-    tx: EventSender,
-    next_id: Arc<AtomicU64>,
-) -> io::Result<()> {
+pub fn start(config: TcpServerConfig, tx: EventSender, next_id: Arc<AtomicU64>) -> io::Result<()> {
     let addr = format!("{}:{}", config.listen_ip, config.listen_port);
     let listener = TcpListener::bind(&addr)?;
 
@@ -74,12 +70,7 @@ pub fn start(
 }
 
 /// Listener thread: accepts connections and spawns reader threads.
-fn listener_loop(
-    listener: TcpListener,
-    name: String,
-    tx: EventSender,
-    next_id: Arc<AtomicU64>,
-) {
+fn listener_loop(listener: TcpListener, name: String, tx: EventSender, next_id: Arc<AtomicU64>) {
     for stream_result in listener.incoming() {
         let stream = match stream_result {
             Ok(s) => s,
@@ -113,7 +104,9 @@ fn listener_loop(
             }
         };
 
-        let writer: Box<dyn Writer> = Box::new(TcpServerWriter { stream: writer_stream });
+        let writer: Box<dyn Writer> = Box::new(TcpServerWriter {
+            stream: writer_stream,
+        });
 
         let info = InterfaceInfo {
             id: client_id,
@@ -157,12 +150,7 @@ fn listener_loop(
 }
 
 /// Per-client reader thread: reads HDLC frames, sends to driver.
-fn client_reader_loop(
-    mut stream: TcpStream,
-    id: InterfaceId,
-    name: String,
-    tx: EventSender,
-) {
+fn client_reader_loop(mut stream: TcpStream, id: InterfaceId, name: String, tx: EventSender) {
     let mut decoder = hdlc::Decoder::new();
     let mut buf = [0u8; 4096];
 
@@ -198,14 +186,16 @@ fn client_reader_loop(
 
 // --- Factory implementation ---
 
+use super::{InterfaceConfigData, InterfaceFactory, StartContext, StartResult};
 use std::collections::HashMap;
-use super::{InterfaceFactory, InterfaceConfigData, StartContext, StartResult};
 
 /// Factory for `TCPServerInterface`.
 pub struct TcpServerFactory;
 
 impl InterfaceFactory for TcpServerFactory {
-    fn type_name(&self) -> &str { "TCPServerInterface" }
+    fn type_name(&self) -> &str {
+        "TCPServerInterface"
+    }
 
     fn parse_config(
         &self,
@@ -213,10 +203,12 @@ impl InterfaceFactory for TcpServerFactory {
         id: InterfaceId,
         params: &HashMap<String, String>,
     ) -> Result<Box<dyn InterfaceConfigData>, String> {
-        let listen_ip = params.get("listen_ip")
+        let listen_ip = params
+            .get("listen_ip")
             .cloned()
             .unwrap_or_else(|| "0.0.0.0".into());
-        let listen_port = params.get("listen_port")
+        let listen_port = params
+            .get("listen_port")
             .and_then(|v| v.parse().ok())
             .unwrap_or(4242);
 
@@ -233,7 +225,9 @@ impl InterfaceFactory for TcpServerFactory {
         config: Box<dyn InterfaceConfigData>,
         ctx: StartContext,
     ) -> io::Result<StartResult> {
-        let cfg = *config.into_any().downcast::<TcpServerConfig>()
+        let cfg = *config
+            .into_any()
+            .downcast::<TcpServerConfig>()
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "wrong config type"))?;
         start(cfg, ctx.tx, ctx.next_dynamic_id)?;
         Ok(StartResult::Listener)
@@ -342,7 +336,9 @@ mod tests {
         thread::sleep(Duration::from_millis(50));
 
         let mut client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
-        client.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
 
         // Get the writer from InterfaceUp
         let event = rx.recv_timeout(Duration::from_secs(1)).unwrap();
