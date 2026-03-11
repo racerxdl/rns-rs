@@ -4,13 +4,17 @@
 //! switches to TX, sends, then returns to RX. Each LoRa packet = one
 //! Reticulum frame (no HDLC/KISS framing).
 
+use core::num::NonZeroU32;
+
+use esp_idf_hal::delay::TickType;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use esp_idf_hal::gpio::{AnyIOPin, Input, Output, PinDriver};
+use esp_idf_hal::gpio::{AnyIOPin, Input, InterruptType, Output, PinDriver};
 use esp_idf_hal::spi::{self, SpiDeviceDriver, SpiDriver};
+use esp_idf_hal::task::notification::Notification;
 use esp_idf_hal::units::Hertz;
 
 use crate::config;
@@ -41,6 +45,7 @@ const IRQ_TX_DONE: u16 = 0x0001;
 const IRQ_RX_DONE: u16 = 0x0002;
 const IRQ_CRC_ERR: u16 = 0x0040;
 const IRQ_TIMEOUT: u16 = 0x0200;
+const IRQ_ALL: u16 = IRQ_TX_DONE | IRQ_RX_DONE | IRQ_CRC_ERR | IRQ_TIMEOUT;
 
 // Standby modes
 const STANDBY_RC: u8 = 0x00;
@@ -54,7 +59,6 @@ pub struct Radio {
     cs: PinDriver<'static, AnyIOPin, Output>,
     rst: PinDriver<'static, AnyIOPin, Output>,
     busy: PinDriver<'static, AnyIOPin, Input>,
-    dio1: PinDriver<'static, AnyIOPin, Input>,
 }
 
 impl Radio {
@@ -270,7 +274,7 @@ impl Radio {
         self.cmd(OPCODE_WRITE_BUFFER, &buf);
 
         // Clear all IRQs and start TX (no timeout)
-        self.clear_irq(0xFFFF);
+        self.clear_irq(IRQ_ALL);
         self.cmd(OPCODE_SET_TX, &[0x00, 0x00, 0x00]);
 
         // Wait for TxDone or timeout
@@ -426,7 +430,6 @@ pub fn init(
     cs: PinDriver<'static, AnyIOPin, Output>,
     rst: PinDriver<'static, AnyIOPin, Output>,
     busy: PinDriver<'static, AnyIOPin, Input>,
-    dio1: PinDriver<'static, AnyIOPin, Input>,
 ) -> std::io::Result<(SharedRadio, LoRaWriter)> {
     let spi_config = spi::config::Config::new()
         .baudrate(Hertz(2_000_000))
@@ -440,7 +443,6 @@ pub fn init(
         cs,
         rst,
         busy,
-        dio1,
     };
 
     radio.reset();
@@ -464,14 +466,28 @@ pub fn init(
 }
 
 /// Reader loop: polls for received frames and sends them to the event channel.
-/// Run this in a dedicated thread. Exits when `shutdown` is set to true.
+/// Run this in a dedicated thread. Exits when `shutdown` is set to true and
+/// returns the DIO1 pin to the caller for reuse in bridge mode.
 pub fn reader_loop(
     radio: SharedRadio,
     tx: std::sync::mpsc::Sender<crate::driver::Event>,
     interface_id: rns_core::transport::types::InterfaceId,
     shutdown: Arc<AtomicBool>,
-) {
+    mut dio1: PinDriver<'static, AnyIOPin, Input>,
+) -> PinDriver<'static, AnyIOPin, Input> {
     log::info!("LoRa reader loop started");
+
+    let notification = Notification::new();
+    let notifier = notification.notifier();
+
+    dio1.set_interrupt_type(InterruptType::PosEdge).ok();
+    unsafe {
+        dio1.subscribe_nonstatic(move || {
+            let _ = notifier.notify(NonZeroU32::new(1).unwrap());
+        })
+        .ok();
+    }
+
     loop {
         if shutdown.load(Ordering::SeqCst) {
             log::info!("LoRa reader: shutdown requested, exiting");
@@ -484,7 +500,7 @@ pub fn reader_loop(
         };
 
         if let Some(data) = frame {
-            log::info!("LoRa RX: {} bytes", data.len());
+            log::debug!("LoRa RX: {} bytes", data.len());
             if tx
                 .send(crate::driver::Event::Frame { interface_id, data })
                 .is_err()
@@ -492,9 +508,16 @@ pub fn reader_loop(
                 log::warn!("LoRa reader: event channel closed, exiting");
                 break;
             }
+            continue;
         }
 
-        // Poll interval — balance between latency and CPU usage
-        thread::sleep(Duration::from_millis(10));
+        if dio1.enable_interrupt().is_ok() {
+            let _ = notification.wait(TickType::new_millis(100).ticks());
+        } else {
+            thread::sleep(Duration::from_millis(10));
+        }
     }
+
+    let _ = dio1.unsubscribe();
+    dio1
 }

@@ -6,6 +6,11 @@
 
 use std::time::{Duration, Instant};
 
+use core::num::NonZeroU32;
+
+use esp_idf_hal::delay::{TickType, NON_BLOCK};
+use esp_idf_hal::gpio::{AnyIOPin, Input, InterruptType, PinDriver};
+use esp_idf_hal::task::notification::Notification;
 use esp_idf_hal::uart::UartDriver;
 
 use crate::display::SharedStats;
@@ -162,6 +167,7 @@ fn kiss_encode(cmd: u8, data: &[u8]) -> Vec<u8> {
 pub struct RNodeBridge<'a, 'b> {
     radio: SharedRadio,
     uart: &'b UartDriver<'a>,
+    dio1: PinDriver<'static, AnyIOPin, Input>,
     stats: Option<SharedStats>,
     pending_freq: Option<u32>,
     pending_bw: Option<u32>,
@@ -171,10 +177,16 @@ pub struct RNodeBridge<'a, 'b> {
 }
 
 impl<'a, 'b> RNodeBridge<'a, 'b> {
-    pub fn new(radio: SharedRadio, uart: &'b UartDriver<'a>, stats: Option<SharedStats>) -> Self {
+    pub fn new(
+        radio: SharedRadio,
+        uart: &'b UartDriver<'a>,
+        dio1: PinDriver<'static, AnyIOPin, Input>,
+        stats: Option<SharedStats>,
+    ) -> Self {
         Self {
             radio,
             uart,
+            dio1,
             stats,
             pending_freq: None,
             pending_bw: None,
@@ -185,50 +197,65 @@ impl<'a, 'b> RNodeBridge<'a, 'b> {
     }
 
     /// Run the RNode bridge loop. Blocks until serial goes idle or host sends LEAVE.
-    pub fn run(&mut self) -> BridgeExit {
+    pub fn run(mut self) -> (BridgeExit, PinDriver<'static, AnyIOPin, Input>) {
         log::info!("RNode bridge mode active");
 
         let mut decoder = KissDecoder::new();
         let mut rx_buf = [0u8; 512];
         let mut last_activity = Instant::now();
+        let notification = Notification::new();
+        let notifier = notification.notifier();
 
-        loop {
+        self.dio1.set_interrupt_type(InterruptType::PosEdge).ok();
+        unsafe {
+            self.dio1
+                .subscribe_nonstatic(move || {
+                    let _ = notifier.notify(NonZeroU32::new(1).unwrap());
+                })
+                .ok();
+        }
+
+        let exit = loop {
             // Check idle timeout
             if last_activity.elapsed() > IDLE_TIMEOUT {
                 log::info!("RNode bridge: idle timeout, reverting to standalone");
-                return BridgeExit::IdleTimeout;
+                break BridgeExit::IdleTimeout;
             }
 
-            // Poll serial RX (non-blocking with short timeout)
-            match self.uart.read(&mut rx_buf, 10) {
+            match self.uart.read(&mut rx_buf, NON_BLOCK) {
                 Ok(n) if n > 0 => {
                     last_activity = Instant::now();
                     let frames = decoder.feed(&rx_buf[..n]);
                     for frame in frames {
                         if self.handle_frame(frame) {
-                            return BridgeExit::Leave;
+                            let _ = self.dio1.unsubscribe();
+                            return (BridgeExit::Leave, self.dio1);
                         }
                     }
                 }
-                _ => {}
+                _ => {
+                    if self.dio1.enable_interrupt().is_ok() {
+                        let _ = notification.wait(TickType::new_millis(10).ticks());
+                    }
+                }
             }
 
-            // Poll LoRa RX
             let received = {
                 let mut radio = self.radio.lock().unwrap();
                 radio.try_receive()
             };
             if let Some(data) = received {
-                log::info!("RNode: LoRa RX {} bytes, forwarding to serial", data.len());
+                log::debug!("RNode: LoRa RX {} bytes, forwarding to serial", data.len());
                 if let Some(ref stats) = self.stats {
                     stats.lock().unwrap().bridge_rx_bytes += data.len() as u32;
                 }
                 let frame = kiss_encode(CMD_DATA, &data);
                 let _ = self.uart.write(&frame);
             }
+        };
 
-            std::thread::sleep(Duration::from_millis(5));
-        }
+        let _ = self.dio1.unsubscribe();
+        (exit, self.dio1)
     }
 
     /// Handle a decoded KISS frame from serial. Returns true if bridge should exit.
@@ -338,7 +365,7 @@ impl<'a, 'b> RNodeBridge<'a, 'b> {
             }
             CMD_DATA => {
                 if !frame.data.is_empty() {
-                    log::info!("RNode: TX {} bytes over LoRa", frame.data.len());
+                    log::debug!("RNode: TX {} bytes over LoRa", frame.data.len());
                     if let Some(ref stats) = self.stats {
                         stats.lock().unwrap().bridge_tx_bytes += frame.data.len() as u32;
                     }

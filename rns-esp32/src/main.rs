@@ -96,7 +96,7 @@ fn main() {
     let dio1 = PinDriver::input(AnyIOPin::from(peripherals.pins.gpio14)).expect("DIO1 pin");
 
     // Initialize LoRa radio
-    let (radio, writer) = lora::init(spi_driver, cs, rst, busy, dio1).expect("LoRa radio init");
+    let (radio, writer) = lora::init(spi_driver, cs, rst, busy).expect("LoRa radio init");
 
     // Initialize UART0 for RNode serial protocol (USB-UART bridge on Heltec V3)
     let uart_config = uart::config::Config::default().baudrate(Hertz(115200));
@@ -114,6 +114,7 @@ fn main() {
     let (tx, rx) = mpsc::channel();
 
     let interface_id = InterfaceId(1);
+    let mut dio1 = dio1;
 
     // Spawn button handler thread (always-on, GPIO0 = PRG button)
     let button_pin =
@@ -153,11 +154,18 @@ fn main() {
         let reader_radio = radio.clone();
         let reader_tx = tx.clone();
         let reader_shutdown = shutdown.clone();
+        let reader_dio1 = dio1;
         let reader_handle = std::thread::Builder::new()
             .name("lora_rx".into())
             .stack_size(4096)
             .spawn(move || {
-                lora::reader_loop(reader_radio, reader_tx, interface_id, reader_shutdown);
+                lora::reader_loop(
+                    reader_radio,
+                    reader_tx,
+                    interface_id,
+                    reader_shutdown,
+                    reader_dio1,
+                )
             })
             .expect("failed to spawn LoRa reader thread");
 
@@ -175,7 +183,7 @@ fn main() {
 
         // Signal mode-specific threads to stop
         shutdown.store(true, Ordering::SeqCst);
-        let _ = reader_handle.join();
+        dio1 = reader_handle.join().expect("LoRa reader thread panicked");
         let _ = tick_handle.join();
 
         match exit {
@@ -186,9 +194,14 @@ fn main() {
                 }
 
                 // Run bridge mode (blocks until idle timeout)
-                let mut bridge =
-                    rnode::RNodeBridge::new(radio.clone(), &uart, Some(display_stats.clone()));
-                let bridge_exit = bridge.run();
+                let bridge = rnode::RNodeBridge::new(
+                    radio.clone(),
+                    &uart,
+                    dio1,
+                    Some(display_stats.clone()),
+                );
+                let (bridge_exit, bridge_dio1) = bridge.run();
+                dio1 = bridge_dio1;
 
                 // Restore radio to default standalone config
                 rnode::restore_default_radio_config(&radio);
