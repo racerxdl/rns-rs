@@ -7,8 +7,8 @@ use std::env;
 use std::sync::mpsc;
 
 use rns_net::{
-    Callbacks, InterfaceConfig, InterfaceId, NodeConfig, RNodeConfig,
-    RNodeSubConfig, RnsNode, MODE_FULL,
+    Callbacks, InterfaceConfig, InterfaceId, NodeConfig, RNodeConfig, RNodeSubConfig, RnsNode,
+    MODE_FULL,
 };
 
 struct LoggingCallbacks;
@@ -51,10 +51,7 @@ fn main() {
         .get(1)
         .cloned()
         .unwrap_or_else(|| "/dev/ttyUSB0".into());
-    let freq_mhz: f64 = args
-        .get(2)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(868.0);
+    let freq_mhz: f64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(868.0);
     let frequency = (freq_mhz * 1_000_000.0) as u32;
 
     log::info!("Connecting to RNode on {} at {} MHz", port, freq_mhz);
@@ -83,6 +80,7 @@ fn main() {
                     }],
                     id_interval: None,
                     id_callsign: None,
+                    pre_opened_fd: None,
                 }),
                 mode: MODE_FULL,
                 ifac: None,

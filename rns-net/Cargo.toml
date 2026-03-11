@@ -45,3 +45,6 @@ name = "rnsd"
 
 [[example]]
 name = "rnode_lora"
+
+[[example]]
+name = "rnode_hil"
