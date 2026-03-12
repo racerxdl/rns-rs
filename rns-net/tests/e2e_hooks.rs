@@ -186,10 +186,12 @@ fn wait_for_interface_up(rx: &mpsc::Receiver<TestEvent>, timeout: Duration) {
 
 fn start_transport_node(port: u16) -> RnsNode {
     RnsNode::start(
-        NodeConfig { panic_on_interface_error: false,
+        NodeConfig {
+            panic_on_interface_error: false,
             transport_enabled: true,
             identity: Some(Identity::new(&mut OsRng)),
-            interfaces: vec![InterfaceConfig { name: String::new(),
+            interfaces: vec![InterfaceConfig {
+                name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
                     name: "Transport TCP".into(),
@@ -217,6 +219,8 @@ fn start_transport_node(port: u16) -> RnsNode {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             registry: None,
+            #[cfg(feature = "rns-hooks")]
+            provider_bridge: None,
         },
         Box::new(TransportCallbacks),
     )
@@ -225,12 +229,14 @@ fn start_transport_node(port: u16) -> RnsNode {
 
 fn start_client_node(port: u16, identity: &Identity, callbacks: Box<dyn Callbacks>) -> RnsNode {
     RnsNode::start(
-        NodeConfig { panic_on_interface_error: false,
+        NodeConfig {
+            panic_on_interface_error: false,
             transport_enabled: false,
             identity: Some(Identity::from_private_key(
                 &identity.get_private_key().unwrap(),
             )),
-            interfaces: vec![InterfaceConfig { name: String::new(),
+            interfaces: vec![InterfaceConfig {
+                name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
                 config_data: Box::new(TcpClientConfig {
                     name: "Client TCP".into(),
@@ -259,6 +265,8 @@ fn start_client_node(port: u16, identity: &Identity, callbacks: Box<dyn Callback
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             registry: None,
+            #[cfg(feature = "rns-hooks")]
+            provider_bridge: None,
         },
         callbacks,
     )

@@ -69,6 +69,8 @@ impl HookManager {
                 now: 0.0,
                 injected_actions: Vec::new(),
                 log_messages: Vec::new(),
+                provider_events: Vec::new(),
+                provider_events_enabled: false,
             },
         );
         store
@@ -132,6 +134,25 @@ impl HookManager {
         now: f64,
         data_override: Option<&[u8]>,
     ) -> Option<ExecuteResult> {
+        self.execute_program_with_provider_events(
+            program,
+            ctx,
+            engine_access,
+            now,
+            false,
+            data_override,
+        )
+    }
+
+    pub fn execute_program_with_provider_events(
+        &self,
+        program: &mut LoadedProgram,
+        ctx: &HookContext,
+        engine_access: &dyn EngineAccess,
+        now: f64,
+        provider_events_enabled: bool,
+        data_override: Option<&[u8]>,
+    ) -> Option<ExecuteResult> {
         if !program.enabled {
             return None;
         }
@@ -146,7 +167,8 @@ impl HookManager {
         let (mut store, instance) = if let Some(cached) = program.cached.take() {
             let (mut s, i) = cached;
             // Reset per-call state: fuel, engine_access, injected_actions, log_messages
-            s.data_mut().reset_per_call(engine_access_ptr, now);
+            s.data_mut()
+                .reset_per_call(engine_access_ptr, now, provider_events_enabled);
             if let Err(e) = s.set_fuel(self.runtime.fuel()) {
                 log::warn!("failed to set fuel for hook '{}': {}", program.name, e);
                 program.cached = Some((s, i));
@@ -159,6 +181,8 @@ impl HookManager {
                 now,
                 injected_actions: Vec::new(),
                 log_messages: Vec::new(),
+                provider_events: Vec::new(),
+                provider_events_enabled,
             };
 
             let mut store = Store::new(self.runtime.engine(), store_data);
@@ -258,10 +282,19 @@ impl HookManager {
 
                 // Extract injected actions from the store
                 let injected_actions = std::mem::take(&mut store.data_mut().injected_actions);
+                let provider_events = std::mem::take(&mut store.data_mut().provider_events)
+                    .into_iter()
+                    .map(|event| crate::result::EmittedProviderEvent {
+                        hook_name: program.name.clone(),
+                        payload_type: event.payload_type,
+                        payload: event.payload,
+                    })
+                    .collect();
 
                 Some(ExecuteResult {
                     hook_result: Some(result),
                     injected_actions,
+                    provider_events,
                     modified_data,
                 })
             }
@@ -290,7 +323,19 @@ impl HookManager {
         engine_access: &dyn EngineAccess,
         now: f64,
     ) -> Option<ExecuteResult> {
+        self.run_chain_with_provider_events(programs, ctx, engine_access, now, false)
+    }
+
+    pub fn run_chain_with_provider_events(
+        &self,
+        programs: &mut [LoadedProgram],
+        ctx: &HookContext,
+        engine_access: &dyn EngineAccess,
+        now: f64,
+        provider_events_enabled: bool,
+    ) -> Option<ExecuteResult> {
         let mut accumulated_actions = Vec::new();
+        let mut accumulated_provider_events = Vec::new();
         let mut last_result: Option<HookResult> = None;
         let mut last_modified_data: Option<Vec<u8>> = None;
         let is_packet_ctx = matches!(ctx, HookContext::Packet { .. });
@@ -304,10 +349,16 @@ impl HookManager {
             } else {
                 None
             };
-            if let Some(exec_result) =
-                self.execute_program(program, ctx, engine_access, now, override_ref)
-            {
+            if let Some(exec_result) = self.execute_program_with_provider_events(
+                program,
+                ctx,
+                engine_access,
+                now,
+                provider_events_enabled,
+                override_ref,
+            ) {
                 accumulated_actions.extend(exec_result.injected_actions);
+                accumulated_provider_events.extend(exec_result.provider_events);
 
                 if let Some(ref result) = exec_result.hook_result {
                     let verdict = Verdict::from_u32(result.verdict);
@@ -316,6 +367,7 @@ impl HookManager {
                             return Some(ExecuteResult {
                                 hook_result: exec_result.hook_result,
                                 injected_actions: accumulated_actions,
+                                provider_events: accumulated_provider_events,
                                 modified_data: exec_result.modified_data.or(last_modified_data),
                             });
                         }
@@ -337,6 +389,7 @@ impl HookManager {
             Some(ExecuteResult {
                 hook_result: last_result,
                 injected_actions: accumulated_actions,
+                provider_events: accumulated_provider_events,
                 modified_data: last_modified_data,
             })
         } else {
@@ -1102,5 +1155,74 @@ mod tests {
             result.is_ok(),
             "compile should succeed with correct ABI version"
         );
+    }
+
+    #[test]
+    fn host_emit_event_collects_provider_event() {
+        let mgr = make_manager();
+        let wat = r#"
+            (module
+                (import "env" "host_emit_event" (func $emit (param i32 i32 i32 i32) (result i32)))
+                (memory (export "memory") 1)
+                (data (i32.const 0x3000) "packet")
+                (data (i32.const 0x3010) "\01\02\03")
+                (func (export "__rns_abi_version") (result i32) (i32.const 1))
+                (func (export "on_hook") (param i32) (result i32)
+                    (drop (call $emit (i32.const 0x3000) (i32.const 6) (i32.const 0x3010) (i32.const 3)))
+                    (i32.store (i32.const 0x2000) (i32.const 0))
+                    (i32.store (i32.add (i32.const 0x2000) (i32.const 4)) (i32.const 0))
+                    (i32.store (i32.add (i32.const 0x2000) (i32.const 8)) (i32.const 0))
+                    (i32.store (i32.add (i32.const 0x2000) (i32.const 12)) (i32.const 0))
+                    (i32.store (i32.add (i32.const 0x2000) (i32.const 16)) (i32.const 0))
+                    (i32.store (i32.add (i32.const 0x2000) (i32.const 20)) (i32.const 0))
+                    (i32.store (i32.add (i32.const 0x2000) (i32.const 24)) (i32.const 0))
+                    (i32.const 0x2000)
+                )
+            )
+        "#;
+        let module = mgr.runtime.compile(&wat::parse_str(wat).unwrap()).unwrap();
+        let mut prog = LoadedProgram::new("emit".into(), module, 0);
+        let ctx = HookContext::Tick;
+
+        let exec = mgr
+            .execute_program_with_provider_events(&mut prog, &ctx, &NullEngine, 0.0, true, None)
+            .unwrap();
+        assert_eq!(exec.provider_events.len(), 1);
+        assert_eq!(exec.provider_events[0].hook_name, "emit");
+        assert_eq!(exec.provider_events[0].payload_type, "packet");
+        assert_eq!(exec.provider_events[0].payload, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn host_emit_event_is_ignored_when_disabled() {
+        let mgr = make_manager();
+        let wat = r#"
+            (module
+                (import "env" "host_emit_event" (func $emit (param i32 i32 i32 i32) (result i32)))
+                (memory (export "memory") 1)
+                (data (i32.const 0x3000) "packet")
+                (data (i32.const 0x3010) "\01\02\03")
+                (func (export "__rns_abi_version") (result i32) (i32.const 1))
+                (func (export "on_hook") (param i32) (result i32)
+                    (drop (call $emit (i32.const 0x3000) (i32.const 6) (i32.const 0x3010) (i32.const 3)))
+                    (i32.store (i32.const 0x2000) (i32.const 0))
+                    (i32.store (i32.add (i32.const 0x2000) (i32.const 4)) (i32.const 0))
+                    (i32.store (i32.add (i32.const 0x2000) (i32.const 8)) (i32.const 0))
+                    (i32.store (i32.add (i32.const 0x2000) (i32.const 12)) (i32.const 0))
+                    (i32.store (i32.add (i32.const 0x2000) (i32.const 16)) (i32.const 0))
+                    (i32.store (i32.add (i32.const 0x2000) (i32.const 20)) (i32.const 0))
+                    (i32.store (i32.add (i32.const 0x2000) (i32.const 24)) (i32.const 0))
+                    (i32.const 0x2000)
+                )
+            )
+        "#;
+        let module = mgr.runtime.compile(&wat::parse_str(wat).unwrap()).unwrap();
+        let mut prog = LoadedProgram::new("emit".into(), module, 0);
+        let ctx = HookContext::Tick;
+
+        let exec = mgr
+            .execute_program_with_provider_events(&mut prog, &ctx, &NullEngine, 0.0, false, None)
+            .unwrap();
+        assert!(exec.provider_events.is_empty());
     }
 }

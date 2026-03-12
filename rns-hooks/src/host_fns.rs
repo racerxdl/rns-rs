@@ -18,6 +18,7 @@ pub fn register_host_functions(linker: &mut Linker<StoreData>) -> Result<(), was
     linker.func_wrap("env", "host_get_announce_rate", host_get_announce_rate)?;
     linker.func_wrap("env", "host_get_link_state", host_get_link_state)?;
     linker.func_wrap("env", "host_inject_action", host_inject_action)?;
+    linker.func_wrap("env", "host_emit_event", host_emit_event)?;
     Ok(())
 }
 
@@ -214,4 +215,41 @@ fn host_inject_action(mut caller: Caller<'_, StoreData>, action_ptr: i32, action
         }
         None => -1,
     }
+}
+
+/// Queue a provider event for host-side forwarding.
+/// Returns 0 on success, -1 on invalid memory, -2 if provider events are disabled.
+fn host_emit_event(
+    mut caller: Caller<'_, StoreData>,
+    type_ptr: i32,
+    type_len: i32,
+    payload_ptr: i32,
+    payload_len: i32,
+) -> i32 {
+    if type_ptr < 0 || type_len < 0 || payload_ptr < 0 || payload_len < 0 {
+        return -1;
+    }
+    if !caller.data().provider_events_enabled {
+        return -2;
+    }
+    let Some(memory) = get_memory(&mut caller) else {
+        return -1;
+    };
+    let data = memory.data(&caller);
+    let Some(payload_type_bytes) = read_bytes(data, type_ptr as usize, type_len as usize) else {
+        return -1;
+    };
+    let Some(payload) = read_bytes(data, payload_ptr as usize, payload_len as usize) else {
+        return -1;
+    };
+    let payload_type = String::from_utf8_lossy(payload_type_bytes).to_string();
+    let payload = payload.to_vec();
+    caller
+        .data_mut()
+        .provider_events
+        .push(crate::runtime::RawProviderEvent {
+            payload_type,
+            payload,
+        });
+    0
 }

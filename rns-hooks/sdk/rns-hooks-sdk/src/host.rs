@@ -10,6 +10,7 @@ extern "C" {
     fn host_get_announce_rate(id: i64) -> i32;
     fn host_get_link_state(link_hash_ptr: i32) -> i32;
     fn host_inject_action(action_ptr: i32, action_len: i32) -> i32;
+    fn host_emit_event(type_ptr: i32, type_len: i32, payload_ptr: i32, payload_len: i32) -> i32;
 }
 
 /// Log a string message to the host.
@@ -110,4 +111,17 @@ pub fn get_link_state(link_hash: &[u8; 16]) -> Option<u8> {
 /// Returns `true` on success.
 pub fn inject_action_raw(buf: &[u8]) -> bool {
     unsafe { host_inject_action(buf.as_ptr() as i32, buf.len() as i32) == 0 }
+}
+
+/// Emit a provider event for host-side forwarding.
+/// Returns 0 on success, -1 on invalid arguments, -2 if disabled by the host.
+pub fn emit_event(payload_type: &str, payload: &[u8]) -> i32 {
+    unsafe {
+        host_emit_event(
+            payload_type.as_ptr() as i32,
+            payload_type.len() as i32,
+            payload.as_ptr() as i32,
+            payload.len() as i32,
+        )
+    }
 }

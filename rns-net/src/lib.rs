@@ -29,6 +29,8 @@ pub mod shared_client;
 pub use common::destination;
 pub mod discovery;
 pub mod holepunch;
+#[cfg(feature = "rns-hooks")]
+pub mod provider_bridge;
 
 pub use config::RnsConfig;
 pub use destination::{AnnouncedIdentity, Destination, GroupKeyError};
@@ -70,6 +72,11 @@ pub use interface::{
 pub use link_manager::{LinkManager, LinkManagerAction};
 pub use management::ManagementConfig;
 pub use node::{IfacConfig, InterfaceConfig, NodeConfig, RnsNode, SendError};
+#[cfg(feature = "rns-hooks")]
+pub use provider_bridge::{
+    HookProviderEventEnvelope, OverflowPolicy, ProviderBridge, ProviderBridgeConfig,
+    ProviderEnvelope, ProviderMessage,
+};
 pub use rpc::{RpcAddr, RpcClient, RpcServer};
 pub use serial::Parity;
 #[cfg(feature = "iface-local")]

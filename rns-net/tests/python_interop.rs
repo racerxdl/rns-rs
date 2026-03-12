@@ -128,10 +128,12 @@ except (KeyboardInterrupt, SystemExit):
         mpsc::channel();
 
     let node = RnsNode::start(
-        NodeConfig { panic_on_interface_error: false,
+        NodeConfig {
+            panic_on_interface_error: false,
             transport_enabled: false,
             identity: None,
-            interfaces: vec![InterfaceConfig { name: String::new(),
+            interfaces: vec![InterfaceConfig {
+                name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
                 config_data: Box::new(TcpClientConfig {
                     name: "interop-tcp".into(),
@@ -163,6 +165,8 @@ except (KeyboardInterrupt, SystemExit):
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             registry: None,
+            #[cfg(feature = "rns-hooks")]
+            provider_bridge: None,
         },
         Box::new(TestCallbacks { announce_tx }),
     )

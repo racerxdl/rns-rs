@@ -177,6 +177,9 @@ pub struct NodeConfig {
     /// If true, a single interface failing to start will abort the entire node.
     /// If false (default), the error is logged and remaining interfaces continue.
     pub panic_on_interface_error: bool,
+    /// External provider bridge for hook-emitted events.
+    #[cfg(feature = "rns-hooks")]
+    pub provider_bridge: Option<crate::provider_bridge::ProviderBridgeConfig>,
 }
 
 /// IFAC configuration for an interface.
@@ -437,6 +440,27 @@ impl RnsNode {
             interfaces: interface_configs,
             registry: None,
             panic_on_interface_error: rns_config.reticulum.panic_on_interface_error,
+            #[cfg(feature = "rns-hooks")]
+            provider_bridge: if rns_config.reticulum.provider_bridge {
+                Some(crate::provider_bridge::ProviderBridgeConfig {
+                    enabled: true,
+                    socket_path: rns_config
+                        .reticulum
+                        .provider_socket_path
+                        .as_ref()
+                        .map(std::path::PathBuf::from)
+                        .unwrap_or_else(|| config_dir.join("provider.sock")),
+                    queue_max_events: rns_config.reticulum.provider_queue_max_events,
+                    queue_max_bytes: rns_config.reticulum.provider_queue_max_bytes,
+                    overflow_policy: match rns_config.reticulum.provider_overflow_policy.as_str() {
+                        "drop_oldest" => crate::provider_bridge::OverflowPolicy::DropOldest,
+                        _ => crate::provider_bridge::OverflowPolicy::DropNewest,
+                    },
+                    node_instance: rns_config.reticulum.instance_name.clone(),
+                })
+            } else {
+                None
+            },
         };
 
         Self::start(node_config, callbacks)
@@ -455,6 +479,16 @@ impl RnsNode {
 
         let (tx, rx) = event::channel();
         let mut driver = Driver::new(transport_config, rx, tx.clone(), callbacks);
+
+        #[cfg(feature = "rns-hooks")]
+        if let Some(provider_config) = config.provider_bridge.clone() {
+            if provider_config.enabled {
+                match crate::provider_bridge::ProviderBridge::start(provider_config) {
+                    Ok(bridge) => driver.provider_bridge = Some(bridge),
+                    Err(err) => log::warn!("failed to start provider bridge: {}", err),
+                }
+            }
+        }
 
         // Set up announce cache if cache directory is configured
         if let Some(ref cache_dir) = config.cache_dir {
@@ -1470,7 +1504,8 @@ mod tests {
     #[test]
     fn start_and_shutdown() {
         let node = RnsNode::start(
-            NodeConfig { panic_on_interface_error: false,
+            NodeConfig {
+                panic_on_interface_error: false,
                 transport_enabled: false,
                 identity: None,
                 interfaces: vec![],
@@ -1491,6 +1526,8 @@ mod tests {
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 registry: None,
+                #[cfg(feature = "rns-hooks")]
+                provider_bridge: None,
             },
             Box::new(NoopCallbacks),
         )
@@ -1503,7 +1540,8 @@ mod tests {
         let identity = Identity::new(&mut OsRng);
         let hash = *identity.hash();
         let node = RnsNode::start(
-            NodeConfig { panic_on_interface_error: false,
+            NodeConfig {
+                panic_on_interface_error: false,
                 transport_enabled: true,
                 identity: Some(identity),
                 interfaces: vec![],
@@ -1524,6 +1562,8 @@ mod tests {
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 registry: None,
+                #[cfg(feature = "rns-hooks")]
+                provider_bridge: None,
             },
             Box::new(NoopCallbacks),
         )
@@ -1536,7 +1576,8 @@ mod tests {
     #[test]
     fn start_generates_identity() {
         let node = RnsNode::start(
-            NodeConfig { panic_on_interface_error: false,
+            NodeConfig {
+                panic_on_interface_error: false,
                 transport_enabled: false,
                 identity: None,
                 interfaces: vec![],
@@ -1557,6 +1598,8 @@ mod tests {
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 registry: None,
+                #[cfg(feature = "rns-hooks")]
+                provider_bridge: None,
             },
             Box::new(NoopCallbacks),
         )
@@ -1929,7 +1972,8 @@ enable_transport = False
         let identity_hash = rns_core::types::IdentityHash(*identity.hash());
 
         let node = RnsNode::start(
-            NodeConfig { panic_on_interface_error: false,
+            NodeConfig {
+                panic_on_interface_error: false,
                 transport_enabled: false,
                 identity: None,
                 interfaces: vec![],
@@ -1950,6 +1994,8 @@ enable_transport = False
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 registry: None,
+                #[cfg(feature = "rns-hooks")]
+                provider_bridge: None,
             },
             Box::new(NoopCallbacks),
         )
@@ -1971,7 +2017,8 @@ enable_transport = False
     #[test]
     fn has_path_and_hops_to() {
         let node = RnsNode::start(
-            NodeConfig { panic_on_interface_error: false,
+            NodeConfig {
+                panic_on_interface_error: false,
                 transport_enabled: false,
                 identity: None,
                 interfaces: vec![],
@@ -1992,6 +2039,8 @@ enable_transport = False
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 registry: None,
+                #[cfg(feature = "rns-hooks")]
+                provider_bridge: None,
             },
             Box::new(NoopCallbacks),
         )
@@ -2009,7 +2058,8 @@ enable_transport = False
     #[test]
     fn recall_identity_none_when_unknown() {
         let node = RnsNode::start(
-            NodeConfig { panic_on_interface_error: false,
+            NodeConfig {
+                panic_on_interface_error: false,
                 transport_enabled: false,
                 identity: None,
                 interfaces: vec![],
@@ -2030,6 +2080,8 @@ enable_transport = False
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 registry: None,
+                #[cfg(feature = "rns-hooks")]
+                provider_bridge: None,
             },
             Box::new(NoopCallbacks),
         )
@@ -2044,7 +2096,8 @@ enable_transport = False
     #[test]
     fn request_path_does_not_crash() {
         let node = RnsNode::start(
-            NodeConfig { panic_on_interface_error: false,
+            NodeConfig {
+                panic_on_interface_error: false,
                 transport_enabled: false,
                 identity: None,
                 interfaces: vec![],
@@ -2065,6 +2118,8 @@ enable_transport = False
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 registry: None,
+                #[cfg(feature = "rns-hooks")]
+                provider_bridge: None,
             },
             Box::new(NoopCallbacks),
         )
@@ -2086,7 +2141,8 @@ enable_transport = False
     #[test]
     fn send_packet_plain() {
         let node = RnsNode::start(
-            NodeConfig { panic_on_interface_error: false,
+            NodeConfig {
+                panic_on_interface_error: false,
                 transport_enabled: false,
                 identity: None,
                 interfaces: vec![],
@@ -2107,6 +2163,8 @@ enable_transport = False
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 registry: None,
+                #[cfg(feature = "rns-hooks")]
+                provider_bridge: None,
             },
             Box::new(NoopCallbacks),
         )
@@ -2129,7 +2187,8 @@ enable_transport = False
     #[test]
     fn send_packet_single_requires_public_key() {
         let node = RnsNode::start(
-            NodeConfig { panic_on_interface_error: false,
+            NodeConfig {
+                panic_on_interface_error: false,
                 transport_enabled: false,
                 identity: None,
                 interfaces: vec![],
@@ -2150,6 +2209,8 @@ enable_transport = False
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 registry: None,
+                #[cfg(feature = "rns-hooks")]
+                provider_bridge: None,
             },
             Box::new(NoopCallbacks),
         )
@@ -2170,7 +2231,8 @@ enable_transport = False
     #[test]
     fn send_packet_single_encrypts() {
         let node = RnsNode::start(
-            NodeConfig { panic_on_interface_error: false,
+            NodeConfig {
+                panic_on_interface_error: false,
                 transport_enabled: false,
                 identity: None,
                 interfaces: vec![],
@@ -2191,6 +2253,8 @@ enable_transport = False
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 registry: None,
+                #[cfg(feature = "rns-hooks")]
+                provider_bridge: None,
             },
             Box::new(NoopCallbacks),
         )
@@ -2222,7 +2286,8 @@ enable_transport = False
     #[test]
     fn register_destination_with_proof_prove_all() {
         let node = RnsNode::start(
-            NodeConfig { panic_on_interface_error: false,
+            NodeConfig {
+                panic_on_interface_error: false,
                 transport_enabled: false,
                 identity: None,
                 interfaces: vec![],
@@ -2243,6 +2308,8 @@ enable_transport = False
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 registry: None,
+                #[cfg(feature = "rns-hooks")]
+                provider_bridge: None,
             },
             Box::new(NoopCallbacks),
         )
@@ -2266,7 +2333,8 @@ enable_transport = False
     #[test]
     fn register_destination_with_proof_prove_none() {
         let node = RnsNode::start(
-            NodeConfig { panic_on_interface_error: false,
+            NodeConfig {
+                panic_on_interface_error: false,
                 transport_enabled: false,
                 identity: None,
                 interfaces: vec![],
@@ -2287,6 +2355,8 @@ enable_transport = False
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
                 registry: None,
+                #[cfg(feature = "rns-hooks")]
+                provider_bridge: None,
             },
             Box::new(NoopCallbacks),
         )

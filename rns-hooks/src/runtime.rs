@@ -1,6 +1,12 @@
 use crate::engine_access::EngineAccess;
 use crate::wire::ActionWire;
 
+#[derive(Debug, Clone)]
+pub struct RawProviderEvent {
+    pub payload_type: String,
+    pub payload: Vec<u8>,
+}
+
 /// Default fuel budget per WASM invocation.
 pub const DEFAULT_FUEL: u64 = 10_000_000;
 /// Default maximum memory for WASM modules (16 MB).
@@ -17,6 +23,8 @@ pub struct StoreData {
     pub now: f64,
     pub injected_actions: Vec<ActionWire>,
     pub log_messages: Vec<String>,
+    pub provider_events: Vec<RawProviderEvent>,
+    pub provider_events_enabled: bool,
 }
 
 // Safety: StoreData is only used within a single-threaded driver loop.
@@ -35,11 +43,18 @@ impl StoreData {
     }
 
     /// Reset per-call fields while preserving the store (and WASM linear memory).
-    pub fn reset_per_call(&mut self, engine_access: *const dyn EngineAccess, now: f64) {
+    pub fn reset_per_call(
+        &mut self,
+        engine_access: *const dyn EngineAccess,
+        now: f64,
+        provider_events_enabled: bool,
+    ) {
         self.engine_access = engine_access;
         self.now = now;
         self.injected_actions.clear();
         self.log_messages.clear();
+        self.provider_events.clear();
+        self.provider_events_enabled = provider_events_enabled;
     }
 }
 

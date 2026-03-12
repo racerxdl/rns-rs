@@ -9,6 +9,8 @@ use rns_core::transport::TransportEngine;
 use rns_crypto::{OsRng, Rng};
 
 #[cfg(feature = "rns-hooks")]
+use crate::provider_bridge::ProviderBridge;
+#[cfg(feature = "rns-hooks")]
 use rns_hooks::{create_hook_slots, EngineAccess, HookContext, HookManager, HookPoint, HookSlot};
 
 use crate::event::{
@@ -100,12 +102,13 @@ fn run_hook_inner(
     engine_access: &dyn EngineAccess,
     ctx: &HookContext,
     now: f64,
+    provider_events_enabled: bool,
 ) -> Option<rns_hooks::ExecuteResult> {
     if programs.is_empty() {
         return None;
     }
     let mgr = hook_manager.as_ref()?;
-    mgr.run_chain(programs, ctx, engine_access, now)
+    mgr.run_chain_with_provider_events(programs, ctx, engine_access, now, provider_events_enabled)
 }
 
 /// Convert a Vec of ActionWire into TransportActions for dispatch.
@@ -308,6 +311,8 @@ pub struct Driver {
     /// WASM hook manager (runtime + linker). None if initialization failed.
     #[cfg(feature = "rns-hooks")]
     pub(crate) hook_manager: Option<HookManager>,
+    #[cfg(feature = "rns-hooks")]
+    pub(crate) provider_bridge: Option<ProviderBridge>,
 }
 
 impl Driver {
@@ -374,6 +379,52 @@ impl Driver {
             hook_slots: create_hook_slots(),
             #[cfg(feature = "rns-hooks")]
             hook_manager: HookManager::new().ok(),
+            #[cfg(feature = "rns-hooks")]
+            provider_bridge: None,
+        }
+    }
+
+    #[cfg(feature = "rns-hooks")]
+    fn provider_events_enabled(&self) -> bool {
+        self.provider_bridge.is_some()
+    }
+
+    #[cfg(feature = "rns-hooks")]
+    fn forward_hook_side_effects(&mut self, attach_point: &str, exec: &rns_hooks::ExecuteResult) {
+        if !exec.injected_actions.is_empty() {
+            self.dispatch_all(convert_injected_actions(exec.injected_actions.clone()));
+        }
+        if let Some(ref bridge) = self.provider_bridge {
+            for event in &exec.provider_events {
+                bridge.emit_event(
+                    attach_point,
+                    event.hook_name.clone(),
+                    event.payload_type.clone(),
+                    event.payload.clone(),
+                );
+            }
+        }
+    }
+
+    #[cfg(feature = "rns-hooks")]
+    fn collect_hook_side_effects(
+        &mut self,
+        attach_point: &str,
+        exec: &rns_hooks::ExecuteResult,
+        out: &mut Vec<TransportAction>,
+    ) {
+        if !exec.injected_actions.is_empty() {
+            out.extend(convert_injected_actions(exec.injected_actions.clone()));
+        }
+        if let Some(ref bridge) = self.provider_bridge {
+            for event in &exec.provider_events {
+                bridge.emit_event(
+                    attach_point,
+                    event.hook_name.clone(),
+                    event.payload_type.clone(),
+                    event.payload.clone(),
+                );
+            }
         }
     }
 
@@ -462,6 +513,7 @@ impl Driver {
                             link_manager: &self.link_manager,
                             now,
                         };
+                        let provider_events_enabled = self.provider_events_enabled();
                         {
                             let exec = run_hook_inner(
                                 &mut self.hook_slots[HookPoint::PreIngress as usize].programs,
@@ -469,13 +521,10 @@ impl Driver {
                                 &engine_ref,
                                 &ctx,
                                 now,
+                                provider_events_enabled,
                             );
                             if let Some(ref e) = exec {
-                                if !e.injected_actions.is_empty() {
-                                    let extra =
-                                        convert_injected_actions(e.injected_actions.clone());
-                                    self.dispatch_all(extra);
-                                }
+                                self.forward_hook_side_effects("PreIngress", e);
                                 if e.hook_result.as_ref().map_or(false, |r| r.is_drop()) {
                                     continue;
                                 }
@@ -530,18 +579,16 @@ impl Driver {
                             link_manager: &self.link_manager,
                             now,
                         };
+                        let provider_events_enabled = self.provider_events_enabled();
                         if let Some(ref e) = run_hook_inner(
                             &mut self.hook_slots[HookPoint::PreDispatch as usize].programs,
                             &self.hook_manager,
                             &engine_ref,
                             &ctx,
                             now,
+                            provider_events_enabled,
                         ) {
-                            if !e.injected_actions.is_empty() {
-                                self.dispatch_all(convert_injected_actions(
-                                    e.injected_actions.clone(),
-                                ));
-                            }
+                            self.forward_hook_side_effects("PreDispatch", e);
                         }
                     }
 
@@ -559,18 +606,16 @@ impl Driver {
                             link_manager: &self.link_manager,
                             now,
                         };
+                        let provider_events_enabled = self.provider_events_enabled();
                         if let Some(ref e) = run_hook_inner(
                             &mut self.hook_slots[HookPoint::Tick as usize].programs,
                             &self.hook_manager,
                             &engine_ref,
                             &ctx,
                             now,
+                            provider_events_enabled,
                         ) {
-                            if !e.injected_actions.is_empty() {
-                                self.dispatch_all(convert_injected_actions(
-                                    e.injected_actions.clone(),
-                                ));
-                            }
+                            self.forward_hook_side_effects("Tick", e);
                         }
                     }
 
@@ -657,18 +702,16 @@ impl Driver {
                                 link_manager: &self.link_manager,
                                 now,
                             };
+                            let provider_events_enabled = self.provider_events_enabled();
                             if let Some(ref e) = run_hook_inner(
                                 &mut self.hook_slots[HookPoint::InterfaceUp as usize].programs,
                                 &self.hook_manager,
                                 &engine_ref,
                                 &ctx,
                                 now,
+                                provider_events_enabled,
                             ) {
-                                if !e.injected_actions.is_empty() {
-                                    self.dispatch_all(convert_injected_actions(
-                                        e.injected_actions.clone(),
-                                    ));
-                                }
+                                self.forward_hook_side_effects("InterfaceUp", e);
                             }
                         }
                     } else if let Some(entry) = self.interfaces.get_mut(&id) {
@@ -691,18 +734,16 @@ impl Driver {
                                 link_manager: &self.link_manager,
                                 now,
                             };
+                            let provider_events_enabled = self.provider_events_enabled();
                             if let Some(ref e) = run_hook_inner(
                                 &mut self.hook_slots[HookPoint::InterfaceUp as usize].programs,
                                 &self.hook_manager,
                                 &engine_ref,
                                 &ctx,
                                 now,
+                                provider_events_enabled,
                             ) {
-                                if !e.injected_actions.is_empty() {
-                                    self.dispatch_all(convert_injected_actions(
-                                        e.injected_actions.clone(),
-                                    ));
-                                }
+                                self.forward_hook_side_effects("InterfaceUp", e);
                             }
                         }
                     } else {
@@ -744,18 +785,16 @@ impl Driver {
                                 link_manager: &self.link_manager,
                                 now,
                             };
+                            let provider_events_enabled = self.provider_events_enabled();
                             if let Some(ref e) = run_hook_inner(
                                 &mut self.hook_slots[HookPoint::InterfaceDown as usize].programs,
                                 &self.hook_manager,
                                 &engine_ref,
                                 &ctx,
                                 now,
+                                provider_events_enabled,
                             ) {
-                                if !e.injected_actions.is_empty() {
-                                    self.dispatch_all(convert_injected_actions(
-                                        e.injected_actions.clone(),
-                                    ));
-                                }
+                                self.forward_hook_side_effects("InterfaceDown", e);
                             }
                         }
                     }
@@ -1196,6 +1235,7 @@ impl Driver {
                             link_manager: &self.link_manager,
                             now,
                         };
+                        let provider_events_enabled = self.provider_events_enabled();
                         if let Some(ref e) = run_hook_inner(
                             &mut self.hook_slots[HookPoint::InterfaceConfigChanged as usize]
                                 .programs,
@@ -1203,12 +1243,9 @@ impl Driver {
                             &engine_ref,
                             &ctx,
                             now,
+                            provider_events_enabled,
                         ) {
-                            if !e.injected_actions.is_empty() {
-                                self.dispatch_all(convert_injected_actions(
-                                    e.injected_actions.clone(),
-                                ));
-                            }
+                            self.forward_hook_side_effects("InterfaceConfigChanged", e);
                         }
                     }
                     #[cfg(not(feature = "rns-hooks"))]
@@ -1831,6 +1868,7 @@ impl Driver {
                             link_manager: &self.link_manager,
                             now,
                         };
+                        let provider_events_enabled = self.provider_events_enabled();
                         {
                             let exec = run_hook_inner(
                                 &mut self.hook_slots[HookPoint::SendOnInterface as usize].programs,
@@ -1838,13 +1876,14 @@ impl Driver {
                                 &engine_ref,
                                 &ctx,
                                 now,
+                                provider_events_enabled,
                             );
                             if let Some(ref e) = exec {
-                                if !e.injected_actions.is_empty() {
-                                    hook_injected.extend(convert_injected_actions(
-                                        e.injected_actions.clone(),
-                                    ));
-                                }
+                                self.collect_hook_side_effects(
+                                    "SendOnInterface",
+                                    e,
+                                    &mut hook_injected,
+                                );
                                 if e.hook_result.as_ref().map_or(false, |r| r.is_drop()) {
                                     continue;
                                 }
@@ -1923,6 +1962,7 @@ impl Driver {
                             link_manager: &self.link_manager,
                             now,
                         };
+                        let provider_events_enabled = self.provider_events_enabled();
                         {
                             let exec = run_hook_inner(
                                 &mut self.hook_slots[HookPoint::BroadcastOnAllInterfaces as usize]
@@ -1931,13 +1971,14 @@ impl Driver {
                                 &engine_ref,
                                 &ctx,
                                 now,
+                                provider_events_enabled,
                             );
                             if let Some(ref e) = exec {
-                                if !e.injected_actions.is_empty() {
-                                    hook_injected.extend(convert_injected_actions(
-                                        e.injected_actions.clone(),
-                                    ));
-                                }
+                                self.collect_hook_side_effects(
+                                    "BroadcastOnAllInterfaces",
+                                    e,
+                                    &mut hook_injected,
+                                );
                                 if e.hook_result.as_ref().map_or(false, |r| r.is_drop()) {
                                     continue;
                                 }
@@ -1993,6 +2034,7 @@ impl Driver {
                             link_manager: &self.link_manager,
                             now,
                         };
+                        let provider_events_enabled = self.provider_events_enabled();
                         {
                             let exec = run_hook_inner(
                                 &mut self.hook_slots[HookPoint::DeliverLocal as usize].programs,
@@ -2000,13 +2042,14 @@ impl Driver {
                                 &engine_ref,
                                 &ctx,
                                 now,
+                                provider_events_enabled,
                             );
                             if let Some(ref e) = exec {
-                                if !e.injected_actions.is_empty() {
-                                    hook_injected.extend(convert_injected_actions(
-                                        e.injected_actions.clone(),
-                                    ));
-                                }
+                                self.collect_hook_side_effects(
+                                    "DeliverLocal",
+                                    e,
+                                    &mut hook_injected,
+                                );
                                 if e.hook_result.as_ref().map_or(false, |r| r.is_drop()) {
                                     continue;
                                 }
@@ -2107,6 +2150,7 @@ impl Driver {
                             link_manager: &self.link_manager,
                             now,
                         };
+                        let provider_events_enabled = self.provider_events_enabled();
                         {
                             let exec = run_hook_inner(
                                 &mut self.hook_slots[HookPoint::AnnounceReceived as usize].programs,
@@ -2114,13 +2158,14 @@ impl Driver {
                                 &engine_ref,
                                 &ctx,
                                 now,
+                                provider_events_enabled,
                             );
                             if let Some(ref e) = exec {
-                                if !e.injected_actions.is_empty() {
-                                    hook_injected.extend(convert_injected_actions(
-                                        e.injected_actions.clone(),
-                                    ));
-                                }
+                                self.collect_hook_side_effects(
+                                    "AnnounceReceived",
+                                    e,
+                                    &mut hook_injected,
+                                );
                                 if e.hook_result.as_ref().map_or(false, |r| r.is_drop()) {
                                     continue;
                                 }
@@ -2212,17 +2257,16 @@ impl Driver {
                             link_manager: &self.link_manager,
                             now,
                         };
+                        let provider_events_enabled = self.provider_events_enabled();
                         if let Some(ref e) = run_hook_inner(
                             &mut self.hook_slots[HookPoint::PathUpdated as usize].programs,
                             &self.hook_manager,
                             &engine_ref,
                             &ctx,
                             now,
+                            provider_events_enabled,
                         ) {
-                            if !e.injected_actions.is_empty() {
-                                hook_injected
-                                    .extend(convert_injected_actions(e.injected_actions.clone()));
-                            }
+                            self.collect_hook_side_effects("PathUpdated", e, &mut hook_injected);
                         }
                     }
                     #[cfg(not(feature = "rns-hooks"))]
@@ -2313,6 +2357,7 @@ impl Driver {
                             link_manager: &self.link_manager,
                             now,
                         };
+                        let provider_events_enabled = self.provider_events_enabled();
                         {
                             let exec = run_hook_inner(
                                 &mut self.hook_slots[HookPoint::TunnelSynthesize as usize].programs,
@@ -2320,13 +2365,14 @@ impl Driver {
                                 &engine_ref,
                                 &ctx,
                                 now,
+                                provider_events_enabled,
                             );
                             if let Some(ref e) = exec {
-                                if !e.injected_actions.is_empty() {
-                                    hook_injected.extend(convert_injected_actions(
-                                        e.injected_actions.clone(),
-                                    ));
-                                }
+                                self.collect_hook_side_effects(
+                                    "TunnelSynthesize",
+                                    e,
+                                    &mut hook_injected,
+                                );
                                 if e.hook_result.as_ref().map_or(false, |r| r.is_drop()) {
                                     continue;
                                 }
@@ -2398,17 +2444,20 @@ impl Driver {
                             link_manager: &self.link_manager,
                             now,
                         };
+                        let provider_events_enabled = self.provider_events_enabled();
                         if let Some(ref e) = run_hook_inner(
                             &mut self.hook_slots[HookPoint::AnnounceRetransmit as usize].programs,
                             &self.hook_manager,
                             &engine_ref,
                             &ctx,
                             now,
+                            provider_events_enabled,
                         ) {
-                            if !e.injected_actions.is_empty() {
-                                hook_injected
-                                    .extend(convert_injected_actions(e.injected_actions.clone()));
-                            }
+                            self.collect_hook_side_effects(
+                                "AnnounceRetransmit",
+                                e,
+                                &mut hook_injected,
+                            );
                         }
                     }
                     #[cfg(not(feature = "rns-hooks"))]
@@ -2434,17 +2483,20 @@ impl Driver {
                             link_manager: &self.link_manager,
                             now,
                         };
+                        let provider_events_enabled = self.provider_events_enabled();
                         if let Some(ref e) = run_hook_inner(
                             &mut self.hook_slots[HookPoint::LinkRequestReceived as usize].programs,
                             &self.hook_manager,
                             &engine_ref,
                             &ctx,
                             now,
+                            provider_events_enabled,
                         ) {
-                            if !e.injected_actions.is_empty() {
-                                hook_injected
-                                    .extend(convert_injected_actions(e.injected_actions.clone()));
-                            }
+                            self.collect_hook_side_effects(
+                                "LinkRequestReceived",
+                                e,
+                                &mut hook_injected,
+                            );
                         }
                     }
                     #[cfg(not(feature = "rns-hooks"))]
@@ -2466,17 +2518,20 @@ impl Driver {
                             link_manager: &self.link_manager,
                             now,
                         };
+                        let provider_events_enabled = self.provider_events_enabled();
                         if let Some(ref e) = run_hook_inner(
                             &mut self.hook_slots[HookPoint::LinkEstablished as usize].programs,
                             &self.hook_manager,
                             &engine_ref,
                             &ctx,
                             now,
+                            provider_events_enabled,
                         ) {
-                            if !e.injected_actions.is_empty() {
-                                hook_injected
-                                    .extend(convert_injected_actions(e.injected_actions.clone()));
-                            }
+                            self.collect_hook_side_effects(
+                                "LinkEstablished",
+                                e,
+                                &mut hook_injected,
+                            );
                         }
                     }
                     #[cfg(not(feature = "rns-hooks"))]
@@ -2498,17 +2553,16 @@ impl Driver {
                             link_manager: &self.link_manager,
                             now,
                         };
+                        let provider_events_enabled = self.provider_events_enabled();
                         if let Some(ref e) = run_hook_inner(
                             &mut self.hook_slots[HookPoint::LinkClosed as usize].programs,
                             &self.hook_manager,
                             &engine_ref,
                             &ctx,
                             now,
+                            provider_events_enabled,
                         ) {
-                            if !e.injected_actions.is_empty() {
-                                hook_injected
-                                    .extend(convert_injected_actions(e.injected_actions.clone()));
-                            }
+                            self.collect_hook_side_effects("LinkClosed", e, &mut hook_injected);
                         }
                     }
                     #[cfg(not(feature = "rns-hooks"))]
@@ -2573,17 +2627,20 @@ impl Driver {
                             link_manager: &self.link_manager,
                             now,
                         };
+                        let provider_events_enabled = self.provider_events_enabled();
                         if let Some(ref e) = run_hook_inner(
                             &mut self.hook_slots[HookPoint::LinkEstablished as usize].programs,
                             &self.hook_manager,
                             &engine_ref,
                             &ctx,
                             now,
+                            provider_events_enabled,
                         ) {
-                            if !e.injected_actions.is_empty() {
-                                hook_injected
-                                    .extend(convert_injected_actions(e.injected_actions.clone()));
-                            }
+                            self.collect_hook_side_effects(
+                                "LinkEstablished",
+                                e,
+                                &mut hook_injected,
+                            );
                         }
                     }
                     log::info!(
@@ -2613,17 +2670,16 @@ impl Driver {
                             link_manager: &self.link_manager,
                             now,
                         };
+                        let provider_events_enabled = self.provider_events_enabled();
                         if let Some(ref e) = run_hook_inner(
                             &mut self.hook_slots[HookPoint::LinkClosed as usize].programs,
                             &self.hook_manager,
                             &engine_ref,
                             &ctx,
                             now,
+                            provider_events_enabled,
                         ) {
-                            if !e.injected_actions.is_empty() {
-                                hook_injected
-                                    .extend(convert_injected_actions(e.injected_actions.clone()));
-                            }
+                            self.collect_hook_side_effects("LinkClosed", e, &mut hook_injected);
                         }
                     }
                     log::info!("Link closed: {:02x?} reason={:?}", &link_id[..4], reason);
@@ -2782,17 +2838,20 @@ impl Driver {
                             link_manager: &self.link_manager,
                             now,
                         };
+                        let provider_events_enabled = self.provider_events_enabled();
                         if let Some(ref e) = run_hook_inner(
                             &mut self.hook_slots[HookPoint::LinkRequestReceived as usize].programs,
                             &self.hook_manager,
                             &engine_ref,
                             &ctx,
                             now,
+                            provider_events_enabled,
                         ) {
-                            if !e.injected_actions.is_empty() {
-                                hook_injected
-                                    .extend(convert_injected_actions(e.injected_actions.clone()));
-                            }
+                            self.collect_hook_side_effects(
+                                "LinkRequestReceived",
+                                e,
+                                &mut hook_injected,
+                            );
                         }
                     }
                     #[cfg(not(feature = "rns-hooks"))]

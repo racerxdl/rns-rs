@@ -60,6 +60,16 @@ pub struct ReticulumSection {
     /// Maximum number of alternative paths stored per destination.
     /// Default 1 (single path, backward-compatible).
     pub max_paths_per_destination: usize,
+    #[cfg(feature = "rns-hooks")]
+    pub provider_bridge: bool,
+    #[cfg(feature = "rns-hooks")]
+    pub provider_socket_path: Option<String>,
+    #[cfg(feature = "rns-hooks")]
+    pub provider_queue_max_events: usize,
+    #[cfg(feature = "rns-hooks")]
+    pub provider_queue_max_bytes: usize,
+    #[cfg(feature = "rns-hooks")]
+    pub provider_overflow_policy: String,
 }
 
 impl Default for ReticulumSection {
@@ -85,6 +95,16 @@ impl Default for ReticulumSection {
             required_discovery_value: None,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            #[cfg(feature = "rns-hooks")]
+            provider_bridge: false,
+            #[cfg(feature = "rns-hooks")]
+            provider_socket_path: None,
+            #[cfg(feature = "rns-hooks")]
+            provider_queue_max_events: 1024,
+            #[cfg(feature = "rns-hooks")]
+            provider_queue_max_bytes: 1024 * 1024,
+            #[cfg(feature = "rns-hooks")]
+            provider_overflow_policy: "drop_newest".into(),
         }
     }
 }
@@ -478,6 +498,44 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
         })?;
         section.max_paths_per_destination = n.max(1);
     }
+    #[cfg(feature = "rns-hooks")]
+    if let Some(v) = kvs.get("provider_bridge") {
+        section.provider_bridge = parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
+            key: "provider_bridge".into(),
+            value: v.clone(),
+        })?;
+    }
+    #[cfg(feature = "rns-hooks")]
+    if let Some(v) = kvs.get("provider_socket_path") {
+        section.provider_socket_path = Some(v.clone());
+    }
+    #[cfg(feature = "rns-hooks")]
+    if let Some(v) = kvs.get("provider_queue_max_events") {
+        section.provider_queue_max_events =
+            v.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
+                key: "provider_queue_max_events".into(),
+                value: v.clone(),
+            })?;
+    }
+    #[cfg(feature = "rns-hooks")]
+    if let Some(v) = kvs.get("provider_queue_max_bytes") {
+        section.provider_queue_max_bytes =
+            v.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
+                key: "provider_queue_max_bytes".into(),
+                value: v.clone(),
+            })?;
+    }
+    #[cfg(feature = "rns-hooks")]
+    if let Some(v) = kvs.get("provider_overflow_policy") {
+        let normalized = v.to_lowercase();
+        if normalized != "drop_newest" && normalized != "drop_oldest" {
+            return Err(ConfigError::InvalidValue {
+                key: "provider_overflow_policy".into(),
+                value: v.clone(),
+            });
+        }
+        section.provider_overflow_policy = normalized;
+    }
 
     Ok(section)
 }
@@ -507,6 +565,31 @@ mod tests {
         assert_eq!(config.reticulum.instance_name, "default");
         assert_eq!(config.logging.loglevel, 4);
         assert!(config.interfaces.is_empty());
+    }
+
+    #[cfg(feature = "rns-hooks")]
+    #[test]
+    fn parse_provider_bridge_config() {
+        let config = parse(
+            r#"
+[reticulum]
+provider_bridge = yes
+provider_socket_path = /tmp/rns-provider.sock
+provider_queue_max_events = 42
+provider_queue_max_bytes = 8192
+provider_overflow_policy = drop_oldest
+"#,
+        )
+        .unwrap();
+
+        assert!(config.reticulum.provider_bridge);
+        assert_eq!(
+            config.reticulum.provider_socket_path.as_deref(),
+            Some("/tmp/rns-provider.sock")
+        );
+        assert_eq!(config.reticulum.provider_queue_max_events, 42);
+        assert_eq!(config.reticulum.provider_queue_max_bytes, 8192);
+        assert_eq!(config.reticulum.provider_overflow_policy, "drop_oldest");
     }
 
     #[test]

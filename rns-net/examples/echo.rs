@@ -115,12 +115,14 @@ fn main() {
     let (delivery_tx, delivery_rx) = mpsc::channel();
 
     let server_node = RnsNode::start(
-        NodeConfig { panic_on_interface_error: false,
+        NodeConfig {
+            panic_on_interface_error: false,
             transport_enabled: false,
             identity: Some(Identity::from_private_key(
                 &server_identity.get_private_key().unwrap(),
             )),
-            interfaces: vec![InterfaceConfig { name: String::new(),
+            interfaces: vec![InterfaceConfig {
+                name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
                     name: "Echo Server TCP".into(),
@@ -149,6 +151,8 @@ fn main() {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             registry: None,
+            #[cfg(feature = "rns-hooks")]
+            provider_bridge: None,
         },
         Box::new(ServerCallbacks { delivery_tx }),
     )
@@ -166,10 +170,12 @@ fn main() {
     let (proof_tx, proof_rx) = mpsc::channel();
 
     let client_node = RnsNode::start(
-        NodeConfig { panic_on_interface_error: false,
+        NodeConfig {
+            panic_on_interface_error: false,
             transport_enabled: false,
             identity: None,
-            interfaces: vec![InterfaceConfig { name: String::new(),
+            interfaces: vec![InterfaceConfig {
+                name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
                 config_data: Box::new(TcpClientConfig {
                     name: "Echo Client TCP".into(),
@@ -198,6 +204,8 @@ fn main() {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             registry: None,
+            #[cfg(feature = "rns-hooks")]
+            provider_bridge: None,
         },
         Box::new(ClientCallbacks {
             announce_tx,

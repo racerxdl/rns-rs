@@ -57,10 +57,12 @@ fn main() {
     log::info!("Connecting to RNode on {} at {} MHz", port, freq_mhz);
 
     let node = RnsNode::start(
-        NodeConfig { panic_on_interface_error: false,
+        NodeConfig {
+            panic_on_interface_error: false,
             transport_enabled: false,
             identity: None,
-            interfaces: vec![InterfaceConfig { name: String::new(),
+            interfaces: vec![InterfaceConfig {
+                name: String::new(),
                 type_name: "RNodeInterface".to_string(),
                 config_data: Box::new(RNodeConfig {
                     name: format!("RNode {}", port),
@@ -103,6 +105,8 @@ fn main() {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             registry: None,
+            #[cfg(feature = "rns-hooks")]
+            provider_bridge: None,
         },
         Box::new(LoggingCallbacks),
     )

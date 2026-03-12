@@ -547,10 +547,12 @@ const APP_NAME: &str = "e2e_test";
 /// Start a transport node (TCP server) on the given port.
 fn start_transport_node(port: u16) -> RnsNode {
     RnsNode::start(
-        NodeConfig { panic_on_interface_error: false,
+        NodeConfig {
+            panic_on_interface_error: false,
             transport_enabled: true,
             identity: Some(Identity::new(&mut OsRng)),
-            interfaces: vec![InterfaceConfig { name: String::new(),
+            interfaces: vec![InterfaceConfig {
+                name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
                     name: "Transport TCP".into(),
@@ -579,6 +581,8 @@ fn start_transport_node(port: u16) -> RnsNode {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             registry: None,
+            #[cfg(feature = "rns-hooks")]
+            provider_bridge: None,
         },
         Box::new(TransportCallbacks),
     )
@@ -588,12 +592,14 @@ fn start_transport_node(port: u16) -> RnsNode {
 /// Start a client node (TCP client) connecting to the given port.
 fn start_client_node(port: u16, identity: &Identity, callbacks: Box<dyn Callbacks>) -> RnsNode {
     RnsNode::start(
-        NodeConfig { panic_on_interface_error: false,
+        NodeConfig {
+            panic_on_interface_error: false,
             transport_enabled: false,
             identity: Some(Identity::from_private_key(
                 &identity.get_private_key().unwrap(),
             )),
-            interfaces: vec![InterfaceConfig { name: String::new(),
+            interfaces: vec![InterfaceConfig {
+                name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
                 config_data: Box::new(TcpClientConfig {
                     name: "Client TCP".into(),
@@ -623,6 +629,8 @@ fn start_client_node(port: u16, identity: &Identity, callbacks: Box<dyn Callback
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             registry: None,
+            #[cfg(feature = "rns-hooks")]
+            provider_bridge: None,
         },
         callbacks,
     )
@@ -835,12 +843,14 @@ fn test_direct_link_no_transport() {
     // Bob runs a TCP server
     let (bob_tx, bob_rx) = mpsc::channel();
     let bob_node = RnsNode::start(
-        NodeConfig { panic_on_interface_error: false,
+        NodeConfig {
+            panic_on_interface_error: false,
             transport_enabled: false,
             identity: Some(Identity::from_private_key(
                 &bob_id.get_private_key().unwrap(),
             )),
-            interfaces: vec![InterfaceConfig { name: String::new(),
+            interfaces: vec![InterfaceConfig {
+                name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
                     name: "Bob TCP Server".into(),
@@ -869,6 +879,8 @@ fn test_direct_link_no_transport() {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             registry: None,
+            #[cfg(feature = "rns-hooks")]
+            provider_bridge: None,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
@@ -1364,12 +1376,14 @@ fn test_plain_message_delivery() {
     let bob_identity = Identity::new(&mut OsRng);
     let (bob_tx, bob_rx) = mpsc::channel();
     let bob_node = RnsNode::start(
-        NodeConfig { panic_on_interface_error: false,
+        NodeConfig {
+            panic_on_interface_error: false,
             transport_enabled: false,
             identity: Some(Identity::from_private_key(
                 &bob_identity.get_private_key().unwrap(),
             )),
-            interfaces: vec![InterfaceConfig { name: String::new(),
+            interfaces: vec![InterfaceConfig {
+                name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
                     name: "Bob TCP Server".into(),
@@ -1398,6 +1412,8 @@ fn test_plain_message_delivery() {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             registry: None,
+            #[cfg(feature = "rns-hooks")]
+            provider_bridge: None,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
@@ -1448,12 +1464,14 @@ fn test_group_message_delivery() {
     let bob_identity = Identity::new(&mut OsRng);
     let (bob_tx, bob_rx) = mpsc::channel();
     let bob_node = RnsNode::start(
-        NodeConfig { panic_on_interface_error: false,
+        NodeConfig {
+            panic_on_interface_error: false,
             transport_enabled: false,
             identity: Some(Identity::from_private_key(
                 &bob_identity.get_private_key().unwrap(),
             )),
-            interfaces: vec![InterfaceConfig { name: String::new(),
+            interfaces: vec![InterfaceConfig {
+                name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
                     name: "Bob TCP Server".into(),
@@ -1482,6 +1500,8 @@ fn test_group_message_delivery() {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             registry: None,
+            #[cfg(feature = "rns-hooks")]
+            provider_bridge: None,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
@@ -1536,12 +1556,14 @@ fn test_group_wrong_key_fails() {
     let bob_identity = Identity::new(&mut OsRng);
     let (bob_tx, bob_rx) = mpsc::channel();
     let bob_node = RnsNode::start(
-        NodeConfig { panic_on_interface_error: false,
+        NodeConfig {
+            panic_on_interface_error: false,
             transport_enabled: false,
             identity: Some(Identity::from_private_key(
                 &bob_identity.get_private_key().unwrap(),
             )),
-            interfaces: vec![InterfaceConfig { name: String::new(),
+            interfaces: vec![InterfaceConfig {
+                name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
                     name: "Bob TCP Server".into(),
@@ -1570,6 +1592,8 @@ fn test_group_wrong_key_fails() {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             registry: None,
+            #[cfg(feature = "rns-hooks")]
+            provider_bridge: None,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
@@ -2613,12 +2637,14 @@ fn test_udp_announce_and_message() {
     // Alice: listens on port_a, forwards to port_b
     let (alice_tx, alice_rx) = mpsc::channel();
     let alice_node = RnsNode::start(
-        NodeConfig { panic_on_interface_error: false,
+        NodeConfig {
+            panic_on_interface_error: false,
             transport_enabled: false,
             identity: Some(Identity::from_private_key(
                 &alice_identity.get_private_key().unwrap(),
             )),
-            interfaces: vec![InterfaceConfig { name: String::new(),
+            interfaces: vec![InterfaceConfig {
+                name: String::new(),
                 type_name: "UDPInterface".to_string(),
                 config_data: Box::new(UdpConfig {
                     name: "Alice UDP".into(),
@@ -2649,6 +2675,8 @@ fn test_udp_announce_and_message() {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             registry: None,
+            #[cfg(feature = "rns-hooks")]
+            provider_bridge: None,
         },
         Box::new(TestCallbacks::new(alice_tx)),
     )
@@ -2657,12 +2685,14 @@ fn test_udp_announce_and_message() {
     // Bob: listens on port_b, forwards to port_a
     let (bob_tx, bob_rx) = mpsc::channel();
     let bob_node = RnsNode::start(
-        NodeConfig { panic_on_interface_error: false,
+        NodeConfig {
+            panic_on_interface_error: false,
             transport_enabled: false,
             identity: Some(Identity::from_private_key(
                 &bob_identity.get_private_key().unwrap(),
             )),
-            interfaces: vec![InterfaceConfig { name: String::new(),
+            interfaces: vec![InterfaceConfig {
+                name: String::new(),
                 type_name: "UDPInterface".to_string(),
                 config_data: Box::new(UdpConfig {
                     name: "Bob UDP".into(),
@@ -2693,6 +2723,8 @@ fn test_udp_announce_and_message() {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             registry: None,
+            #[cfg(feature = "rns-hooks")]
+            provider_bridge: None,
         },
         Box::new(TestCallbacks::new(bob_tx)),
     )
@@ -2796,12 +2828,14 @@ fn discovery_announce_received_by_client() {
 
     // Transport node: TCP server with a discoverable interface config
     let transport = RnsNode::start(
-        NodeConfig { panic_on_interface_error: false,
+        NodeConfig {
+            panic_on_interface_error: false,
             transport_enabled: true,
             identity: Some(Identity::from_private_key(
                 &transport_identity.get_private_key().unwrap(),
             )),
-            interfaces: vec![InterfaceConfig { name: String::new(),
+            interfaces: vec![InterfaceConfig {
+                name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
                     name: "Discoverable TCP".into(),
@@ -2840,6 +2874,8 @@ fn discovery_announce_received_by_client() {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             registry: None,
+            #[cfg(feature = "rns-hooks")]
+            provider_bridge: None,
         },
         Box::new(TransportCallbacks),
     )
@@ -2855,12 +2891,14 @@ fn discovery_announce_received_by_client() {
     let _ = std::fs::create_dir_all(&cache_dir);
 
     let client = RnsNode::start(
-        NodeConfig { panic_on_interface_error: false,
+        NodeConfig {
+            panic_on_interface_error: false,
             transport_enabled: false,
             identity: Some(Identity::from_private_key(
                 &client_identity.get_private_key().unwrap(),
             )),
-            interfaces: vec![InterfaceConfig { name: String::new(),
+            interfaces: vec![InterfaceConfig {
+                name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
                 config_data: Box::new(TcpClientConfig {
                     name: "Client TCP".into(),
@@ -2890,6 +2928,8 @@ fn discovery_announce_received_by_client() {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             registry: None,
+            #[cfg(feature = "rns-hooks")]
+            provider_bridge: None,
         },
         Box::new(TestCallbacks::new(client_tx)),
     )
@@ -2953,12 +2993,14 @@ fn discovery_announce_through_relay() {
 
     // Discoverable node: TCP server with discovery config
     let discoverable = RnsNode::start(
-        NodeConfig { panic_on_interface_error: false,
+        NodeConfig {
+            panic_on_interface_error: false,
             transport_enabled: true,
             identity: Some(Identity::from_private_key(
                 &transport_identity.get_private_key().unwrap(),
             )),
-            interfaces: vec![InterfaceConfig { name: String::new(),
+            interfaces: vec![InterfaceConfig {
+                name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
                     name: "Discoverable TCP".into(),
@@ -2997,6 +3039,8 @@ fn discovery_announce_through_relay() {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             registry: None,
+            #[cfg(feature = "rns-hooks")]
+            provider_bridge: None,
         },
         Box::new(TransportCallbacks),
     )
@@ -3007,11 +3051,13 @@ fn discovery_announce_through_relay() {
 
     // Relay node: transport, connects to discoverable, serves on port_b
     let relay = RnsNode::start(
-        NodeConfig { panic_on_interface_error: false,
+        NodeConfig {
+            panic_on_interface_error: false,
             transport_enabled: true,
             identity: Some(Identity::new(&mut OsRng)),
             interfaces: vec![
-                InterfaceConfig { name: String::new(),
+                InterfaceConfig {
+                    name: String::new(),
                     type_name: "TCPClientInterface".to_string(),
                     config_data: Box::new(TcpClientConfig {
                         name: "Relay Upstream".into(),
@@ -3024,7 +3070,8 @@ fn discovery_announce_through_relay() {
                     ifac: None,
                     discovery: None,
                 },
-                InterfaceConfig { name: String::new(),
+                InterfaceConfig {
+                    name: String::new(),
                     type_name: "TCPServerInterface".to_string(),
                     config_data: Box::new(TcpServerConfig {
                         name: "Relay Downstream".into(),
@@ -3054,6 +3101,8 @@ fn discovery_announce_through_relay() {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             registry: None,
+            #[cfg(feature = "rns-hooks")]
+            provider_bridge: None,
         },
         Box::new(TransportCallbacks),
     )
@@ -3069,10 +3118,12 @@ fn discovery_announce_through_relay() {
     let _ = std::fs::create_dir_all(&cache_dir);
 
     let client = RnsNode::start(
-        NodeConfig { panic_on_interface_error: false,
+        NodeConfig {
+            panic_on_interface_error: false,
             transport_enabled: false,
             identity: Some(Identity::new(&mut OsRng)),
-            interfaces: vec![InterfaceConfig { name: String::new(),
+            interfaces: vec![InterfaceConfig {
+                name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
                 config_data: Box::new(TcpClientConfig {
                     name: "Client TCP".into(),
@@ -3102,6 +3153,8 @@ fn discovery_announce_through_relay() {
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
             registry: None,
+            #[cfg(feature = "rns-hooks")]
+            provider_bridge: None,
         },
         Box::new(TestCallbacks::new(client_tx)),
     )
