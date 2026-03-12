@@ -385,7 +385,10 @@ impl HookManager {
             }
         }
 
-        if last_result.is_some() || !accumulated_actions.is_empty() {
+        if last_result.is_some()
+            || !accumulated_actions.is_empty()
+            || !accumulated_provider_events.is_empty()
+        {
             Some(ExecuteResult {
                 hook_result: last_result,
                 injected_actions: accumulated_actions,
@@ -1224,5 +1227,55 @@ mod tests {
             .execute_program_with_provider_events(&mut prog, &ctx, &NullEngine, 0.0, false, None)
             .unwrap();
         assert!(exec.provider_events.is_empty());
+    }
+
+    #[test]
+    fn run_chain_returns_continue_only_provider_events() {
+        let manager = make_manager();
+        let wasm = wat::parse_str(
+            r#"(module
+                (import "env" "host_emit_event" (func $emit (param i32 i32 i32 i32) (result i32)))
+                (memory (export "memory") 1)
+                (data (i32.const 4096) "\00\00\00\00")
+                (data (i32.const 8192) "packet")
+                (data (i32.const 8208) "\01\02\03")
+                (func (export "__rns_abi_version") (result i32) i32.const 1)
+                (func (export "on_hook") (param i32) (result i32)
+                    i32.const 8192
+                    i32.const 6
+                    i32.const 8208
+                    i32.const 3
+                    call $emit
+                    drop
+                    i32.const 4096
+                )
+            )"#,
+        )
+        .unwrap();
+
+        let mut programs = vec![manager.compile("emit".into(), &wasm, 0).unwrap()];
+        let pkt_ctx = crate::PacketContext {
+            flags: 0,
+            hops: 0,
+            destination_hash: [0; 16],
+            context: 0,
+            packet_hash: [0; 32],
+            interface_id: 1,
+            data_offset: 0,
+            data_len: 0,
+        };
+        let ctx = crate::HookContext::Packet {
+            ctx: &pkt_ctx,
+            raw: &[],
+        };
+
+        let exec = manager
+            .run_chain_with_provider_events(&mut programs, &ctx, &NullEngine, 0.0, true)
+            .expect("expected provider event result");
+        assert!(exec.hook_result.is_none());
+        assert!(exec.injected_actions.is_empty());
+        assert_eq!(exec.provider_events.len(), 1);
+        assert_eq!(exec.provider_events[0].payload_type, "packet");
+        assert_eq!(exec.provider_events[0].payload, vec![1, 2, 3]);
     }
 }

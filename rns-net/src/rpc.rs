@@ -21,8 +21,8 @@ use rns_crypto::hmac::hmac_sha256;
 use rns_crypto::sha256::sha256;
 
 use crate::event::{
-    BlackholeInfo, Event, EventSender, InterfaceStatsResponse, PathTableEntry, QueryRequest,
-    QueryResponse, RateTableEntry, SingleInterfaceStat,
+    BlackholeInfo, Event, EventSender, HookInfo, InterfaceStatsResponse, PathTableEntry,
+    QueryRequest, QueryResponse, RateTableEntry, SingleInterfaceStat,
 };
 use crate::md5::hmac_md5;
 use crate::pickle::{self, PickleValue};
@@ -355,6 +355,20 @@ fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Resu
                         Ok(PickleValue::None)
                     }
                 }
+                "hooks" => {
+                    let (response_tx, response_rx) = mpsc::channel();
+                    event_tx
+                        .send(Event::ListHooks { response_tx })
+                        .map_err(|_| {
+                            io::Error::new(io::ErrorKind::BrokenPipe, "driver shut down")
+                        })?;
+                    let hooks = response_rx
+                        .recv_timeout(std::time::Duration::from_secs(5))
+                        .map_err(|_| {
+                            io::Error::new(io::ErrorKind::TimedOut, "list hooks timed out")
+                        })?;
+                    Ok(hooks_to_pickle(&hooks))
+                }
                 _ => Ok(PickleValue::None),
             };
         }
@@ -515,7 +529,64 @@ fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Resu
         }
     }
 
+    if let Some(hook_val) = request.get("hook").and_then(|v| v.as_str()) {
+        return handle_hook_rpc_request(hook_val, request, event_tx);
+    }
+
     Ok(PickleValue::None)
+}
+
+fn handle_hook_rpc_request(
+    op: &str,
+    request: &PickleValue,
+    event_tx: &EventSender,
+) -> io::Result<PickleValue> {
+    match op {
+        "load" => {
+            let name = required_string(request, "name")?;
+            let attach_point = required_string(request, "attach_point")?;
+            let priority = request
+                .get("priority")
+                .and_then(|v| v.as_int())
+                .unwrap_or(0) as i32;
+            let wasm = request
+                .get("wasm")
+                .and_then(|v| v.as_bytes())
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing wasm"))?
+                .to_vec();
+            let (response_tx, response_rx) = mpsc::channel();
+            event_tx
+                .send(Event::LoadHook {
+                    name,
+                    wasm_bytes: wasm,
+                    attach_point,
+                    priority,
+                    response_tx,
+                })
+                .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "driver shut down"))?;
+            let response = response_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "hook load timed out"))?;
+            Ok(hook_result_to_pickle(response))
+        }
+        "unload" => {
+            let name = required_string(request, "name")?;
+            let attach_point = required_string(request, "attach_point")?;
+            let (response_tx, response_rx) = mpsc::channel();
+            event_tx
+                .send(Event::UnloadHook {
+                    name,
+                    attach_point,
+                    response_tx,
+                })
+                .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "driver shut down"))?;
+            let response = response_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "hook unload timed out"))?;
+            Ok(hook_result_to_pickle(response))
+        }
+        _ => Ok(PickleValue::None),
+    }
 }
 
 /// Send a query to the driver and wait for the response.
@@ -541,6 +612,30 @@ fn extract_dest_hash(request: &PickleValue, key: &str) -> io::Result<[u8; 16]> {
     let mut hash = [0u8; 16];
     hash.copy_from_slice(&bytes[..16]);
     Ok(hash)
+}
+
+fn required_string(request: &PickleValue, key: &str) -> io::Result<String> {
+    request
+        .get(key)
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, format!("missing {}", key)))
+}
+
+fn hook_result_to_pickle(result: Result<(), String>) -> PickleValue {
+    match result {
+        Ok(()) => PickleValue::Dict(vec![(
+            PickleValue::String("ok".into()),
+            PickleValue::Bool(true),
+        )]),
+        Err(error) => PickleValue::Dict(vec![
+            (PickleValue::String("ok".into()), PickleValue::Bool(false)),
+            (
+                PickleValue::String("error".into()),
+                PickleValue::String(error),
+            ),
+        ]),
+    }
 }
 
 // --- Pickle response builders ---
@@ -957,6 +1052,38 @@ fn discovered_interfaces_to_pickle(
     PickleValue::List(list)
 }
 
+fn hooks_to_pickle(hooks: &[HookInfo]) -> PickleValue {
+    PickleValue::List(
+        hooks
+            .iter()
+            .map(|hook| {
+                PickleValue::Dict(vec![
+                    (
+                        PickleValue::String("name".into()),
+                        PickleValue::String(hook.name.clone()),
+                    ),
+                    (
+                        PickleValue::String("attach_point".into()),
+                        PickleValue::String(hook.attach_point.clone()),
+                    ),
+                    (
+                        PickleValue::String("priority".into()),
+                        PickleValue::Int(hook.priority as i64),
+                    ),
+                    (
+                        PickleValue::String("enabled".into()),
+                        PickleValue::Bool(hook.enabled),
+                    ),
+                    (
+                        PickleValue::String("consecutive_traps".into()),
+                        PickleValue::Int(hook.consecutive_traps as i64),
+                    ),
+                ])
+            })
+            .collect(),
+    )
+}
+
 // --- RPC Client ---
 
 /// RPC client for connecting to a running daemon.
@@ -989,6 +1116,121 @@ impl RpcClient {
         pickle::decode(&response_bytes)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
     }
+
+    pub fn list_hooks(&mut self) -> io::Result<Vec<HookInfo>> {
+        let response = self.call(&PickleValue::Dict(vec![(
+            PickleValue::String("get".into()),
+            PickleValue::String("hooks".into()),
+        )]))?;
+        parse_hook_list(&response)
+    }
+
+    pub fn load_hook(
+        &mut self,
+        name: &str,
+        attach_point: &str,
+        priority: i32,
+        wasm: &[u8],
+    ) -> io::Result<Result<(), String>> {
+        let response = self.call(&PickleValue::Dict(vec![
+            (
+                PickleValue::String("hook".into()),
+                PickleValue::String("load".into()),
+            ),
+            (
+                PickleValue::String("name".into()),
+                PickleValue::String(name.to_string()),
+            ),
+            (
+                PickleValue::String("attach_point".into()),
+                PickleValue::String(attach_point.to_string()),
+            ),
+            (
+                PickleValue::String("priority".into()),
+                PickleValue::Int(priority as i64),
+            ),
+            (
+                PickleValue::String("wasm".into()),
+                PickleValue::Bytes(wasm.to_vec()),
+            ),
+        ]))?;
+        parse_hook_result(&response)
+    }
+
+    pub fn unload_hook(
+        &mut self,
+        name: &str,
+        attach_point: &str,
+    ) -> io::Result<Result<(), String>> {
+        let response = self.call(&PickleValue::Dict(vec![
+            (
+                PickleValue::String("hook".into()),
+                PickleValue::String("unload".into()),
+            ),
+            (
+                PickleValue::String("name".into()),
+                PickleValue::String(name.to_string()),
+            ),
+            (
+                PickleValue::String("attach_point".into()),
+                PickleValue::String(attach_point.to_string()),
+            ),
+        ]))?;
+        parse_hook_result(&response)
+    }
+}
+
+fn parse_hook_result(response: &PickleValue) -> io::Result<Result<(), String>> {
+    let ok = response
+        .get("ok")
+        .and_then(|v| v.as_bool())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid hook response"))?;
+    if ok {
+        Ok(Ok(()))
+    } else {
+        Ok(Err(response
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown hook error")
+            .to_string()))
+    }
+}
+
+fn parse_hook_list(response: &PickleValue) -> io::Result<Vec<HookInfo>> {
+    let list = response
+        .as_list()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid hooks response"))?;
+    let mut hooks = Vec::with_capacity(list.len());
+    for item in list {
+        hooks.push(HookInfo {
+            name: item
+                .get("name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing hook name"))?
+                .to_string(),
+            attach_point: item
+                .get("attach_point")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing attach_point"))?
+                .to_string(),
+            priority: item
+                .get("priority")
+                .and_then(|v| v.as_int())
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing priority"))?
+                as i32,
+            enabled: item
+                .get("enabled")
+                .and_then(|v| v.as_bool())
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing enabled"))?,
+            consecutive_traps: item
+                .get("consecutive_traps")
+                .and_then(|v| v.as_int())
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::InvalidData, "missing consecutive_traps")
+                })? as u32,
+        });
+    }
+    Ok(hooks)
 }
 
 /// Client-side authentication: answer the server's challenge.
@@ -1251,6 +1493,78 @@ mod tests {
 
         let response = handle_rpc_request(&request, &event_tx).unwrap();
         assert_eq!(response, PickleValue::Bool(true));
+        driver.join().unwrap();
+    }
+
+    #[test]
+    fn hook_list_request_handling() {
+        let (event_tx, event_rx) = crate::event::channel();
+
+        let driver = thread::spawn(move || {
+            if let Ok(Event::ListHooks { response_tx }) = event_rx.recv() {
+                let _ = response_tx.send(vec![HookInfo {
+                    name: "stats".into(),
+                    attach_point: "PreIngress".into(),
+                    priority: 7,
+                    enabled: true,
+                    consecutive_traps: 0,
+                }]);
+            }
+        });
+
+        let request = PickleValue::Dict(vec![(
+            PickleValue::String("get".into()),
+            PickleValue::String("hooks".into()),
+        )]);
+        let response = handle_rpc_request(&request, &event_tx).unwrap();
+        let hooks = parse_hook_list(&response).unwrap();
+        assert_eq!(hooks.len(), 1);
+        assert_eq!(hooks[0].name, "stats");
+        driver.join().unwrap();
+    }
+
+    #[test]
+    fn hook_load_request_handling() {
+        let (event_tx, event_rx) = crate::event::channel();
+
+        let driver = thread::spawn(move || {
+            if let Ok(Event::LoadHook {
+                name,
+                wasm_bytes,
+                attach_point,
+                priority,
+                response_tx,
+            }) = event_rx.recv()
+            {
+                assert_eq!(name, "stats");
+                assert_eq!(attach_point, "PreIngress");
+                assert_eq!(priority, 11);
+                assert_eq!(wasm_bytes, vec![1, 2, 3]);
+                let _ = response_tx.send(Ok(()));
+            }
+        });
+
+        let request = PickleValue::Dict(vec![
+            (
+                PickleValue::String("hook".into()),
+                PickleValue::String("load".into()),
+            ),
+            (
+                PickleValue::String("name".into()),
+                PickleValue::String("stats".into()),
+            ),
+            (
+                PickleValue::String("attach_point".into()),
+                PickleValue::String("PreIngress".into()),
+            ),
+            (PickleValue::String("priority".into()), PickleValue::Int(11)),
+            (
+                PickleValue::String("wasm".into()),
+                PickleValue::Bytes(vec![1, 2, 3]),
+            ),
+        ]);
+        let response = handle_rpc_request(&request, &event_tx).unwrap();
+        assert_eq!(parse_hook_result(&response).unwrap(), Ok(()));
         driver.join().unwrap();
     }
 

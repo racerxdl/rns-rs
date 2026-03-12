@@ -3,3 +3,4 @@
 pub mod args;
 pub mod format;
 pub mod remote;
+pub mod statsd;

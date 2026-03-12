@@ -8,12 +8,21 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
-rns-net.workspace = true
+rns-net = { workspace = true, features = ["rns-hooks"] }
 rns-core.workspace = true
 rns-crypto.workspace = true
+rns-hooks-abi = { path = "../rns-hooks/sdk/rns-hooks-abi" }
 log = "0.4"
 env_logger = "0.10"
 libc = "0.2"
+rusqlite = { version = "0.32", features = ["bundled"] }
+bincode = "1"
+
+[build-dependencies]
+anyhow = "1"
+
+[dev-dependencies]
+tempfile = "3"
 
 [[bin]]
 name = "rnsd"
@@ -34,3 +43,7 @@ path = "src/bin/rnid.rs"
 [[bin]]
 name = "rnprobe"
 path = "src/bin/rnprobe.rs"
+
+[[bin]]
+name = "rns-statsd"
+path = "src/bin/rns-statsd.rs"

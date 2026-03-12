@@ -1,0 +1,13 @@
+[workspace]
+
+[package]
+name = "stats-scraper"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+rns-hooks-sdk = { path = "../../sdk/rns-hooks-sdk" }
+rns-hooks-abi = { path = "../../sdk/rns-hooks-abi" }

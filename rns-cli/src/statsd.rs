@@ -1,0 +1,572 @@
+use std::collections::HashMap;
+use std::fs;
+use std::io::{self, Read};
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
+use std::process;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use rns_hooks_abi::stats::{PacketStatsPayload, PACKET_STATS_PAYLOAD_TYPE};
+use rns_net::config;
+use rns_net::provider_bridge::{ProviderEnvelope, ProviderMessage};
+use rns_net::rpc::derive_auth_key;
+use rns_net::storage;
+use rns_net::{HookInfo, RpcAddr, RpcClient};
+use rusqlite::{params, Connection};
+
+use crate::args::Args;
+
+const VERSION: &str = env!("FULL_VERSION");
+const EMBEDDED_HOOK_WASM: &[u8] = include_bytes!(env!("RNS_STATSD_HOOK_WASM"));
+const HOOK_SPECS: [(&str, &str); 3] = [
+    ("rns_statsd_pre_ingress", "PreIngress"),
+    ("rns_statsd_send_on_interface", "SendOnInterface"),
+    ("rns_statsd_broadcast_all", "BroadcastOnAllInterfaces"),
+];
+
+static SHOULD_STOP: AtomicBool = AtomicBool::new(false);
+
+pub fn main_entry() {
+    let previous_panic_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |panic_info| {
+        SHOULD_STOP.store(true, Ordering::Relaxed);
+        previous_panic_hook(panic_info);
+    }));
+
+    let exit_code = match std::panic::catch_unwind(run) {
+        Ok(Ok(())) => 0,
+        Ok(Err(err)) => {
+            eprintln!("rns-statsd: {}", err);
+            1
+        }
+        Err(_) => 101,
+    };
+
+    process::exit(exit_code);
+}
+
+fn run() -> Result<(), String> {
+    let args = Args::parse();
+    if args.has("version") {
+        println!("rns-statsd {}", VERSION);
+        return Ok(());
+    }
+    if args.has("help") || args.has("h") {
+        print_usage();
+        return Ok(());
+    }
+
+    env_logger::Builder::new()
+        .filter_level(match args.verbosity {
+            0 => log::LevelFilter::Info,
+            1 => log::LevelFilter::Debug,
+            _ => log::LevelFilter::Trace,
+        })
+        .format_timestamp_secs()
+        .init();
+
+    install_signal_handlers();
+
+    let db_path = args
+        .get("db")
+        .map(PathBuf::from)
+        .ok_or_else(|| "--db PATH is required".to_string())?;
+    let flush_interval = Duration::from_secs(
+        args.get("flush-interval")
+            .or_else(|| args.get("f"))
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(5),
+    );
+    let priority = args
+        .get("priority")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+    let runtime = RuntimeConfig::load(args.config_path().map(Path::new), args.get("socket"))?;
+
+    let mut db = StatsDb::open(&db_path).map_err(|e| format!("sqlite open failed: {}", e))?;
+    let control = RpcControl::new(runtime.rpc_addr.clone(), runtime.auth_key);
+    unload_stale_hooks(&control);
+    load_hooks(&control, priority)?;
+    let hook_guard = HookGuard {
+        control: control.clone(),
+        armed: true,
+    };
+
+    let mut stream = UnixStream::connect(&runtime.provider_socket)
+        .map_err(|e| format!("provider bridge connect failed: {}", e))?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(1)))
+        .map_err(|e| format!("provider bridge timeout setup failed: {}", e))?;
+
+    let mut aggregator = StatsAggregator::default();
+    let mut next_flush = Instant::now() + flush_interval;
+
+    while !SHOULD_STOP.load(Ordering::Relaxed) {
+        match read_provider_envelope(&mut stream) {
+            Ok(Some(envelope)) => aggregator.ingest(envelope),
+            Ok(None) => {}
+            Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => {
+                return Err("provider bridge disconnected".to_string());
+            }
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) => {}
+            Err(err) => return Err(format!("provider bridge read failed: {}", err)),
+        }
+
+        if Instant::now() >= next_flush {
+            db.flush(&mut aggregator)
+                .map_err(|e| format!("sqlite flush failed: {}", e))?;
+            next_flush = Instant::now() + flush_interval;
+        }
+    }
+
+    db.flush(&mut aggregator)
+        .map_err(|e| format!("sqlite shutdown flush failed: {}", e))?;
+    drop(hook_guard);
+    Ok(())
+}
+
+#[derive(Clone)]
+struct RpcControl {
+    rpc_addr: RpcAddr,
+    auth_key: [u8; 32],
+}
+
+impl RpcControl {
+    fn new(rpc_addr: RpcAddr, auth_key: [u8; 32]) -> Self {
+        Self { rpc_addr, auth_key }
+    }
+
+    fn with_client<T>(
+        &self,
+        op: impl FnOnce(&mut RpcClient) -> io::Result<T>,
+    ) -> Result<T, String> {
+        let mut client = RpcClient::connect(&self.rpc_addr, &self.auth_key)
+            .map_err(|e| format!("rpc connect failed: {}", e))?;
+        op(&mut client).map_err(|e| format!("rpc call failed: {}", e))
+    }
+
+    fn load_hook(&self, name: &str, attach_point: &str, priority: i32) -> Result<(), String> {
+        self.with_client(|client| {
+            client.load_hook(name, attach_point, priority, EMBEDDED_HOOK_WASM)
+        })?
+    }
+
+    fn unload_hook(&self, name: &str, attach_point: &str) -> Result<(), String> {
+        self.with_client(|client| client.unload_hook(name, attach_point))?
+    }
+
+    fn list_hooks(&self) -> Result<Vec<HookInfo>, String> {
+        self.with_client(|client| client.list_hooks())
+    }
+}
+
+struct HookGuard {
+    control: RpcControl,
+    armed: bool,
+}
+
+impl Drop for HookGuard {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        for (name, attach_point) in HOOK_SPECS {
+            let _ = self.control.unload_hook(name, attach_point);
+        }
+    }
+}
+
+struct RuntimeConfig {
+    rpc_addr: RpcAddr,
+    auth_key: [u8; 32],
+    provider_socket: PathBuf,
+}
+
+impl RuntimeConfig {
+    fn load(config_path: Option<&Path>, socket_override: Option<&str>) -> Result<Self, String> {
+        let config_dir = storage::resolve_config_dir(config_path);
+        let config_file = config_dir.join("config");
+        let rns_config = if config_file.exists() {
+            config::parse_file(&config_file).map_err(|e| e.to_string())?
+        } else {
+            config::parse("").map_err(|e| e.to_string())?
+        };
+        let paths = storage::ensure_storage_dirs(&config_dir).map_err(|e| e.to_string())?;
+        let identity =
+            storage::load_or_create_identity(&paths.identities).map_err(|e| e.to_string())?;
+        let auth_key = derive_auth_key(&identity.get_private_key().unwrap_or([0u8; 64]));
+        let provider_socket = socket_override
+            .map(PathBuf::from)
+            .or_else(|| rns_config.reticulum.provider_socket_path.map(PathBuf::from))
+            .ok_or_else(|| "provider bridge socket is not configured".to_string())?;
+
+        Ok(Self {
+            rpc_addr: RpcAddr::Tcp(
+                "127.0.0.1".into(),
+                rns_config.reticulum.instance_control_port,
+            ),
+            auth_key,
+            provider_socket,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct CounterKey {
+    interface_key: String,
+    interface_id: Option<u64>,
+    direction: &'static str,
+    packet_type: &'static str,
+}
+
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
+struct CounterValue {
+    packets: u64,
+    bytes: u64,
+}
+
+#[derive(Default)]
+struct StatsAggregator {
+    counters: HashMap<CounterKey, CounterValue>,
+}
+
+impl StatsAggregator {
+    fn ingest(&mut self, envelope: ProviderEnvelope) {
+        match envelope.message {
+            ProviderMessage::DroppedEvents { count } => {
+                log::warn!("provider bridge dropped {} event(s)", count);
+            }
+            ProviderMessage::Event(event) => {
+                if event.payload_type != PACKET_STATS_PAYLOAD_TYPE {
+                    return;
+                }
+                let payload = match PacketStatsPayload::decode(&event.payload) {
+                    Some(payload) => payload,
+                    None => {
+                        log::warn!("invalid stats payload length: {}", event.payload.len());
+                        return;
+                    }
+                };
+                let direction = match direction_for_attach_point(&event.attach_point) {
+                    Some(direction) => direction,
+                    None => return,
+                };
+                let packet_type = packet_type_name(payload.flags);
+                let (interface_key, interface_id) =
+                    if event.attach_point == "BroadcastOnAllInterfaces" {
+                        ("broadcast_all".to_string(), None)
+                    } else {
+                        (
+                            format!("iface:{}", payload.interface_id),
+                            Some(payload.interface_id),
+                        )
+                    };
+                let key = CounterKey {
+                    interface_key,
+                    interface_id,
+                    direction,
+                    packet_type,
+                };
+                let counter = self.counters.entry(key).or_default();
+                counter.packets += 1;
+                counter.bytes += payload.packet_len as u64;
+            }
+        }
+    }
+}
+
+struct StatsDb {
+    conn: Connection,
+}
+
+impl StatsDb {
+    fn open(path: &Path) -> rusqlite::Result<Self> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
+        }
+        let conn = Connection::open(path)?;
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        conn.busy_timeout(Duration::from_secs(5))?;
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS packet_counters (
+                interface_key TEXT NOT NULL,
+                interface_id INTEGER NULL,
+                direction TEXT NOT NULL,
+                packet_type TEXT NOT NULL,
+                packets INTEGER NOT NULL,
+                bytes INTEGER NOT NULL,
+                updated_at_ms INTEGER NOT NULL,
+                PRIMARY KEY (interface_key, direction, packet_type)
+            );",
+        )?;
+        Ok(Self { conn })
+    }
+
+    fn flush(&mut self, aggregator: &mut StatsAggregator) -> rusqlite::Result<()> {
+        if aggregator.counters.is_empty() {
+            return Ok(());
+        }
+        let tx = self.conn.transaction()?;
+        let now = now_unix_ms() as i64;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO packet_counters (
+                    interface_key, interface_id, direction, packet_type, packets, bytes, updated_at_ms
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                ON CONFLICT(interface_key, direction, packet_type) DO UPDATE SET
+                    interface_id = excluded.interface_id,
+                    packets = packet_counters.packets + excluded.packets,
+                    bytes = packet_counters.bytes + excluded.bytes,
+                    updated_at_ms = excluded.updated_at_ms",
+            )?;
+            for (key, value) in aggregator.counters.drain() {
+                stmt.execute(params![
+                    key.interface_key,
+                    key.interface_id.map(|v| v as i64),
+                    key.direction,
+                    key.packet_type,
+                    value.packets as i64,
+                    value.bytes as i64,
+                    now,
+                ])?;
+            }
+        }
+        tx.commit()
+    }
+}
+
+fn load_hooks(control: &RpcControl, priority: i32) -> Result<(), String> {
+    let mut loaded = Vec::new();
+    for (name, attach_point) in HOOK_SPECS {
+        if let Err(err) = control.load_hook(name, attach_point, priority) {
+            for (loaded_name, loaded_attach_point) in loaded.into_iter().rev() {
+                let _ = control.unload_hook(loaded_name, loaded_attach_point);
+            }
+            return Err(format!(
+                "failed to load {} at {}: {}",
+                name, attach_point, err
+            ));
+        }
+        loaded.push((name, attach_point));
+    }
+    Ok(())
+}
+
+fn unload_stale_hooks(control: &RpcControl) {
+    match control.list_hooks() {
+        Ok(hooks) => {
+            for hook in hooks {
+                if HOOK_SPECS.iter().any(|(name, attach_point)| {
+                    *name == hook.name && *attach_point == hook.attach_point
+                }) {
+                    let _ = control.unload_hook(&hook.name, &hook.attach_point);
+                }
+            }
+        }
+        Err(err) => {
+            log::debug!("could not list hooks for stale cleanup: {}", err);
+            for (name, attach_point) in HOOK_SPECS {
+                let _ = control.unload_hook(name, attach_point);
+            }
+        }
+    }
+}
+
+fn read_provider_envelope(stream: &mut UnixStream) -> io::Result<Option<ProviderEnvelope>> {
+    let mut len_buf = [0u8; 4];
+    match stream.read_exact(&mut len_buf) {
+        Ok(()) => {}
+        Err(err)
+            if matches!(
+                err.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+            ) =>
+        {
+            return Ok(None);
+        }
+        Err(err) => return Err(err),
+    }
+    let len = u32::from_be_bytes(len_buf) as usize;
+    let mut buf = vec![0u8; len];
+    stream.read_exact(&mut buf)?;
+    let envelope: ProviderEnvelope =
+        bincode::deserialize(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    Ok(Some(envelope))
+}
+
+fn direction_for_attach_point(attach_point: &str) -> Option<&'static str> {
+    match attach_point {
+        "PreIngress" => Some("rx"),
+        "SendOnInterface" | "BroadcastOnAllInterfaces" => Some("tx"),
+        _ => None,
+    }
+}
+
+fn packet_type_name(flags: u8) -> &'static str {
+    match flags & 0x03 {
+        rns_core::constants::PACKET_TYPE_ANNOUNCE => "announce",
+        rns_core::constants::PACKET_TYPE_LINKREQUEST => "linkrequest",
+        rns_core::constants::PACKET_TYPE_PROOF => "proof",
+        _ => "data",
+    }
+}
+
+fn now_unix_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn install_signal_handlers() {
+    unsafe {
+        libc::signal(
+            libc::SIGINT,
+            signal_handler as *const () as libc::sighandler_t,
+        );
+        libc::signal(
+            libc::SIGTERM,
+            signal_handler as *const () as libc::sighandler_t,
+        );
+        libc::signal(
+            libc::SIGHUP,
+            signal_handler as *const () as libc::sighandler_t,
+        );
+    }
+}
+
+extern "C" fn signal_handler(_sig: libc::c_int) {
+    SHOULD_STOP.store(true, Ordering::Relaxed);
+}
+
+fn print_usage() {
+    println!("Usage: rns-statsd --db PATH [OPTIONS]");
+    println!();
+    println!("Options:");
+    println!("  --config PATH, -c PATH      Path to config directory");
+    println!("  --db PATH                   SQLite database path");
+    println!("  --flush-interval SECONDS    Flush interval (default: 5)");
+    println!("  --socket PATH               Override provider bridge socket path");
+    println!("  --priority N                Hook priority (default: 0)");
+    println!("  --version                   Show version");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn packet_event_updates_interface_counter() {
+        let payload = PacketStatsPayload {
+            flags: 0x01,
+            packet_len: 128,
+            interface_id: 42,
+        }
+        .encode()
+        .to_vec();
+        let envelope = ProviderEnvelope {
+            version: 1,
+            seq: 1,
+            message: ProviderMessage::Event(rns_net::HookProviderEventEnvelope {
+                ts_unix_ms: 1,
+                node_instance: "node".into(),
+                hook_name: "stats".into(),
+                attach_point: "PreIngress".into(),
+                payload_type: PACKET_STATS_PAYLOAD_TYPE.into(),
+                payload,
+            }),
+        };
+        let mut agg = StatsAggregator::default();
+        agg.ingest(envelope);
+        assert_eq!(agg.counters.len(), 1);
+        let (key, value) = agg.counters.iter().next().unwrap();
+        assert_eq!(key.interface_key, "iface:42");
+        assert_eq!(key.direction, "rx");
+        assert_eq!(key.packet_type, "announce");
+        assert_eq!(
+            *value,
+            CounterValue {
+                packets: 1,
+                bytes: 128
+            }
+        );
+    }
+
+    #[test]
+    fn broadcast_uses_synthetic_interface_key() {
+        let payload = PacketStatsPayload {
+            flags: 0x03,
+            packet_len: 64,
+            interface_id: 99,
+        }
+        .encode()
+        .to_vec();
+        let envelope = ProviderEnvelope {
+            version: 1,
+            seq: 2,
+            message: ProviderMessage::Event(rns_net::HookProviderEventEnvelope {
+                ts_unix_ms: 1,
+                node_instance: "node".into(),
+                hook_name: "stats".into(),
+                attach_point: "BroadcastOnAllInterfaces".into(),
+                payload_type: PACKET_STATS_PAYLOAD_TYPE.into(),
+                payload,
+            }),
+        };
+        let mut agg = StatsAggregator::default();
+        agg.ingest(envelope);
+        let (key, _) = agg.counters.iter().next().unwrap();
+        assert_eq!(key.interface_key, "broadcast_all");
+        assert_eq!(key.interface_id, None);
+        assert_eq!(key.direction, "tx");
+        assert_eq!(key.packet_type, "proof");
+    }
+
+    #[test]
+    fn sqlite_flush_accumulates_counts() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("stats.db");
+        let mut db = StatsDb::open(&db_path).unwrap();
+        let mut agg = StatsAggregator::default();
+        let key = CounterKey {
+            interface_key: "iface:7".into(),
+            interface_id: Some(7),
+            direction: "tx",
+            packet_type: "data",
+        };
+        agg.counters.insert(
+            key.clone(),
+            CounterValue {
+                packets: 2,
+                bytes: 50,
+            },
+        );
+        db.flush(&mut agg).unwrap();
+
+        let mut agg2 = StatsAggregator::default();
+        agg2.counters.insert(
+            key,
+            CounterValue {
+                packets: 3,
+                bytes: 25,
+            },
+        );
+        db.flush(&mut agg2).unwrap();
+
+        let row: (i64, i64) = db
+            .conn
+            .query_row(
+                "SELECT packets, bytes FROM packet_counters WHERE interface_key = 'iface:7'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(row, (5, 75));
+    }
+}

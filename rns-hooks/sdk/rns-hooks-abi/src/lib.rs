@@ -2,6 +2,7 @@
 
 pub mod context;
 pub mod result;
+pub mod stats;
 pub mod wire;
 
 /// ABI version number. Bump this when the ABI surface changes (context struct

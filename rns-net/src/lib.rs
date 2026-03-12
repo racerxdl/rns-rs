@@ -36,7 +36,7 @@ pub use config::RnsConfig;
 pub use destination::{AnnouncedIdentity, Destination, GroupKeyError};
 pub use driver::Callbacks;
 pub use event::{
-    BlackholeInfo, Event, InterfaceStatsResponse, LinkInfoEntry, LocalDestinationEntry,
+    BlackholeInfo, Event, HookInfo, InterfaceStatsResponse, LinkInfoEntry, LocalDestinationEntry,
     NextHopResponse, PathTableEntry, QueryRequest, QueryResponse, RateTableEntry,
     ResourceInfoEntry, SingleInterfaceStat,
 };
