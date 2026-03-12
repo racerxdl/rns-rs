@@ -174,6 +174,9 @@ pub struct NodeConfig {
     pub max_paths_per_destination: usize,
     /// Custom interface registry. If `None`, uses `InterfaceRegistry::with_builtins()`.
     pub registry: Option<crate::interface::registry::InterfaceRegistry>,
+    /// If true, a single interface failing to start will abort the entire node.
+    /// If false (default), the error is logged and remaining interfaces continue.
+    pub panic_on_interface_error: bool,
 }
 
 /// IFAC configuration for an interface.
@@ -185,6 +188,7 @@ pub struct IfacConfig {
 
 /// Interface configuration, parsed via an [`InterfaceFactory`] from the registry.
 pub struct InterfaceConfig {
+    pub name: String,
     pub type_name: String,
     pub config_data: Box<dyn crate::interface::InterfaceConfigData>,
     pub mode: u8,
@@ -338,6 +342,7 @@ impl RnsNode {
             };
 
             interface_configs.push(InterfaceConfig {
+                name: iface.name.clone(),
                 type_name: iface.interface_type.clone(),
                 config_data,
                 mode: iface_mode,
@@ -431,6 +436,7 @@ impl RnsNode {
             max_paths_per_destination: rns_config.reticulum.max_paths_per_destination,
             interfaces: interface_configs,
             registry: None,
+            panic_on_interface_error: rns_config.reticulum.panic_on_interface_error,
         };
 
         Self::start(node_config, callbacks)
@@ -573,15 +579,6 @@ impl RnsNode {
                 }
             };
 
-            if let Some(ref disc) = iface_config.discovery {
-                discoverable_interfaces.push(crate::discovery::DiscoverableInterface {
-                    config: disc.clone(),
-                    transport_enabled: config.transport_enabled,
-                    ifac_netname: iface_config.ifac.as_ref().and_then(|ic| ic.netname.clone()),
-                    ifac_netkey: iface_config.ifac.as_ref().and_then(|ic| ic.netkey.clone()),
-                });
-            }
-
             let mut ifac_state = iface_config.ifac.as_ref().and_then(|ic| {
                 if ic.netname.is_some() || ic.netkey.is_some() {
                     Some(ifac::derive_ifac(
@@ -600,7 +597,30 @@ impl RnsNode {
                 mode: iface_config.mode,
             };
 
-            let result = factory.start(iface_config.config_data, ctx)?;
+            let result = match factory.start(iface_config.config_data, ctx) {
+                Ok(r) => r,
+                Err(e) => {
+                    if config.panic_on_interface_error {
+                        return Err(e);
+                    }
+                    log::error!(
+                        "Interface '{}' ({}) failed to start: {}",
+                        iface_config.name,
+                        iface_config.type_name,
+                        e
+                    );
+                    continue;
+                }
+            };
+
+            if let Some(ref disc) = iface_config.discovery {
+                discoverable_interfaces.push(crate::discovery::DiscoverableInterface {
+                    config: disc.clone(),
+                    transport_enabled: config.transport_enabled,
+                    ifac_netname: iface_config.ifac.as_ref().and_then(|ic| ic.netname.clone()),
+                    ifac_netkey: iface_config.ifac.as_ref().and_then(|ic| ic.netkey.clone()),
+                });
+            }
 
             match result {
                 crate::interface::StartResult::Simple {
@@ -1450,7 +1470,7 @@ mod tests {
     #[test]
     fn start_and_shutdown() {
         let node = RnsNode::start(
-            NodeConfig {
+            NodeConfig { panic_on_interface_error: false,
                 transport_enabled: false,
                 identity: None,
                 interfaces: vec![],
@@ -1483,7 +1503,7 @@ mod tests {
         let identity = Identity::new(&mut OsRng);
         let hash = *identity.hash();
         let node = RnsNode::start(
-            NodeConfig {
+            NodeConfig { panic_on_interface_error: false,
                 transport_enabled: true,
                 identity: Some(identity),
                 interfaces: vec![],
@@ -1516,7 +1536,7 @@ mod tests {
     #[test]
     fn start_generates_identity() {
         let node = RnsNode::start(
-            NodeConfig {
+            NodeConfig { panic_on_interface_error: false,
                 transport_enabled: false,
                 identity: None,
                 interfaces: vec![],
@@ -1681,22 +1701,10 @@ enable_transport = False
 "#;
         fs::write(dir.join("config"), config).unwrap();
 
-        let result = RnsNode::from_config(Some(&dir), Box::new(NoopCallbacks));
-        // Should fail because the serial port doesn't exist, not because of config parsing
-        match result {
-            Ok(node) => {
-                node.shutdown();
-                panic!("Expected error from non-existent serial port");
-            }
-            Err(err) => {
-                let msg = format!("{}", err);
-                assert!(
-                    !msg.contains("Unsupported") && !msg.contains("parse"),
-                    "Error should be from serial open, got: {}",
-                    msg
-                );
-            }
-        }
+        // Interface error is non-fatal: the node starts but logs the error.
+        let node = RnsNode::from_config(Some(&dir), Box::new(NoopCallbacks))
+            .expect("Config should parse; interface failure is non-fatal");
+        node.shutdown();
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1729,22 +1737,10 @@ enable_transport = False
 "#;
         fs::write(dir.join("config"), config).unwrap();
 
-        let result = RnsNode::from_config(Some(&dir), Box::new(NoopCallbacks));
-        // Should fail because the serial port doesn't exist
-        match result {
-            Ok(node) => {
-                node.shutdown();
-                panic!("Expected error from non-existent serial port");
-            }
-            Err(err) => {
-                let msg = format!("{}", err);
-                assert!(
-                    !msg.contains("Unsupported") && !msg.contains("parse"),
-                    "Error should be from serial open, got: {}",
-                    msg
-                );
-            }
-        }
+        // Interface error is non-fatal: the node starts but logs the error.
+        let node = RnsNode::from_config(Some(&dir), Box::new(NoopCallbacks))
+            .expect("Config should parse; interface failure is non-fatal");
+        node.shutdown();
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1813,22 +1809,10 @@ enable_transport = False
 "#;
         fs::write(dir.join("config"), config).unwrap();
 
-        let result = RnsNode::from_config(Some(&dir), Box::new(NoopCallbacks));
-        // Should fail because the serial port doesn't exist, not because of config parsing
-        match result {
-            Ok(node) => {
-                node.shutdown();
-                panic!("Expected error from non-existent serial port");
-            }
-            Err(err) => {
-                let msg = format!("{}", err);
-                assert!(
-                    !msg.contains("Unsupported") && !msg.contains("parse"),
-                    "Error should be from serial open, got: {}",
-                    msg
-                );
-            }
-        }
+        // Interface error is non-fatal: the node starts but logs the error.
+        let node = RnsNode::from_config(Some(&dir), Box::new(NoopCallbacks))
+            .expect("Config should parse; interface failure is non-fatal");
+        node.shutdown();
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1945,7 +1929,7 @@ enable_transport = False
         let identity_hash = rns_core::types::IdentityHash(*identity.hash());
 
         let node = RnsNode::start(
-            NodeConfig {
+            NodeConfig { panic_on_interface_error: false,
                 transport_enabled: false,
                 identity: None,
                 interfaces: vec![],
@@ -1987,7 +1971,7 @@ enable_transport = False
     #[test]
     fn has_path_and_hops_to() {
         let node = RnsNode::start(
-            NodeConfig {
+            NodeConfig { panic_on_interface_error: false,
                 transport_enabled: false,
                 identity: None,
                 interfaces: vec![],
@@ -2025,7 +2009,7 @@ enable_transport = False
     #[test]
     fn recall_identity_none_when_unknown() {
         let node = RnsNode::start(
-            NodeConfig {
+            NodeConfig { panic_on_interface_error: false,
                 transport_enabled: false,
                 identity: None,
                 interfaces: vec![],
@@ -2060,7 +2044,7 @@ enable_transport = False
     #[test]
     fn request_path_does_not_crash() {
         let node = RnsNode::start(
-            NodeConfig {
+            NodeConfig { panic_on_interface_error: false,
                 transport_enabled: false,
                 identity: None,
                 interfaces: vec![],
@@ -2102,7 +2086,7 @@ enable_transport = False
     #[test]
     fn send_packet_plain() {
         let node = RnsNode::start(
-            NodeConfig {
+            NodeConfig { panic_on_interface_error: false,
                 transport_enabled: false,
                 identity: None,
                 interfaces: vec![],
@@ -2145,7 +2129,7 @@ enable_transport = False
     #[test]
     fn send_packet_single_requires_public_key() {
         let node = RnsNode::start(
-            NodeConfig {
+            NodeConfig { panic_on_interface_error: false,
                 transport_enabled: false,
                 identity: None,
                 interfaces: vec![],
@@ -2186,7 +2170,7 @@ enable_transport = False
     #[test]
     fn send_packet_single_encrypts() {
         let node = RnsNode::start(
-            NodeConfig {
+            NodeConfig { panic_on_interface_error: false,
                 transport_enabled: false,
                 identity: None,
                 interfaces: vec![],
@@ -2238,7 +2222,7 @@ enable_transport = False
     #[test]
     fn register_destination_with_proof_prove_all() {
         let node = RnsNode::start(
-            NodeConfig {
+            NodeConfig { panic_on_interface_error: false,
                 transport_enabled: false,
                 identity: None,
                 interfaces: vec![],
@@ -2282,7 +2266,7 @@ enable_transport = False
     #[test]
     fn register_destination_with_proof_prove_none() {
         let node = RnsNode::start(
-            NodeConfig {
+            NodeConfig { panic_on_interface_error: false,
                 transport_enabled: false,
                 identity: None,
                 interfaces: vec![],

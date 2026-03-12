@@ -115,12 +115,12 @@ fn main() {
     let (delivery_tx, delivery_rx) = mpsc::channel();
 
     let server_node = RnsNode::start(
-        NodeConfig {
+        NodeConfig { panic_on_interface_error: false,
             transport_enabled: false,
             identity: Some(Identity::from_private_key(
                 &server_identity.get_private_key().unwrap(),
             )),
-            interfaces: vec![InterfaceConfig {
+            interfaces: vec![InterfaceConfig { name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
                     name: "Echo Server TCP".into(),
@@ -166,10 +166,10 @@ fn main() {
     let (proof_tx, proof_rx) = mpsc::channel();
 
     let client_node = RnsNode::start(
-        NodeConfig {
+        NodeConfig { panic_on_interface_error: false,
             transport_enabled: false,
             identity: None,
-            interfaces: vec![InterfaceConfig {
+            interfaces: vec![InterfaceConfig { name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
                 config_data: Box::new(TcpClientConfig {
                     name: "Echo Client TCP".into(),

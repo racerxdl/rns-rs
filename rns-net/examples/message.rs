@@ -152,10 +152,10 @@ fn main() {
     // ─── Transport Node (TCP server, relays packets) ─────────────────────
 
     let transport_node = RnsNode::start(
-        NodeConfig {
+        NodeConfig { panic_on_interface_error: false,
             transport_enabled: true,
             identity: Some(Identity::new(&mut OsRng)),
-            interfaces: vec![InterfaceConfig {
+            interfaces: vec![InterfaceConfig { name: String::new(),
                 type_name: "TCPServerInterface".to_string(),
                 config_data: Box::new(TcpServerConfig {
                     name: "Transport TCP".into(),
@@ -211,12 +211,12 @@ fn main() {
     let (alice_prf_tx, alice_prf_rx) = mpsc::channel();
 
     let alice_node = RnsNode::start(
-        NodeConfig {
+        NodeConfig { panic_on_interface_error: false,
             transport_enabled: false,
             identity: Some(Identity::from_private_key(
                 &alice_identity.get_private_key().unwrap(),
             )),
-            interfaces: vec![InterfaceConfig {
+            interfaces: vec![InterfaceConfig { name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
                 config_data: Box::new(TcpClientConfig {
                     name: "Alice TCP".into(),
@@ -269,12 +269,12 @@ fn main() {
     let (bob_prf_tx, bob_prf_rx) = mpsc::channel();
 
     let bob_node = RnsNode::start(
-        NodeConfig {
+        NodeConfig { panic_on_interface_error: false,
             transport_enabled: false,
             identity: Some(Identity::from_private_key(
                 &bob_identity.get_private_key().unwrap(),
             )),
-            interfaces: vec![InterfaceConfig {
+            interfaces: vec![InterfaceConfig { name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
                 config_data: Box::new(TcpClientConfig {
                     name: "Bob TCP".into(),

@@ -100,7 +100,7 @@ fn start_test_server_with_config(
 
     let identity = Identity::new(&mut OsRng);
     let node = RnsNode::start(
-        NodeConfig {
+        NodeConfig { panic_on_interface_error: false,
             transport_enabled: false,
             identity: Some(Identity::from_private_key(
                 &identity.get_private_key().unwrap(),
@@ -122,6 +122,7 @@ fn start_test_server_with_config(
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            registry: None,
         },
         callbacks,
     )
@@ -607,7 +608,7 @@ fn start_test_pair() -> TestPair {
         tls_key: None,
     };
 
-    let ifaces_a = vec![InterfaceConfig {
+    let ifaces_a = vec![InterfaceConfig { name: String::new(),
         type_name: "TCPServerInterface".to_string(),
         config_data: Box::new(TcpServerConfig {
             name: "Test TCP Server".into(),
@@ -634,7 +635,7 @@ fn start_test_pair() -> TestPair {
         tls_key: None,
     };
 
-    let ifaces_b = vec![InterfaceConfig {
+    let ifaces_b = vec![InterfaceConfig { name: String::new(),
         type_name: "TCPClientInterface".to_string(),
         config_data: Box::new(TcpClientConfig {
             name: "Test TCP Client".into(),
@@ -864,7 +865,7 @@ mod tls_tests {
 
         let identity = rns_crypto::identity::Identity::new(&mut rns_crypto::OsRng);
         let node = RnsNode::start(
-            NodeConfig {
+            NodeConfig { panic_on_interface_error: false,
                 transport_enabled: false,
                 identity: Some(rns_crypto::identity::Identity::from_private_key(
                     &identity.get_private_key().unwrap(),
@@ -885,6 +886,8 @@ mod tls_tests {
                 respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
+                registry: None,
             },
             callbacks,
         )

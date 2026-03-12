@@ -128,10 +128,10 @@ except (KeyboardInterrupt, SystemExit):
         mpsc::channel();
 
     let node = RnsNode::start(
-        NodeConfig {
+        NodeConfig { panic_on_interface_error: false,
             transport_enabled: false,
             identity: None,
-            interfaces: vec![InterfaceConfig {
+            interfaces: vec![InterfaceConfig { name: String::new(),
                 type_name: "TCPClientInterface".to_string(),
                 config_data: Box::new(TcpClientConfig {
                     name: "interop-tcp".into(),
