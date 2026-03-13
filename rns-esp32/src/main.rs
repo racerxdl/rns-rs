@@ -4,6 +4,7 @@
 //! interface, OLED display, and runs the Reticulum transport engine event loop.
 //! Supports dual mode: standalone Reticulum node + RNode USB bridge.
 
+mod ble;
 mod button;
 mod config;
 mod display;
@@ -144,9 +145,12 @@ fn main() {
     driver_inst.set_identity(identity);
     driver_inst.add_interface(interface_id, writer, None);
 
+    // Initialize BLE NUS (NimBLE host stack + GATT service). Does not start advertising.
+    ble::init(&format!("RNS-{}", &identity_hex[..8]));
+
     log::info!("Reticulum transport node running");
 
-    // Mode controller loop: alternates between standalone and bridge modes
+    // Mode controller loop: alternates between standalone, USB bridge, and BLE bridge modes
     loop {
         // Create shutdown flag for this iteration's mode-specific threads
         let shutdown = Arc::new(AtomicBool::new(false));
@@ -189,15 +193,16 @@ fn main() {
 
         match exit {
             driver::DriverExit::BridgeRequested => {
-                log::info!("Entering RNode bridge mode");
+                log::info!("Entering RNode USB bridge mode");
                 if let Ok(mut s) = display_stats.lock() {
                     s.set_mode(display::Mode::Bridge);
                 }
 
-                // Run bridge mode (blocks until idle timeout)
+                // Run bridge mode with UART transport (blocks until idle timeout)
+                let transport = rnode::UartTransport::new(&uart);
                 let bridge = rnode::RNodeBridge::new(
                     radio.clone(),
-                    &uart,
+                    transport,
                     dio1,
                     Some(display_stats.clone()),
                 );
@@ -216,6 +221,69 @@ fn main() {
                     }
                     rnode::BridgeExit::Leave => {
                         log::info!("RNode bridge: host sent LEAVE, resuming standalone");
+                    }
+                }
+            }
+            driver::DriverExit::BleRequested => {
+                log::info!("Entering BLE bridge mode");
+                if let Ok(mut s) = display_stats.lock() {
+                    s.set_mode(display::Mode::BleWaiting);
+                }
+
+                // Start BLE advertising with 30s timeout
+                ble::start_advertising(30);
+
+                // Wait up to 30s for a BLE connection
+                let deadline = std::time::Instant::now()
+                    + std::time::Duration::from_secs(30);
+                let connected = loop {
+                    if ble::is_connected() {
+                        break true;
+                    }
+                    if std::time::Instant::now() >= deadline {
+                        break false;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                };
+
+                if !connected {
+                    ble::stop_advertising();
+                    log::info!("BLE: no connection within timeout, resuming standalone");
+                    driver_inst.drain_events();
+                    continue;
+                }
+
+                // Connected — run RNodeBridge with BLE transport
+                log::info!("BLE: connected, starting RNode bridge");
+                if let Ok(mut s) = display_stats.lock() {
+                    s.set_mode(display::Mode::Bridge);
+                }
+
+                let transport = rnode::BleTransport::new();
+                let bridge = rnode::RNodeBridge::new(
+                    radio.clone(),
+                    transport,
+                    dio1,
+                    Some(display_stats.clone()),
+                );
+                let (bridge_exit, bridge_dio1) = bridge.run();
+                dio1 = bridge_dio1;
+
+                // Restore radio to default standalone config
+                rnode::restore_default_radio_config(&radio);
+
+                // Disconnect BLE if still connected
+                ble::disconnect();
+
+                // Drain stale button events
+                driver_inst.drain_events();
+
+                match bridge_exit {
+                    rnode::BridgeExit::IdleTimeout => {
+                        log::info!("BLE bridge: idle timeout, resuming standalone");
+                    }
+                    rnode::BridgeExit::Leave => {
+                        log::info!("BLE bridge: host sent LEAVE, resuming standalone");
                     }
                 }
             }

@@ -36,12 +36,16 @@ pub enum Event {
     SendPing,
     /// Trigger a Reticulum announce (button: long press, node mode only).
     SendAnnounce,
+    /// Enable BLE bridge mode (button: triple press).
+    EnableBle,
 }
 
 /// Reason the driver event loop exited.
 pub enum DriverExit {
-    /// UART detected an RNode DETECT handshake; switch to bridge mode.
+    /// UART detected an RNode DETECT handshake; switch to USB bridge mode.
     BridgeRequested,
+    /// Triple-press requested BLE bridge mode.
+    BleRequested,
     /// Event channel disconnected.
     Disconnected,
 }
@@ -166,6 +170,10 @@ impl Driver {
                 }
                 Event::SendAnnounce => {
                     self.handle_send_announce();
+                }
+                Event::EnableBle => {
+                    log::info!("BLE bridge mode requested via button");
+                    break DriverExit::BleRequested;
                 }
             }
         };

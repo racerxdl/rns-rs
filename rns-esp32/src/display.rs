@@ -29,11 +29,13 @@ type Display = Ssd1306<
 
 const STANDALONE_NUM_PAGES: u8 = 4; // stats, radio, identity, off
 const BRIDGE_NUM_PAGES: u8 = 3; // bridge status, bridge radio, off
+const BLE_WAITING_NUM_PAGES: u8 = 2; // ble status, off
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Mode {
     Standalone,
     Bridge,
+    BleWaiting,
 }
 
 /// Shared display stats updated by the driver.
@@ -82,6 +84,7 @@ impl DisplayStats {
         match self.mode {
             Mode::Standalone => STANDALONE_NUM_PAGES,
             Mode::Bridge => BRIDGE_NUM_PAGES,
+            Mode::BleWaiting => BLE_WAITING_NUM_PAGES,
         }
     }
 
@@ -333,6 +336,22 @@ fn render_bridge_radio(display: &mut Display, stats: &DisplayStats) {
     .draw(display);
 }
 
+/// Render page: BLE waiting / advertising status.
+fn render_ble_waiting(display: &mut Display, stats: &DisplayStats) {
+    let style = MonoTextStyleBuilder::new()
+        .font(&FONT_6X10)
+        .text_color(BinaryColor::On)
+        .build();
+
+    let _ = Text::new("BLE Bridge", Point::new(0, 10), style).draw(display);
+    let _ = Text::new("Waiting for", Point::new(0, 28), style).draw(display);
+    let _ = Text::new("connection...", Point::new(0, 42), style).draw(display);
+
+    if let Some(ref msg) = stats.status {
+        let _ = Text::new(msg, Point::new(0, 56), style).draw(display);
+    }
+}
+
 /// Render the current page. Returns whether the display should be on.
 fn render(display: &mut Display, stats: &DisplayStats) -> bool {
     if stats.is_off_page() {
@@ -354,6 +373,10 @@ fn render(display: &mut Display, stats: &DisplayStats) -> bool {
             0 => render_bridge_status(display, stats),
             1 => render_bridge_radio(display, stats),
             _ => render_bridge_status(display, stats),
+        },
+        Mode::BleWaiting => match stats.page {
+            0 => render_ble_waiting(display, stats),
+            _ => render_ble_waiting(display, stats),
         },
     }
 

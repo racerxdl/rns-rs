@@ -2,13 +2,13 @@
 //!
 //! Implements the device side of the RNode protocol: responds to DETECT
 //! handshake, accepts radio configuration commands, and bridges data frames
-//! between USB serial and the SX1262 LoRa radio.
+//! between a serial transport (USB UART or BLE NUS) and the SX1262 LoRa radio.
 
 use std::time::{Duration, Instant};
 
 use core::num::NonZeroU32;
 
-use esp_idf_hal::delay::{TickType, NON_BLOCK};
+use esp_idf_hal::delay::TickType;
 use esp_idf_hal::gpio::{AnyIOPin, Input, InterruptType, PinDriver};
 use esp_idf_hal::task::notification::Notification;
 use esp_idf_hal::uart::UartDriver;
@@ -16,6 +16,62 @@ use esp_idf_hal::uart::UartDriver;
 use crate::display::SharedStats;
 use crate::lora::SharedRadio;
 use crate::version;
+
+/// Transport-agnostic serial interface for the RNode bridge.
+/// Implemented by both UART (USB) and BLE NUS transports.
+pub trait BridgeTransport {
+    /// Read bytes with a timeout in milliseconds. Returns number of bytes read.
+    fn read(&self, buf: &mut [u8], timeout_ms: u32) -> usize;
+    /// Write bytes. Returns number of bytes written.
+    fn write(&self, data: &[u8]) -> usize;
+}
+
+/// UART transport — wraps the existing UartDriver for USB serial bridge.
+pub struct UartTransport<'a, 'b> {
+    uart: &'b UartDriver<'a>,
+}
+
+impl<'a, 'b> UartTransport<'a, 'b> {
+    pub fn new(uart: &'b UartDriver<'a>) -> Self {
+        Self { uart }
+    }
+}
+
+impl<'a, 'b> BridgeTransport for UartTransport<'a, 'b> {
+    fn read(&self, buf: &mut [u8], timeout_ms: u32) -> usize {
+        match self.uart.read(buf, timeout_ms) {
+            Ok(n) => n,
+            Err(_) => 0,
+        }
+    }
+
+    fn write(&self, data: &[u8]) -> usize {
+        match self.uart.write(data) {
+            Ok(n) => n,
+            Err(_) => 0,
+        }
+    }
+}
+
+/// BLE NUS transport — wraps the BLE module for wireless serial bridge.
+pub struct BleTransport;
+
+impl BleTransport {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl BridgeTransport for BleTransport {
+    fn read(&self, buf: &mut [u8], timeout_ms: u32) -> usize {
+        crate::ble::read_timeout(buf, Duration::from_millis(timeout_ms as u64))
+    }
+
+    fn write(&self, data: &[u8]) -> usize {
+        crate::ble::write(data);
+        data.len()
+    }
+}
 
 // KISS framing constants
 const FEND: u8 = 0xC0;
@@ -163,9 +219,10 @@ fn kiss_encode(cmd: u8, data: &[u8]) -> Vec<u8> {
 }
 
 /// RNode bridge: handles serial protocol and bridges data to/from LoRa.
-pub struct RNodeBridge<'a, 'b> {
+/// Generic over the serial transport (UART for USB, BLE NUS for wireless).
+pub struct RNodeBridge<T: BridgeTransport> {
     radio: SharedRadio,
-    uart: &'b UartDriver<'a>,
+    transport: T,
     dio1: PinDriver<'static, AnyIOPin, Input>,
     stats: Option<SharedStats>,
     pending_freq: Option<u32>,
@@ -175,16 +232,16 @@ pub struct RNodeBridge<'a, 'b> {
     pending_power: Option<i8>,
 }
 
-impl<'a, 'b> RNodeBridge<'a, 'b> {
+impl<T: BridgeTransport> RNodeBridge<T> {
     pub fn new(
         radio: SharedRadio,
-        uart: &'b UartDriver<'a>,
+        transport: T,
         dio1: PinDriver<'static, AnyIOPin, Input>,
         stats: Option<SharedStats>,
     ) -> Self {
         Self {
             radio,
-            uart,
+            transport,
             dio1,
             stats,
             pending_freq: None,
@@ -221,21 +278,19 @@ impl<'a, 'b> RNodeBridge<'a, 'b> {
                 break BridgeExit::IdleTimeout;
             }
 
-            match self.uart.read(&mut rx_buf, NON_BLOCK) {
-                Ok(n) if n > 0 => {
-                    last_activity = Instant::now();
-                    let frames = decoder.feed(&rx_buf[..n]);
-                    for frame in frames {
-                        if self.handle_frame(frame) {
-                            let _ = self.dio1.unsubscribe();
-                            return (BridgeExit::Leave, self.dio1);
-                        }
+            let n = self.transport.read(&mut rx_buf, 0);
+            if n > 0 {
+                last_activity = Instant::now();
+                let frames = decoder.feed(&rx_buf[..n]);
+                for frame in frames {
+                    if self.handle_frame(frame) {
+                        let _ = self.dio1.unsubscribe();
+                        return (BridgeExit::Leave, self.dio1);
                     }
                 }
-                _ => {
-                    if self.dio1.enable_interrupt().is_ok() {
-                        let _ = notification.wait(TickType::new_millis(10).ticks());
-                    }
+            } else {
+                if self.dio1.enable_interrupt().is_ok() {
+                    let _ = notification.wait(TickType::new_millis(10).ticks());
                 }
             }
 
@@ -249,7 +304,7 @@ impl<'a, 'b> RNodeBridge<'a, 'b> {
                     stats.lock().unwrap().bridge_rx_bytes += data.len() as u32;
                 }
                 let frame = kiss_encode(CMD_DATA, &data);
-                let _ = self.uart.write(&frame);
+                self.transport.write(&frame);
             }
         };
 
@@ -264,7 +319,7 @@ impl<'a, 'b> RNodeBridge<'a, 'b> {
                 if frame.data.first() == Some(&DETECT_REQ) {
                     log::info!("RNode: DETECT handshake received");
                     let resp = kiss_encode(CMD_DETECT, &[DETECT_RESP]);
-                    let _ = self.uart.write(&resp);
+                    self.transport.write(&resp);
                     log::info!("RNode: firmware {}", version::FULL_VERSION);
                 }
             }
@@ -277,15 +332,15 @@ impl<'a, 'b> RNodeBridge<'a, 'b> {
                     CMD_FW_VERSION,
                     &[version::RNODE_PROTOCOL_MAJOR, version::RNODE_PROTOCOL_MINOR],
                 );
-                let _ = self.uart.write(&resp);
+                self.transport.write(&resp);
             }
             CMD_PLATFORM => {
                 let resp = kiss_encode(CMD_PLATFORM, &[PLATFORM_ESP32]);
-                let _ = self.uart.write(&resp);
+                self.transport.write(&resp);
             }
             CMD_MCU => {
                 let resp = kiss_encode(CMD_MCU, &[MCU_ESP32]);
-                let _ = self.uart.write(&resp);
+                self.transport.write(&resp);
             }
             CMD_FREQUENCY => {
                 if frame.data.len() >= 4 {
@@ -296,7 +351,7 @@ impl<'a, 'b> RNodeBridge<'a, 'b> {
                     log::info!("RNode: set frequency {}Hz", freq);
                     self.pending_freq = Some(freq);
                     let resp = kiss_encode(CMD_FREQUENCY, &frame.data[..4]);
-                    let _ = self.uart.write(&resp);
+                    self.transport.write(&resp);
                 }
             }
             CMD_BANDWIDTH => {
@@ -308,7 +363,7 @@ impl<'a, 'b> RNodeBridge<'a, 'b> {
                     log::info!("RNode: set bandwidth {}Hz", bw);
                     self.pending_bw = Some(bw);
                     let resp = kiss_encode(CMD_BANDWIDTH, &frame.data[..4]);
-                    let _ = self.uart.write(&resp);
+                    self.transport.write(&resp);
                 }
             }
             CMD_TXPOWER => {
@@ -317,7 +372,7 @@ impl<'a, 'b> RNodeBridge<'a, 'b> {
                     log::info!("RNode: set TX power {}dBm", power);
                     self.pending_power = Some(power);
                     let resp = kiss_encode(CMD_TXPOWER, &[frame.data[0]]);
-                    let _ = self.uart.write(&resp);
+                    self.transport.write(&resp);
                 }
             }
             CMD_SF => {
@@ -325,7 +380,7 @@ impl<'a, 'b> RNodeBridge<'a, 'b> {
                     log::info!("RNode: set SF {}", frame.data[0]);
                     self.pending_sf = Some(frame.data[0]);
                     let resp = kiss_encode(CMD_SF, &[frame.data[0]]);
-                    let _ = self.uart.write(&resp);
+                    self.transport.write(&resp);
                 }
             }
             CMD_CR => {
@@ -333,7 +388,7 @@ impl<'a, 'b> RNodeBridge<'a, 'b> {
                     log::info!("RNode: set CR 4/{}", frame.data[0]);
                     self.pending_cr = Some(frame.data[0]);
                     let resp = kiss_encode(CMD_CR, &[frame.data[0]]);
-                    let _ = self.uart.write(&resp);
+                    self.transport.write(&resp);
                 }
             }
             CMD_ST_ALOCK => {
@@ -343,7 +398,7 @@ impl<'a, 'b> RNodeBridge<'a, 'b> {
                         ((frame.data[0] as u16) << 8 | frame.data[1] as u16) as f32 / 100.0
                     );
                     let resp = kiss_encode(CMD_ST_ALOCK, &frame.data[..2]);
-                    let _ = self.uart.write(&resp);
+                    self.transport.write(&resp);
                 }
             }
             CMD_LT_ALOCK => {
@@ -353,16 +408,16 @@ impl<'a, 'b> RNodeBridge<'a, 'b> {
                         ((frame.data[0] as u16) << 8 | frame.data[1] as u16) as f32 / 100.0
                     );
                     let resp = kiss_encode(CMD_LT_ALOCK, &frame.data[..2]);
-                    let _ = self.uart.write(&resp);
+                    self.transport.write(&resp);
                 }
             }
             CMD_RADIO_STATE => {
                 if frame.data.first() == Some(&RADIO_STATE_ON) {
                     if self.apply_radio_config() {
                         let resp = kiss_encode(CMD_RADIO_STATE, &[RADIO_STATE_ON]);
-                        let _ = self.uart.write(&resp);
+                        self.transport.write(&resp);
                         let ready = kiss_encode(CMD_READY, &[0x01]);
-                        let _ = self.uart.write(&ready);
+                        self.transport.write(&ready);
                     }
                 }
             }
@@ -381,7 +436,7 @@ impl<'a, 'b> RNodeBridge<'a, 'b> {
                     match result {
                         Ok(()) => {
                             let resp = kiss_encode(CMD_READY, &[0x01]);
-                            let _ = self.uart.write(&resp);
+                            self.transport.write(&resp);
                         }
                         Err(e) => {
                             log::error!("RNode: LoRa TX failed: {}", e);
