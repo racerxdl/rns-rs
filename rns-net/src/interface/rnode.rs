@@ -271,6 +271,10 @@ fn reader_loop(
             &[0x00],
         ));
         cmd.extend_from_slice(&rnode_kiss::rnode_command(
+            rnode_kiss::CMD_FW_DETAIL,
+            &[0x00],
+        ));
+        cmd.extend_from_slice(&rnode_kiss::rnode_command(
             rnode_kiss::CMD_PLATFORM,
             &[0x00],
         ));
@@ -305,6 +309,9 @@ fn reader_loop(
                         }
                         rnode_kiss::RNodeEvent::FirmwareVersion { major, minor } => {
                             log::info!("[{}] firmware version {}.{}", config.name, major, minor);
+                        }
+                        rnode_kiss::RNodeEvent::FirmwareDetail(ref detail) => {
+                            log::info!("[{}] firmware detail: {}", config.name, detail);
                         }
                         rnode_kiss::RNodeEvent::Platform(p) => {
                             log::info!("[{}] platform: 0x{:02X}", config.name, p);

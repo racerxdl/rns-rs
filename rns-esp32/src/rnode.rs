@@ -95,6 +95,7 @@ const CMD_READY: u8 = 0x0F;
 const CMD_PLATFORM: u8 = 0x48;
 const CMD_MCU: u8 = 0x49;
 const CMD_FW_VERSION: u8 = 0x50;
+const CMD_FW_DETAIL: u8 = 0x51;
 
 const DETECT_REQ: u8 = 0x73;
 const DETECT_RESP: u8 = 0x46;
@@ -334,6 +335,10 @@ impl<T: BridgeTransport> RNodeBridge<T> {
                 );
                 self.transport.write(&resp);
             }
+            CMD_FW_DETAIL => {
+                let resp = kiss_encode(CMD_FW_DETAIL, version::FULL_VERSION.as_bytes());
+                self.transport.write(&resp);
+            }
             CMD_PLATFORM => {
                 let resp = kiss_encode(CMD_PLATFORM, &[PLATFORM_ESP32]);
                 self.transport.write(&resp);
@@ -553,6 +558,11 @@ pub fn wait_for_detect_quick(uart: &UartDriver<'_>) -> bool {
                                 CMD_FW_VERSION,
                                 &[version::RNODE_PROTOCOL_MAJOR, version::RNODE_PROTOCOL_MINOR],
                             );
+                            let _ = uart.write(&resp);
+                        }
+                        CMD_FW_DETAIL => {
+                            let resp =
+                                kiss_encode(CMD_FW_DETAIL, version::FULL_VERSION.as_bytes());
                             let _ = uart.write(&resp);
                         }
                         CMD_PLATFORM => {

@@ -41,6 +41,7 @@ struct HarnessNode {
 struct DeviceInfo {
     fw_major: u8,
     fw_minor: u8,
+    fw_detail: String,
     platform: u8,
     mcu: u8,
 }
@@ -71,16 +72,22 @@ fn main() -> io::Result<()> {
     let info_a = node_a.detect()?;
     let info_b = node_b.detect()?;
     log::info!(
-        "A detected: fw={}.{} platform=0x{:02X} mcu=0x{:02X}",
-        info_a.fw_major,
-        info_a.fw_minor,
+        "A detected: fw={} platform=0x{:02X} mcu=0x{:02X}",
+        if info_a.fw_detail.is_empty() {
+            format!("{}.{}", info_a.fw_major, info_a.fw_minor)
+        } else {
+            info_a.fw_detail.clone()
+        },
         info_a.platform,
         info_a.mcu
     );
     log::info!(
-        "B detected: fw={}.{} platform=0x{:02X} mcu=0x{:02X}",
-        info_b.fw_major,
-        info_b.fw_minor,
+        "B detected: fw={} platform=0x{:02X} mcu=0x{:02X}",
+        if info_b.fw_detail.is_empty() {
+            format!("{}.{}", info_b.fw_major, info_b.fw_minor)
+        } else {
+            info_b.fw_detail.clone()
+        },
         info_b.platform,
         info_b.mcu
     );
@@ -130,6 +137,10 @@ impl HarnessNode {
             &[0x00],
         ))?;
         self.write_frame(&rnode_kiss::rnode_command(
+            rnode_kiss::CMD_FW_DETAIL,
+            &[0x00],
+        ))?;
+        self.write_frame(&rnode_kiss::rnode_command(
             rnode_kiss::CMD_PLATFORM,
             &[0x00],
         ))?;
@@ -140,6 +151,7 @@ impl HarnessNode {
         let mut info = DeviceInfo {
             fw_major: 0,
             fw_minor: 0,
+            fw_detail: String::new(),
             platform: 0,
             mcu: 0,
         };
@@ -155,6 +167,9 @@ impl HarnessNode {
                         info.fw_major = major;
                         info.fw_minor = minor;
                         have_fw = true;
+                    }
+                    RNodeEvent::FirmwareDetail(detail) => {
+                        info.fw_detail = detail;
                     }
                     RNodeEvent::Platform(platform) => {
                         info.platform = platform;
@@ -286,11 +301,15 @@ impl HarnessNode {
         self.write_frame(&rnode_kiss::rnode_command(rnode_kiss::CMD_LEAVE, &[]))?;
         std::thread::sleep(LEAVE_SETTLE);
         let info = self.detect()?;
+        let fw = if info.fw_detail.is_empty() {
+            format!("{}.{}", info.fw_major, info.fw_minor)
+        } else {
+            info.fw_detail.clone()
+        };
         log::info!(
-            "{} returned to standalone and re-detected as fw={}.{}",
+            "{} returned to standalone and re-detected as fw={}",
             self.label,
-            info.fw_major,
-            info.fw_minor
+            fw
         );
         Ok(())
     }

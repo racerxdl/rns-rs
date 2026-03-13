@@ -27,6 +27,7 @@ pub const CMD_RANDOM: u8 = 0x40;
 pub const CMD_PLATFORM: u8 = 0x48;
 pub const CMD_MCU: u8 = 0x49;
 pub const CMD_FW_VERSION: u8 = 0x50;
+pub const CMD_FW_DETAIL: u8 = 0x51;
 pub const CMD_RESET: u8 = 0x55;
 pub const CMD_INTERFACES: u8 = 0x71;
 pub const CMD_ERROR: u8 = 0x90;
@@ -113,6 +114,8 @@ pub enum RNodeEvent {
     Ready,
     /// Selected subinterface changed.
     SelectedInterface(u8),
+    /// Detailed firmware version string (e.g. "0.1.142-f63fb02").
+    FirmwareDetail(String),
     /// Error code from device.
     Error(u8),
 }
@@ -170,6 +173,12 @@ impl RNodeDecoder {
                             data: core::mem::take(&mut self.data_buffer),
                         });
                     }
+                } else if self.command == CMD_FW_DETAIL {
+                    if !self.data_buffer.is_empty() {
+                        let s = String::from_utf8_lossy(&self.data_buffer).into_owned();
+                        events.push(RNodeEvent::FirmwareDetail(s));
+                        self.data_buffer.clear();
+                    }
                 }
                 // Start new frame (closing FLAG = opening FLAG of next)
                 self.in_frame = true;
@@ -192,6 +201,7 @@ impl RNodeDecoder {
                     // First byte after FEND is the command
                     self.command = byte;
                 } else if self.command == kiss::CMD_DATA
+                    || self.command == CMD_FW_DETAIL
                     || data_cmd_to_index(self.command).is_some()
                 {
                     // Data frame: accumulate with KISS unescaping
