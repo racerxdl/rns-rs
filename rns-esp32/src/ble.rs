@@ -71,14 +71,12 @@ pub fn init(device_name: &str) {
     ::log::info!("BLE NUS: initializing NimBLE");
 
     unsafe {
-        // Initialize NimBLE host
-        let rc = esp_nimble_hci_init();
+        // Initialize NimBLE (controller + host stack)
+        let rc = nimble_port_init();
         if rc != 0 {
-            ::log::error!("BLE: esp_nimble_hci_init failed: {}", rc);
+            ::log::error!("BLE: nimble_port_init failed: {}", rc);
             return;
         }
-
-        nimble_port_init();
 
         // Set device name
         let name = CString::new(device_name).unwrap();
@@ -100,6 +98,14 @@ pub fn init(device_name: &str) {
         // Configure NimBLE host
         ble_hs_cfg.sync_cb = Some(on_sync);
         ble_hs_cfg.reset_cb = Some(on_reset);
+
+        // Security: no pairing required (open access)
+        ble_hs_cfg.sm_io_cap = BLE_HS_IO_NO_INPUT_OUTPUT as u8;
+        ble_hs_cfg.set_sm_bonding(0);
+        ble_hs_cfg.set_sm_mitm(0);
+        ble_hs_cfg.set_sm_sc(0);
+        ble_hs_cfg.sm_our_key_dist = 0;
+        ble_hs_cfg.sm_their_key_dist = 0;
 
         // Start NimBLE host task
         nimble_port_freertos_init(Some(nimble_host_task));
