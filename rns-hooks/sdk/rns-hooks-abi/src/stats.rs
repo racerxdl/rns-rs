@@ -1,6 +1,10 @@
 pub const PACKET_STATS_PAYLOAD_TYPE: &str = "stats.packet.v1";
 pub const PACKET_STATS_ENCODED_LEN: usize = 13;
 
+pub const ANNOUNCE_STATS_PAYLOAD_TYPE: &str = "stats.announce.v1";
+/// identity_hash:16 + destination_hash:16 + name_hash:10 + random_hash:10 + hops:1 + interface_id:8 = 61
+pub const ANNOUNCE_STATS_ENCODED_LEN: usize = 61;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PacketStatsPayload {
     pub flags: u8,
@@ -33,9 +37,71 @@ impl PacketStatsPayload {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AnnounceStatsPayload {
+    pub identity_hash: [u8; 16],
+    pub destination_hash: [u8; 16],
+    pub name_hash: [u8; 10],
+    pub random_hash: [u8; 10],
+    pub hops: u8,
+    pub interface_id: u64,
+}
+
+impl AnnounceStatsPayload {
+    pub fn encode(&self) -> [u8; ANNOUNCE_STATS_ENCODED_LEN] {
+        let mut buf = [0u8; ANNOUNCE_STATS_ENCODED_LEN];
+        buf[0..16].copy_from_slice(&self.identity_hash);
+        buf[16..32].copy_from_slice(&self.destination_hash);
+        buf[32..42].copy_from_slice(&self.name_hash);
+        buf[42..52].copy_from_slice(&self.random_hash);
+        buf[52] = self.hops;
+        buf[53..61].copy_from_slice(&self.interface_id.to_le_bytes());
+        buf
+    }
+
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() != ANNOUNCE_STATS_ENCODED_LEN {
+            return None;
+        }
+        let mut identity_hash = [0u8; 16];
+        identity_hash.copy_from_slice(&bytes[0..16]);
+        let mut destination_hash = [0u8; 16];
+        destination_hash.copy_from_slice(&bytes[16..32]);
+        let mut name_hash = [0u8; 10];
+        name_hash.copy_from_slice(&bytes[32..42]);
+        let mut random_hash = [0u8; 10];
+        random_hash.copy_from_slice(&bytes[42..52]);
+        let hops = bytes[52];
+        let mut iface = [0u8; 8];
+        iface.copy_from_slice(&bytes[53..61]);
+        Some(Self {
+            identity_hash,
+            destination_hash,
+            name_hash,
+            random_hash,
+            hops,
+            interface_id: u64::from_le_bytes(iface),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn announce_stats_roundtrip() {
+        let payload = AnnounceStatsPayload {
+            identity_hash: [0xAA; 16],
+            destination_hash: [0xBB; 16],
+            name_hash: [0xCC; 10],
+            random_hash: [0xDD; 10],
+            hops: 3,
+            interface_id: 99,
+        };
+        let encoded = payload.encode();
+        assert_eq!(AnnounceStatsPayload::decode(&encoded), Some(payload));
+    }
 
     #[test]
     fn packet_stats_roundtrip() {

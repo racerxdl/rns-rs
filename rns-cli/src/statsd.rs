@@ -7,7 +7,10 @@ use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use rns_hooks_abi::stats::{PacketStatsPayload, PACKET_STATS_PAYLOAD_TYPE};
+use rns_hooks_abi::stats::{
+    AnnounceStatsPayload, PacketStatsPayload, ANNOUNCE_STATS_PAYLOAD_TYPE,
+    PACKET_STATS_PAYLOAD_TYPE,
+};
 use rns_net::config;
 use rns_net::provider_bridge::{ProviderEnvelope, ProviderMessage};
 use rns_net::rpc::derive_auth_key;
@@ -101,6 +104,7 @@ fn run() -> Result<(), String> {
 
     let mut aggregator = StatsAggregator::default();
     let mut next_flush = Instant::now() + flush_interval;
+    let mut proc_monitor = ProcessMonitor::new();
 
     while !SHOULD_STOP.load(Ordering::Relaxed) {
         match read_provider_envelope(&mut stream) {
@@ -120,6 +124,10 @@ fn run() -> Result<(), String> {
         if Instant::now() >= next_flush {
             db.flush(&mut aggregator)
                 .map_err(|e| format!("sqlite flush failed: {}", e))?;
+            if let Some(sample) = proc_monitor.sample() {
+                db.insert_process_sample(&sample)
+                    .map_err(|e| format!("sqlite process sample failed: {}", e))?;
+            }
             next_flush = Instant::now() + flush_interval;
         }
     }
@@ -230,9 +238,19 @@ struct CounterValue {
     bytes: u64,
 }
 
+struct AnnounceRecord {
+    identity_hash: [u8; 16],
+    destination_hash: [u8; 16],
+    name_hash: [u8; 10],
+    random_hash: [u8; 10],
+    hops: u8,
+    interface_id: u64,
+}
+
 #[derive(Default)]
 struct StatsAggregator {
     counters: HashMap<CounterKey, CounterValue>,
+    announce_records: Vec<AnnounceRecord>,
 }
 
 impl StatsAggregator {
@@ -242,6 +260,30 @@ impl StatsAggregator {
                 log::warn!("provider bridge dropped {} event(s)", count);
             }
             ProviderMessage::Event(event) => {
+                if event.payload_type == ANNOUNCE_STATS_PAYLOAD_TYPE {
+                    // Only record announces from RX (PreIngress) to avoid
+                    // counting the same announce multiple times on TX fan-out.
+                    if event.attach_point != "PreIngress" {
+                        return;
+                    }
+                    match AnnounceStatsPayload::decode(&event.payload) {
+                        Some(p) => self.announce_records.push(AnnounceRecord {
+                            identity_hash: p.identity_hash,
+                            destination_hash: p.destination_hash,
+                            name_hash: p.name_hash,
+                            random_hash: p.random_hash,
+                            hops: p.hops,
+                            interface_id: p.interface_id,
+                        }),
+                        None => {
+                            log::warn!(
+                                "invalid announce payload length: {}",
+                                event.payload.len()
+                            );
+                        }
+                    }
+                    return;
+                }
                 if event.payload_type != PACKET_STATS_PAYLOAD_TYPE {
                     return;
                 }
@@ -303,13 +345,54 @@ impl StatsDb {
                 bytes INTEGER NOT NULL,
                 updated_at_ms INTEGER NOT NULL,
                 PRIMARY KEY (interface_key, direction, packet_type)
+            );
+            CREATE TABLE IF NOT EXISTS seen_identities (
+                identity_hash BLOB NOT NULL PRIMARY KEY,
+                first_seen_ms INTEGER NOT NULL,
+                last_seen_ms INTEGER NOT NULL,
+                announce_count INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE TABLE IF NOT EXISTS seen_destinations (
+                destination_hash BLOB NOT NULL PRIMARY KEY,
+                identity_hash BLOB NOT NULL,
+                name_hash BLOB NOT NULL,
+                first_seen_ms INTEGER NOT NULL,
+                last_seen_ms INTEGER NOT NULL,
+                announce_count INTEGER NOT NULL DEFAULT 1,
+                last_hops INTEGER NOT NULL,
+                last_interface_id INTEGER NULL
+            );
+            CREATE TABLE IF NOT EXISTS seen_names (
+                name_hash BLOB NOT NULL PRIMARY KEY,
+                first_seen_ms INTEGER NOT NULL,
+                last_seen_ms INTEGER NOT NULL,
+                announce_count INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE TABLE IF NOT EXISTS process_samples (
+                ts_ms INTEGER NOT NULL PRIMARY KEY,
+                pid INTEGER NOT NULL,
+                rss_bytes INTEGER NOT NULL,
+                cpu_user_ms INTEGER NOT NULL,
+                cpu_system_ms INTEGER NOT NULL,
+                threads INTEGER NOT NULL,
+                fds INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS seen_announces (
+                destination_hash BLOB NOT NULL,
+                random_hash BLOB NOT NULL,
+                identity_hash BLOB NOT NULL,
+                name_hash BLOB NOT NULL,
+                hops INTEGER NOT NULL,
+                interface_id INTEGER NULL,
+                seen_at_ms INTEGER NOT NULL,
+                PRIMARY KEY (destination_hash, random_hash)
             );",
         )?;
         Ok(Self { conn })
     }
 
     fn flush(&mut self, aggregator: &mut StatsAggregator) -> rusqlite::Result<()> {
-        if aggregator.counters.is_empty() {
+        if aggregator.counters.is_empty() && aggregator.announce_records.is_empty() {
             return Ok(());
         }
         let tx = self.conn.transaction()?;
@@ -337,7 +420,184 @@ impl StatsDb {
                 ])?;
             }
         }
+        if !aggregator.announce_records.is_empty() {
+            let mut ann_stmt = tx.prepare(
+                "INSERT INTO seen_announces (
+                    destination_hash, random_hash, identity_hash, name_hash,
+                    hops, interface_id, seen_at_ms
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                ON CONFLICT(destination_hash, random_hash) DO NOTHING",
+            )?;
+            let mut id_stmt = tx.prepare(
+                "INSERT INTO seen_identities (identity_hash, first_seen_ms, last_seen_ms, announce_count)
+                 VALUES (?1, ?2, ?2, 1)
+                 ON CONFLICT(identity_hash) DO UPDATE SET
+                    last_seen_ms = excluded.last_seen_ms,
+                    announce_count = seen_identities.announce_count + 1",
+            )?;
+            let mut dest_stmt = tx.prepare(
+                "INSERT INTO seen_destinations (
+                    destination_hash, identity_hash, name_hash,
+                    first_seen_ms, last_seen_ms, announce_count,
+                    last_hops, last_interface_id
+                ) VALUES (?1, ?2, ?3, ?4, ?4, 1, ?5, ?6)
+                ON CONFLICT(destination_hash) DO UPDATE SET
+                    last_seen_ms = excluded.last_seen_ms,
+                    announce_count = seen_destinations.announce_count + 1,
+                    last_hops = excluded.last_hops,
+                    last_interface_id = excluded.last_interface_id",
+            )?;
+            let mut name_stmt = tx.prepare(
+                "INSERT INTO seen_names (name_hash, first_seen_ms, last_seen_ms, announce_count)
+                 VALUES (?1, ?2, ?2, 1)
+                 ON CONFLICT(name_hash) DO UPDATE SET
+                    last_seen_ms = excluded.last_seen_ms,
+                    announce_count = seen_names.announce_count + 1",
+            )?;
+            for rec in aggregator.announce_records.drain(..) {
+                let inserted = ann_stmt.execute(params![
+                    rec.destination_hash.as_slice(),
+                    rec.random_hash.as_slice(),
+                    rec.identity_hash.as_slice(),
+                    rec.name_hash.as_slice(),
+                    rec.hops as i64,
+                    rec.interface_id as i64,
+                    now,
+                ])?;
+                // Only update rollup tables for genuinely new announces
+                if inserted == 0 {
+                    continue;
+                }
+                id_stmt.execute(params![
+                    rec.identity_hash.as_slice(),
+                    now,
+                ])?;
+                dest_stmt.execute(params![
+                    rec.destination_hash.as_slice(),
+                    rec.identity_hash.as_slice(),
+                    rec.name_hash.as_slice(),
+                    now,
+                    rec.hops as i64,
+                    rec.interface_id as i64,
+                ])?;
+                name_stmt.execute(params![
+                    rec.name_hash.as_slice(),
+                    now,
+                ])?;
+            }
+        }
         tx.commit()
+    }
+}
+
+struct ProcessSample {
+    pid: u32,
+    rss_bytes: u64,
+    cpu_user_ms: u64,
+    cpu_system_ms: u64,
+    threads: u32,
+    fds: u32,
+}
+
+struct ProcessMonitor {
+    pid: Option<u32>,
+}
+
+impl ProcessMonitor {
+    fn new() -> Self {
+        let pid = find_pid_by_comm("rnsd");
+        if let Some(pid) = pid {
+            log::info!("monitoring rnsd process pid={}", pid);
+        } else {
+            log::warn!("could not find rnsd process to monitor");
+        }
+        Self { pid }
+    }
+
+    fn sample(&mut self) -> Option<ProcessSample> {
+        let pid = match self.pid {
+            Some(p) => p,
+            None => {
+                self.pid = find_pid_by_comm("rnsd");
+                self.pid?
+            }
+        };
+        match read_proc_sample(pid) {
+            Some(s) => Some(s),
+            None => {
+                log::warn!("rnsd pid={} disappeared, will re-scan", pid);
+                self.pid = None;
+                None
+            }
+        }
+    }
+}
+
+fn find_pid_by_comm(name: &str) -> Option<u32> {
+    let proc_dir = fs::read_dir("/proc").ok()?;
+    for entry in proc_dir.flatten() {
+        let fname = entry.file_name();
+        let pid_str = fname.to_str()?;
+        if !pid_str.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let comm_path = entry.path().join("comm");
+        if let Ok(comm) = fs::read_to_string(&comm_path) {
+            if comm.trim() == name {
+                return pid_str.parse().ok();
+            }
+        }
+    }
+    None
+}
+
+fn read_proc_sample(pid: u32) -> Option<ProcessSample> {
+    let stat = fs::read_to_string(format!("/proc/{}/stat", pid)).ok()?;
+    // Fields after (comm): find closing paren to handle spaces in comm
+    let after_comm = stat.rsplit_once(')')?.1;
+    let fields: Vec<&str> = after_comm.split_whitespace().collect();
+    // fields[0] = state, [1] = ppid, ... [11] = utime, [12] = stime, ... [17] = num_threads, ... [21] = rss
+    if fields.len() < 22 {
+        return None;
+    }
+    let utime_ticks: u64 = fields[11].parse().ok()?;
+    let stime_ticks: u64 = fields[12].parse().ok()?;
+    let num_threads: u32 = fields[17].parse().ok()?;
+    let rss_pages: u64 = fields[21].parse().ok()?;
+
+    let clk_tck = unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as u64;
+    let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as u64;
+
+    let fds = fs::read_dir(format!("/proc/{}/fd", pid))
+        .map(|d| d.count() as u32)
+        .unwrap_or(0);
+
+    Some(ProcessSample {
+        pid,
+        rss_bytes: rss_pages * page_size,
+        cpu_user_ms: utime_ticks * 1000 / clk_tck,
+        cpu_system_ms: stime_ticks * 1000 / clk_tck,
+        threads: num_threads,
+        fds,
+    })
+}
+
+impl StatsDb {
+    fn insert_process_sample(&mut self, sample: &ProcessSample) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO process_samples (ts_ms, pid, rss_bytes, cpu_user_ms, cpu_system_ms, threads, fds)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                now_unix_ms() as i64,
+                sample.pid as i64,
+                sample.rss_bytes as i64,
+                sample.cpu_user_ms as i64,
+                sample.cpu_system_ms as i64,
+                sample.threads as i64,
+                sample.fds as i64,
+            ],
+        )?;
+        Ok(())
     }
 }
 
@@ -568,5 +828,158 @@ mod tests {
             )
             .unwrap();
         assert_eq!(row, (5, 75));
+    }
+
+    #[test]
+    fn announce_event_populates_tables() {
+        let announce_payload = AnnounceStatsPayload {
+            identity_hash: [0xAA; 16],
+            destination_hash: [0xBB; 16],
+            name_hash: [0xCC; 10],
+            random_hash: [0xDD; 10],
+            hops: 2,
+            interface_id: 5,
+        }
+        .encode()
+        .to_vec();
+        let envelope = ProviderEnvelope {
+            version: 1,
+            seq: 10,
+            message: ProviderMessage::Event(rns_net::HookProviderEventEnvelope {
+                ts_unix_ms: 1,
+                node_instance: "node".into(),
+                hook_name: "stats".into(),
+                attach_point: "PreIngress".into(),
+                payload_type: ANNOUNCE_STATS_PAYLOAD_TYPE.into(),
+                payload: announce_payload,
+            }),
+        };
+        let mut agg = StatsAggregator::default();
+        agg.ingest(envelope);
+        assert_eq!(agg.announce_records.len(), 1);
+        assert_eq!(agg.announce_records[0].hops, 2);
+
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("stats.db");
+        let mut db = StatsDb::open(&db_path).unwrap();
+        db.flush(&mut agg).unwrap();
+
+        let id_count: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM seen_identities", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(id_count, 1);
+
+        let dest_count: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM seen_destinations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(dest_count, 1);
+
+        let name_count: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM seen_names", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(name_count, 1);
+
+        let (hops, iface): (i64, i64) = db
+            .conn
+            .query_row(
+                "SELECT last_hops, last_interface_id FROM seen_destinations",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(hops, 2);
+        assert_eq!(iface, 5);
+    }
+
+    #[test]
+    fn announce_flush_deduplicates_by_random_hash() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("stats.db");
+        let mut db = StatsDb::open(&db_path).unwrap();
+
+        // Same announce (same destination + random_hash) seen 3 times (e.g. on 3 interfaces)
+        for _ in 0..3 {
+            let mut agg = StatsAggregator::default();
+            agg.announce_records.push(AnnounceRecord {
+                identity_hash: [0x11; 16],
+                destination_hash: [0x22; 16],
+                name_hash: [0x33; 10],
+                random_hash: [0x44; 10],
+                hops: 1,
+                interface_id: 9,
+            });
+            db.flush(&mut agg).unwrap();
+        }
+
+        // Should only count as 1 unique announce
+        let count: i64 = db
+            .conn
+            .query_row(
+                "SELECT announce_count FROM seen_identities",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+
+        let count: i64 = db
+            .conn
+            .query_row(
+                "SELECT announce_count FROM seen_destinations",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+
+        let ann_count: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM seen_announces", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(ann_count, 1);
+    }
+
+    #[test]
+    fn different_announces_from_same_destination_count_separately() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("stats.db");
+        let mut db = StatsDb::open(&db_path).unwrap();
+
+        // Two different announces (different random_hash) from same destination
+        for i in 0..2u8 {
+            let mut agg = StatsAggregator::default();
+            agg.announce_records.push(AnnounceRecord {
+                identity_hash: [0x11; 16],
+                destination_hash: [0x22; 16],
+                name_hash: [0x33; 10],
+                random_hash: [i; 10],
+                hops: 1,
+                interface_id: 9,
+            });
+            db.flush(&mut agg).unwrap();
+        }
+
+        let count: i64 = db
+            .conn
+            .query_row(
+                "SELECT announce_count FROM seen_destinations",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 2);
+
+        let ann_count: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM seen_announces", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(ann_count, 2);
     }
 }
