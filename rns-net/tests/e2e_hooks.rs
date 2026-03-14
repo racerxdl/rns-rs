@@ -197,6 +197,7 @@ fn start_transport_node(port: u16) -> RnsNode {
                     name: "Transport TCP".into(),
                     listen_ip: "127.0.0.1".into(),
                     listen_port: port,
+                    ..TcpServerConfig::default()
                 }),
                 mode: MODE_FULL,
                 ifac: None,

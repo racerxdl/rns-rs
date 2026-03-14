@@ -6,7 +6,7 @@
 
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread;
 
@@ -24,6 +24,7 @@ pub struct TcpServerConfig {
     pub listen_ip: String,
     pub listen_port: u16,
     pub interface_id: InterfaceId,
+    pub max_connections: Option<usize>,
 }
 
 impl Default for TcpServerConfig {
@@ -33,6 +34,7 @@ impl Default for TcpServerConfig {
             listen_ip: "0.0.0.0".into(),
             listen_port: 4242,
             interface_id: InterfaceId(0),
+            max_connections: None,
         }
     }
 }
@@ -60,17 +62,26 @@ pub fn start(config: TcpServerConfig, tx: EventSender, next_id: Arc<AtomicU64>) 
     log::info!("[{}] TCP server listening on {}", config.name, addr);
 
     let name = config.name.clone();
+    let max_connections = config.max_connections;
+    let active_connections = Arc::new(AtomicUsize::new(0));
     thread::Builder::new()
         .name(format!("tcp-server-{}", config.interface_id.0))
         .spawn(move || {
-            listener_loop(listener, name, tx, next_id);
+            listener_loop(listener, name, tx, next_id, max_connections, active_connections);
         })?;
 
     Ok(())
 }
 
 /// Listener thread: accepts connections and spawns reader threads.
-fn listener_loop(listener: TcpListener, name: String, tx: EventSender, next_id: Arc<AtomicU64>) {
+fn listener_loop(
+    listener: TcpListener,
+    name: String,
+    tx: EventSender,
+    next_id: Arc<AtomicU64>,
+    max_connections: Option<usize>,
+    active_connections: Arc<AtomicUsize>,
+) {
     for stream_result in listener.incoming() {
         let stream = match stream_result {
             Ok(s) => s,
@@ -79,6 +90,22 @@ fn listener_loop(listener: TcpListener, name: String, tx: EventSender, next_id: 
                 continue;
             }
         };
+
+        if let Some(max) = max_connections {
+            if active_connections.load(Ordering::Relaxed) >= max {
+                let peer = stream.peer_addr().ok();
+                log::warn!(
+                    "[{}] max connections ({}) reached, rejecting {:?}",
+                    name,
+                    max,
+                    peer
+                );
+                drop(stream);
+                continue;
+            }
+        }
+
+        active_connections.fetch_add(1, Ordering::Relaxed);
 
         let client_id = InterfaceId(next_id.fetch_add(1, Ordering::Relaxed));
         let peer_addr = stream.peer_addr().ok();
@@ -140,17 +167,24 @@ fn listener_loop(listener: TcpListener, name: String, tx: EventSender, next_id: 
         // Spawn reader thread for this client
         let client_tx = tx.clone();
         let client_name = name.clone();
+        let client_active = active_connections.clone();
         thread::Builder::new()
             .name(format!("tcp-server-reader-{}", client_id.0))
             .spawn(move || {
-                client_reader_loop(stream, client_id, client_name, client_tx);
+                client_reader_loop(stream, client_id, client_name, client_tx, client_active);
             })
             .ok();
     }
 }
 
 /// Per-client reader thread: reads HDLC frames, sends to driver.
-fn client_reader_loop(mut stream: TcpStream, id: InterfaceId, name: String, tx: EventSender) {
+fn client_reader_loop(
+    mut stream: TcpStream,
+    id: InterfaceId,
+    name: String,
+    tx: EventSender,
+    active_connections: Arc<AtomicUsize>,
+) {
     let mut decoder = hdlc::Decoder::new();
     let mut buf = [0u8; 4096];
 
@@ -158,6 +192,7 @@ fn client_reader_loop(mut stream: TcpStream, id: InterfaceId, name: String, tx: 
         match stream.read(&mut buf) {
             Ok(0) => {
                 log::info!("[{}] client {} disconnected", name, id.0);
+                active_connections.fetch_sub(1, Ordering::Relaxed);
                 let _ = tx.send(Event::InterfaceDown(id));
                 return;
             }
@@ -171,12 +206,14 @@ fn client_reader_loop(mut stream: TcpStream, id: InterfaceId, name: String, tx: 
                         .is_err()
                     {
                         // Driver shut down
+                        active_connections.fetch_sub(1, Ordering::Relaxed);
                         return;
                     }
                 }
             }
             Err(e) => {
                 log::warn!("[{}] client {} read error: {}", name, id.0, e);
+                active_connections.fetch_sub(1, Ordering::Relaxed);
                 let _ = tx.send(Event::InterfaceDown(id));
                 return;
             }
@@ -211,12 +248,16 @@ impl InterfaceFactory for TcpServerFactory {
             .get("listen_port")
             .and_then(|v| v.parse().ok())
             .unwrap_or(4242);
+        let max_connections = params
+            .get("max_connections")
+            .and_then(|v| v.parse().ok());
 
         Ok(Box::new(TcpServerConfig {
             name: name.to_string(),
             listen_ip,
             listen_port,
             interface_id: id,
+            max_connections,
         }))
     }
 
@@ -260,6 +301,7 @@ mod tests {
             listen_ip: "127.0.0.1".into(),
             listen_port: port,
             interface_id: InterfaceId(1),
+            max_connections: None,
         };
 
         start(config, tx, next_id).unwrap();
@@ -293,6 +335,7 @@ mod tests {
             listen_ip: "127.0.0.1".into(),
             listen_port: port,
             interface_id: InterfaceId(2),
+            max_connections: None,
         };
 
         start(config, tx, next_id).unwrap();
@@ -330,6 +373,7 @@ mod tests {
             listen_ip: "127.0.0.1".into(),
             listen_port: port,
             interface_id: InterfaceId(3),
+            max_connections: None,
         };
 
         start(config, tx, next_id).unwrap();
@@ -369,6 +413,7 @@ mod tests {
             listen_ip: "127.0.0.1".into(),
             listen_port: port,
             interface_id: InterfaceId(4),
+            max_connections: None,
         };
 
         start(config, tx, next_id).unwrap();
@@ -404,6 +449,7 @@ mod tests {
             listen_ip: "127.0.0.1".into(),
             listen_port: port,
             interface_id: InterfaceId(5),
+            max_connections: None,
         };
 
         start(config, tx, next_id).unwrap();
@@ -437,9 +483,94 @@ mod tests {
             listen_ip: "127.0.0.1".into(),
             listen_port: port,
             interface_id: InterfaceId(6),
+            max_connections: None,
         };
 
         // Should not error
         start(config, tx, next_id).unwrap();
+    }
+
+    #[test]
+    fn max_connections_rejects_excess() {
+        let port = find_free_port();
+        let (tx, rx) = mpsc::channel();
+        let next_id = Arc::new(AtomicU64::new(7000));
+
+        let config = TcpServerConfig {
+            name: "test-server".into(),
+            listen_ip: "127.0.0.1".into(),
+            listen_port: port,
+            interface_id: InterfaceId(7),
+            max_connections: Some(2),
+        };
+
+        start(config, tx, next_id).unwrap();
+        thread::sleep(Duration::from_millis(50));
+
+        // Connect two clients (at limit)
+        let _client1 = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        let _client2 = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+
+        // Drain both InterfaceUp events
+        for _ in 0..2 {
+            let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert!(matches!(event, Event::InterfaceUp(_, _, _)));
+        }
+
+        // Third connection should be accepted at TCP level but immediately dropped by server
+        let client3 = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        client3
+            .set_read_timeout(Some(Duration::from_millis(500)))
+            .unwrap();
+
+        // Give server time to reject
+        thread::sleep(Duration::from_millis(100));
+
+        // Should NOT receive a third InterfaceUp
+        let result = rx.recv_timeout(Duration::from_millis(500));
+        assert!(
+            result.is_err(),
+            "expected no InterfaceUp for rejected connection, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn max_connections_allows_after_disconnect() {
+        let port = find_free_port();
+        let (tx, rx) = mpsc::channel();
+        let next_id = Arc::new(AtomicU64::new(7100));
+
+        let config = TcpServerConfig {
+            name: "test-server".into(),
+            listen_ip: "127.0.0.1".into(),
+            listen_port: port,
+            interface_id: InterfaceId(71),
+            max_connections: Some(1),
+        };
+
+        start(config, tx, next_id).unwrap();
+        thread::sleep(Duration::from_millis(50));
+
+        // Connect first client
+        let client1 = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(matches!(event, Event::InterfaceUp(_, _, _)));
+
+        // Disconnect first client
+        drop(client1);
+
+        // Wait for InterfaceDown
+        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(matches!(event, Event::InterfaceDown(_)));
+
+        // Now a new connection should be accepted
+        let _client2 = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(
+            matches!(event, Event::InterfaceUp(_, _, _)),
+            "expected InterfaceUp after slot freed, got {:?}",
+            event
+        );
     }
 }

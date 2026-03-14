@@ -615,6 +615,7 @@ fn start_test_pair() -> TestPair {
             listen_ip: "127.0.0.1".into(),
             listen_port: tcp_port,
             interface_id: InterfaceId(1),
+            max_connections: None,
         }),
         mode: MODE_FULL,
         ifac: None,

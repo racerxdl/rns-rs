@@ -36,6 +36,7 @@ pub struct BackboneConfig {
     pub listen_ip: String,
     pub listen_port: u16,
     pub interface_id: InterfaceId,
+    pub max_connections: Option<usize>,
 }
 
 impl Default for BackboneConfig {
@@ -45,6 +46,7 @@ impl Default for BackboneConfig {
             listen_ip: "0.0.0.0".into(),
             listen_port: 0,
             interface_id: InterfaceId(0),
+            max_connections: None,
         }
     }
 }
@@ -101,10 +103,11 @@ pub fn start(config: BackboneConfig, tx: EventSender, next_id: Arc<AtomicU64>) -
     );
 
     let name = config.name.clone();
+    let max_connections = config.max_connections;
     thread::Builder::new()
         .name(format!("backbone-epoll-{}", config.interface_id.0))
         .spawn(move || {
-            if let Err(e) = epoll_loop(listener, name, tx, next_id) {
+            if let Err(e) = epoll_loop(listener, name, tx, next_id, max_connections) {
                 log::error!("backbone epoll loop error: {}", e);
             }
         })?;
@@ -124,6 +127,7 @@ fn epoll_loop(
     name: String,
     tx: EventSender,
     next_id: Arc<AtomicU64>,
+    max_connections: Option<usize>,
 ) -> io::Result<()> {
     let epfd = unsafe { libc::epoll_create1(0) };
     if epfd < 0 {
@@ -173,6 +177,19 @@ fn epoll_loop(
                 loop {
                     match listener.accept() {
                         Ok((stream, peer_addr)) => {
+                            if let Some(max) = max_connections {
+                                if clients.len() >= max {
+                                    log::warn!(
+                                        "[{}] max connections ({}) reached, rejecting {}",
+                                        name,
+                                        max,
+                                        peer_addr
+                                    );
+                                    drop(stream);
+                                    continue;
+                                }
+                            }
+
                             let client_fd = stream.as_raw_fd();
 
                             // Set non-blocking
@@ -622,11 +639,15 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                 .or_else(|| params.get("port"))
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(4242);
+            let max_connections = params
+                .get("max_connections")
+                .and_then(|v| v.parse().ok());
             Ok(Box::new(BackboneMode::Server(BackboneConfig {
                 name: name.to_string(),
                 listen_ip,
                 listen_port,
                 interface_id: id,
+                max_connections,
             })))
         }
     }
@@ -707,6 +728,7 @@ mod tests {
             listen_ip: "127.0.0.1".into(),
             listen_port: port,
             interface_id: InterfaceId(80),
+            max_connections: None,
         };
 
         start(config, tx, next_id).unwrap();
@@ -739,6 +761,7 @@ mod tests {
             listen_ip: "127.0.0.1".into(),
             listen_port: port,
             interface_id: InterfaceId(81),
+            max_connections: None,
         };
 
         start(config, tx, next_id).unwrap();
@@ -774,6 +797,7 @@ mod tests {
             listen_ip: "127.0.0.1".into(),
             listen_port: port,
             interface_id: InterfaceId(82),
+            max_connections: None,
         };
 
         start(config, tx, next_id).unwrap();
@@ -813,6 +837,7 @@ mod tests {
             listen_ip: "127.0.0.1".into(),
             listen_port: port,
             interface_id: InterfaceId(83),
+            max_connections: None,
         };
 
         start(config, tx, next_id).unwrap();
@@ -845,6 +870,7 @@ mod tests {
             listen_ip: "127.0.0.1".into(),
             listen_port: port,
             interface_id: InterfaceId(84),
+            max_connections: None,
         };
 
         start(config, tx, next_id).unwrap();
@@ -878,6 +904,7 @@ mod tests {
             listen_ip: "127.0.0.1".into(),
             listen_port: port,
             interface_id: InterfaceId(85),
+            max_connections: None,
         };
 
         start(config, tx, next_id).unwrap();
@@ -920,6 +947,7 @@ mod tests {
             listen_ip: "127.0.0.1".into(),
             listen_port: port,
             interface_id: InterfaceId(86),
+            max_connections: None,
         };
 
         // Should not error
@@ -937,6 +965,7 @@ mod tests {
             listen_ip: "127.0.0.1".into(),
             listen_port: port,
             interface_id: InterfaceId(87),
+            max_connections: None,
         };
 
         start(config, tx, next_id).unwrap();
@@ -1048,6 +1077,90 @@ mod tests {
         let n = server_stream.read(&mut buf).unwrap();
         let expected = hdlc::frame(&payload);
         assert_eq!(&buf[..n], &expected[..]);
+    }
+
+    #[test]
+    fn backbone_max_connections_rejects_excess() {
+        let port = find_free_port();
+        let (tx, rx) = mpsc::channel();
+        let next_id = Arc::new(AtomicU64::new(8800));
+
+        let config = BackboneConfig {
+            name: "test-backbone".into(),
+            listen_ip: "127.0.0.1".into(),
+            listen_port: port,
+            interface_id: InterfaceId(88),
+            max_connections: Some(2),
+        };
+
+        start(config, tx, next_id).unwrap();
+        thread::sleep(Duration::from_millis(50));
+
+        // Connect two clients (at limit)
+        let _client1 = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        let _client2 = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+
+        // Drain both InterfaceUp events
+        for _ in 0..2 {
+            let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert!(matches!(event, Event::InterfaceUp(_, _, _)));
+        }
+
+        // Third connection should be accepted at TCP level but immediately dropped
+        let client3 = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        client3
+            .set_read_timeout(Some(Duration::from_millis(500)))
+            .unwrap();
+
+        // Give server time to reject
+        thread::sleep(Duration::from_millis(100));
+
+        // Should NOT receive a third InterfaceUp
+        let result = rx.recv_timeout(Duration::from_millis(500));
+        assert!(
+            result.is_err(),
+            "expected no InterfaceUp for rejected connection, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn backbone_max_connections_allows_after_disconnect() {
+        let port = find_free_port();
+        let (tx, rx) = mpsc::channel();
+        let next_id = Arc::new(AtomicU64::new(8900));
+
+        let config = BackboneConfig {
+            name: "test-backbone".into(),
+            listen_ip: "127.0.0.1".into(),
+            listen_port: port,
+            interface_id: InterfaceId(89),
+            max_connections: Some(1),
+        };
+
+        start(config, tx, next_id).unwrap();
+        thread::sleep(Duration::from_millis(50));
+
+        // Connect first client
+        let client1 = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(matches!(event, Event::InterfaceUp(_, _, _)));
+
+        // Disconnect first client
+        drop(client1);
+
+        // Wait for InterfaceDown
+        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(matches!(event, Event::InterfaceDown(_)));
+
+        // Now a new connection should be accepted
+        let _client2 = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(
+            matches!(event, Event::InterfaceUp(_, _, _)),
+            "expected InterfaceUp after slot freed, got {:?}",
+            event
+        );
     }
 
     #[test]
