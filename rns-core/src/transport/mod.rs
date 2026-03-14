@@ -1625,6 +1625,29 @@ impl TransportEngine {
     }
 
     // =========================================================================
+    // Cleanup
+    // =========================================================================
+
+    /// Return the set of destination hashes that currently have active paths.
+    pub fn active_destination_hashes(&self) -> alloc::collections::BTreeSet<[u8; 16]> {
+        self.path_table.keys().copied().collect()
+    }
+
+    /// Collect all packet hashes from active path entries (all paths, not just primaries).
+    pub fn active_packet_hashes(&self) -> Vec<[u8; 32]> {
+        self.path_table
+            .values()
+            .flat_map(|ps| ps.iter().map(|p| p.packet_hash))
+            .collect()
+    }
+
+    /// Cull rate limiter entries for destinations not in the given active set.
+    /// Returns the number of removed entries.
+    pub fn cull_rate_limiter(&mut self, active: &alloc::collections::BTreeSet<[u8; 16]>) -> usize {
+        self.rate_limiter.cull_stale(active)
+    }
+
+    // =========================================================================
     // Ingress control
     // =========================================================================
 

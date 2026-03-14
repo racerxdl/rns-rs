@@ -20,6 +20,14 @@ impl AnnounceRateLimiter {
         self.table.iter()
     }
 
+    /// Remove entries for destinations not in the given active set.
+    /// Returns the number of removed entries.
+    pub fn cull_stale(&mut self, active_destinations: &alloc::collections::BTreeSet<[u8; 16]>) -> usize {
+        let before = self.table.len();
+        self.table.retain(|k, _| active_destinations.contains(k));
+        before - self.table.len()
+    }
+
     /// Check if an announce should be blocked due to rate limiting.
     ///
     /// Returns `true` if the announce should be BLOCKED.

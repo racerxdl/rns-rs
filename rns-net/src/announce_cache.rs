@@ -87,20 +87,32 @@ impl AnnounceCache {
     /// Remove cached announces whose packet hashes are not in the active set.
     ///
     /// `active_hashes`: set of packet hashes that should be kept.
-    /// Returns the number of removed entries.
-    pub fn clean(&self, active_hashes: &[[u8; 32]]) -> io::Result<usize> {
+    /// `batch_limit`: maximum number of files to process per call (0 = unlimited).
+    /// Returns `(removed_count, finished)` where `finished` is true if all files
+    /// were processed (no more work to do).
+    pub fn clean(&self, active_hashes: &[[u8; 32]], batch_limit: usize) -> io::Result<(usize, bool)> {
+        use std::collections::HashSet;
+
+        let active_set: HashSet<[u8; 32]> = active_hashes.iter().copied().collect();
+
         let entries = match fs::read_dir(&self.base_path) {
             Ok(e) => e,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(0),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok((0, true)),
             Err(e) => return Err(e),
         };
 
         let mut removed = 0;
+        let mut processed = 0;
         for entry in entries {
             let entry = entry?;
             let path = entry.path();
             if !path.is_file() {
                 continue;
+            }
+
+            processed += 1;
+            if batch_limit > 0 && processed > batch_limit {
+                return Ok((removed, false));
             }
 
             let filename = match path.file_name().and_then(|n| n.to_str()) {
@@ -111,7 +123,7 @@ impl AnnounceCache {
             // Parse hex filename back to hash
             match hex_decode(filename) {
                 Some(hash) => {
-                    if !active_hashes.contains(&hash) {
+                    if !active_set.contains(&hash) {
                         let _ = fs::remove_file(&path);
                         removed += 1;
                     }
@@ -124,7 +136,7 @@ impl AnnounceCache {
             }
         }
 
-        Ok(removed)
+        Ok((removed, true))
     }
 
     /// Get the base path for testing.
@@ -267,8 +279,9 @@ mod tests {
         cache.store(&hash3, &[0x03], None).unwrap();
 
         // Keep only hash2
-        let removed = cache.clean(&[hash2]).unwrap();
+        let (removed, finished) = cache.clean(&[hash2], 0).unwrap();
         assert_eq!(removed, 2);
+        assert!(finished);
 
         // hash2 should still be there
         assert!(cache.get(&hash2).unwrap().is_some());
@@ -284,8 +297,9 @@ mod tests {
         let dir = temp_dir();
         let cache = AnnounceCache::new(dir.clone());
 
-        let removed = cache.clean(&[]).unwrap();
+        let (removed, finished) = cache.clean(&[], 0).unwrap();
         assert_eq!(removed, 0);
+        assert!(finished);
 
         let _ = fs::remove_dir_all(&dir);
     }

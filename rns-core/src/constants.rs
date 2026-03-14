@@ -177,7 +177,7 @@ pub const MAX_RANDOM_BLOBS: usize = 64;
 pub const MAX_RATE_TIMESTAMPS: usize = 16;
 
 /// Maximum packet hashlist size before rotation
-pub const HASHLIST_MAXSIZE: usize = 1_000_000;
+pub const HASHLIST_MAXSIZE: usize = 250_000;
 
 // --- Timeouts ---
 

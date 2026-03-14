@@ -305,6 +305,12 @@ pub struct Driver {
     pub(crate) interface_announcer: Option<crate::discovery::InterfaceAnnouncer>,
     /// Tick counter for periodic discovery cleanup (every ~3600 ticks = ~1 hour).
     pub(crate) discovery_cleanup_counter: u32,
+    /// Tick counter for periodic memory/cache cleanup (every ~3600 ticks = ~1 hour).
+    pub(crate) cache_cleanup_counter: u32,
+    /// When set, announce cache cleanup is in progress (contains active packet hashes).
+    pub(crate) cache_cleanup_active_hashes: Option<Vec<[u8; 32]>>,
+    /// Running total of files removed during current cache cleanup cycle.
+    pub(crate) cache_cleanup_removed: usize,
     /// Hook slots for the WASM hook system (one per HookPoint).
     #[cfg(feature = "rns-hooks")]
     pub(crate) hook_slots: [HookSlot; HookPoint::COUNT],
@@ -375,6 +381,9 @@ impl Driver {
             discover_interfaces: false,
             interface_announcer: None,
             discovery_cleanup_counter: 0,
+            cache_cleanup_counter: 0,
+            cache_cleanup_active_hashes: None,
+            cache_cleanup_removed: 0,
             #[cfg(feature = "rns-hooks")]
             hook_slots: create_hook_slots(),
             #[cfg(feature = "rns-hooks")]
@@ -660,6 +669,63 @@ impl Driver {
                                     );
                                 }
                             }
+                        }
+                    }
+
+                    // Periodic memory/cache cleanup (every ~3600 ticks = ~1 hour)
+                    self.cache_cleanup_counter += 1;
+                    if self.cache_cleanup_counter >= 3600 {
+                        self.cache_cleanup_counter = 0;
+
+                        let active_dests = self.engine.active_destination_hashes();
+
+                        // Cull known_destinations for destinations no longer in path table
+                        let kd_before = self.known_destinations.len();
+                        self.known_destinations
+                            .retain(|k, _| active_dests.contains(k) || self.local_destinations.contains_key(k));
+                        let kd_removed = kd_before - self.known_destinations.len();
+
+                        // Cull rate limiter entries
+                        let rl_removed = self.engine.cull_rate_limiter(&active_dests);
+
+                        if kd_removed > 0 || rl_removed > 0 {
+                            log::info!(
+                                "Memory cleanup: removed {} known_destinations, {} rate_limiter entries",
+                                kd_removed, rl_removed
+                            );
+                        }
+
+                        // Start incremental announce cache cleanup
+                        if self.announce_cache.is_some() && self.cache_cleanup_active_hashes.is_none() {
+                            self.cache_cleanup_active_hashes = Some(self.engine.active_packet_hashes());
+                            self.cache_cleanup_removed = 0;
+                        }
+                    }
+
+                    // Incremental announce cache cleanup (10k files per tick)
+                    if self.cache_cleanup_active_hashes.is_some() {
+                        if let Some(ref cache) = self.announce_cache {
+                            let active_hashes = self.cache_cleanup_active_hashes.as_ref().unwrap();
+                            match cache.clean(active_hashes, 10_000) {
+                                Ok((removed, finished)) => {
+                                    self.cache_cleanup_removed += removed;
+                                    if finished {
+                                        if self.cache_cleanup_removed > 0 {
+                                            log::info!(
+                                                "Announce cache cleanup complete: removed {} stale files",
+                                                self.cache_cleanup_removed
+                                            );
+                                        }
+                                        self.cache_cleanup_active_hashes = None;
+                                    }
+                                }
+                                Err(e) => {
+                                    log::warn!("Announce cache cleanup failed: {}", e);
+                                    self.cache_cleanup_active_hashes = None;
+                                }
+                            }
+                        } else {
+                            self.cache_cleanup_active_hashes = None;
                         }
                     }
                 }
