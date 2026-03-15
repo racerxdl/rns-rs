@@ -233,6 +233,8 @@ Use the `rns-hooks-sdk` crate to write hooks in `no_std` Rust. Each hook exports
 
 rns-rs is designed to be fully interoperable with the Python Reticulum implementation. A Rust node can join an existing Reticulum network alongside Python nodes, exchange announces, establish links, and transfer resources.
 
+The current wire-level protocol is described in [docs/protocol-spec.md](docs/protocol-spec.md).
+
 ## License
 
 [Reticulum License](LICENSE)
