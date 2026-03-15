@@ -26,6 +26,10 @@ use crate::event::{
 use crate::interface::backbone::BackboneRuntimeConfigHandle;
 #[cfg(all(feature = "iface-backbone", test))]
 use crate::interface::backbone::{BackboneAbuseConfig, BackboneServerRuntime};
+#[cfg(feature = "iface-tcp")]
+use crate::interface::tcp_server::TcpServerRuntimeConfigHandle;
+#[cfg(all(feature = "iface-tcp", test))]
+use crate::interface::tcp_server::TcpServerRuntime;
 use crate::holepunch::orchestrator::{HolePunchManager, HolePunchManagerAction};
 use crate::ifac;
 use crate::interface::{InterfaceEntry, InterfaceStats};
@@ -326,6 +330,9 @@ pub struct Driver {
     /// Runtime-config handles for backbone server interfaces, keyed by config name.
     #[cfg(feature = "iface-backbone")]
     pub(crate) backbone_runtime: HashMap<String, BackboneRuntimeConfigHandle>,
+    /// Runtime-config handles for TCP server interfaces, keyed by config name.
+    #[cfg(feature = "iface-tcp")]
+    pub(crate) tcp_server_runtime: HashMap<String, TcpServerRuntimeConfigHandle>,
     /// Storage for discovered interfaces.
     pub(crate) discovered_interfaces: crate::discovery::DiscoveredInterfaceStorage,
     /// Required stamp value for accepting discovered interfaces.
@@ -439,6 +446,8 @@ impl Driver {
             tick_interval_ms: Arc::new(AtomicU64::new(DEFAULT_TICK_INTERVAL_MS)),
             #[cfg(feature = "iface-backbone")]
             backbone_runtime: HashMap::new(),
+            #[cfg(feature = "iface-tcp")]
+            tcp_server_runtime: HashMap::new(),
             discovered_interfaces: crate::discovery::DiscoveredInterfaceStorage::new(
                 std::env::temp_dir().join("rns-discovered-interfaces"),
             ),
@@ -488,6 +497,15 @@ impl Driver {
         handle: BackboneRuntimeConfigHandle,
     ) {
         self.backbone_runtime
+            .insert(handle.interface_name.clone(), handle);
+    }
+
+    #[cfg(feature = "iface-tcp")]
+    pub(crate) fn register_tcp_server_runtime(
+        &mut self,
+        handle: TcpServerRuntimeConfigHandle,
+    ) {
+        self.tcp_server_runtime
             .insert(handle.interface_name.clone(), handle);
     }
 
@@ -580,6 +598,10 @@ impl Driver {
                 if let Some(entry) = self.backbone_runtime_entry(key) {
                     return Some(entry);
                 }
+                #[cfg(feature = "iface-tcp")]
+                if let Some(entry) = self.tcp_server_runtime_entry(key) {
+                    return Some(entry);
+                }
                 None
             }
         }
@@ -603,6 +625,10 @@ impl Driver {
         #[cfg(feature = "iface-backbone")]
         {
             entries.extend(self.list_backbone_runtime_config());
+        }
+        #[cfg(feature = "iface-tcp")]
+        {
+            entries.extend(self.list_tcp_server_runtime_config());
         }
 
         entries
@@ -767,6 +793,107 @@ impl Driver {
             "flap_blacklist_threshold" => runtime.abuse.flap_threshold = startup.abuse.flap_threshold,
             "flap_blacklist_window_secs" => runtime.abuse.flap_window = startup.abuse.flap_window,
             "flap_max_connection_age_secs" => runtime.abuse.flap_max_connection_age = startup.abuse.flap_max_connection_age,
+            "max_connections" => runtime.max_connections = startup.max_connections,
+            _ => {
+                return Err(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::UnknownKey,
+                    message: format!("unknown runtime-config key '{}'", key),
+                })
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "iface-tcp")]
+    fn list_tcp_server_runtime_config(&self) -> Vec<RuntimeConfigEntry> {
+        let mut entries = Vec::new();
+        let mut names: Vec<&String> = self.tcp_server_runtime.keys().collect();
+        names.sort();
+        for name in names {
+            let key = format!("tcp_server.{}.max_connections", name);
+            if let Some(entry) = self.tcp_server_runtime_entry(&key) {
+                entries.push(entry);
+            }
+        }
+        entries
+    }
+
+    #[cfg(feature = "iface-tcp")]
+    fn tcp_server_runtime_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
+        let rest = key.strip_prefix("tcp_server.")?;
+        let (name, setting) = rest.split_once('.')?;
+        let handle = self.tcp_server_runtime.get(name)?;
+        let current = handle.runtime.lock().unwrap().clone();
+        let startup = handle.startup.clone();
+        match setting {
+            "max_connections" => Some(RuntimeConfigEntry {
+                key: key.to_string(),
+                value: RuntimeConfigValue::Int(current.max_connections.unwrap_or(0) as i64),
+                default: RuntimeConfigValue::Int(startup.max_connections.unwrap_or(0) as i64),
+                source: if current.max_connections == startup.max_connections {
+                    RuntimeConfigSource::Startup
+                } else {
+                    RuntimeConfigSource::RuntimeOverride
+                },
+                apply_mode: RuntimeConfigApplyMode::NewConnectionsOnly,
+                description: Some(
+                    "Maximum simultaneous inbound TCP server connections; 0 disables the cap."
+                        .to_string(),
+                ),
+            }),
+            _ => None,
+        }
+    }
+
+    #[cfg(feature = "iface-tcp")]
+    fn split_tcp_server_runtime_key<'a>(
+        &self,
+        key: &'a str,
+    ) -> Result<(&'a str, &'a str), RuntimeConfigError> {
+        let rest = key.strip_prefix("tcp_server.").ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::UnknownKey,
+            message: format!("unknown runtime-config key '{}'", key),
+        })?;
+        rest.split_once('.').ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::UnknownKey,
+            message: format!("unknown runtime-config key '{}'", key),
+        })
+    }
+
+    #[cfg(feature = "iface-tcp")]
+    fn set_tcp_server_runtime_config(
+        &mut self,
+        key: &str,
+        value: RuntimeConfigValue,
+    ) -> Result<(), RuntimeConfigError> {
+        let (name, setting) = self.split_tcp_server_runtime_key(key)?;
+        let handle = self.tcp_server_runtime.get(name).ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::NotFound,
+            message: format!("tcp server interface '{}' not found", name),
+        })?;
+        let mut runtime = handle.runtime.lock().unwrap();
+        match setting {
+            "max_connections" => {
+                runtime.max_connections = Self::set_optional_usize(value, key)?;
+                Ok(())
+            }
+            _ => Err(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::UnknownKey,
+                message: format!("unknown runtime-config key '{}'", key),
+            }),
+        }
+    }
+
+    #[cfg(feature = "iface-tcp")]
+    fn reset_tcp_server_runtime_config(&mut self, key: &str) -> Result<(), RuntimeConfigError> {
+        let (name, setting) = self.split_tcp_server_runtime_key(key)?;
+        let handle = self.tcp_server_runtime.get(name).ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::NotFound,
+            message: format!("tcp server interface '{}' not found", name),
+        })?;
+        let mut runtime = handle.runtime.lock().unwrap();
+        let startup = handle.startup.clone();
+        match setting {
             "max_connections" => runtime.max_connections = startup.max_connections,
             _ => {
                 return Err(RuntimeConfigError {
@@ -2307,6 +2434,10 @@ impl Driver {
                     #[cfg(feature = "iface-backbone")]
                     _ if key.starts_with("backbone.") => self
                         .set_backbone_runtime_config(&key, value),
+                    #[cfg(feature = "iface-tcp")]
+                    _ if key.starts_with("tcp_server.") => {
+                        self.set_tcp_server_runtime_config(&key, value)
+                    }
                     _ => {
                         return QueryResponse::RuntimeConfigSet(Err(RuntimeConfigError {
                             code: RuntimeConfigErrorCode::UnknownKey,
@@ -2367,6 +2498,10 @@ impl Driver {
                     }
                     #[cfg(feature = "iface-backbone")]
                     _ if key.starts_with("backbone.") => self.reset_backbone_runtime_config(&key),
+                    #[cfg(feature = "iface-tcp")]
+                    _ if key.starts_with("tcp_server.") => {
+                        self.reset_tcp_server_runtime_config(&key)
+                    }
                     _ => {
                         return QueryResponse::RuntimeConfigReset(Err(RuntimeConfigError {
                             code: RuntimeConfigErrorCode::UnknownKey,
@@ -4144,6 +4279,18 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "iface-tcp")]
+    fn register_test_tcp_server(driver: &mut Driver, name: &str) {
+        let startup = TcpServerRuntime {
+            max_connections: Some(4),
+        };
+        driver.register_tcp_server_runtime(TcpServerRuntimeConfigHandle {
+            interface_name: name.to_string(),
+            runtime: Arc::new(std::sync::Mutex::new(startup.clone())),
+            startup,
+        });
+    }
+
     impl Callbacks for MockCallbacks {
         fn on_announce(&mut self, announced: crate::destination::AnnouncedIdentity) {
             self.announces
@@ -5751,6 +5898,43 @@ mod tests {
             panic!("expected runtime config reset success");
         };
         assert_eq!(entry.value, RuntimeConfigValue::Int(8));
+    }
+
+    #[cfg(feature = "iface-tcp")]
+    #[test]
+    fn runtime_config_lists_tcp_server_keys() {
+        let mut driver = new_test_driver();
+        register_test_tcp_server(&mut driver, "public");
+        let response = driver.handle_query(QueryRequest::ListRuntimeConfig);
+        let QueryResponse::RuntimeConfigList(entries) = response else {
+            panic!("expected runtime config list");
+        };
+        let keys: Vec<String> = entries.into_iter().map(|entry| entry.key).collect();
+        assert!(keys.contains(&"tcp_server.public.max_connections".to_string()));
+    }
+
+    #[cfg(feature = "iface-tcp")]
+    #[test]
+    fn runtime_config_sets_tcp_server_values() {
+        let mut driver = new_test_driver();
+        register_test_tcp_server(&mut driver, "public");
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "tcp_server.public.max_connections".into(),
+            value: RuntimeConfigValue::Int(0),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected runtime config set success");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Int(0));
+
+        let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
+            key: "tcp_server.public.max_connections".into(),
+        });
+        let QueryResponse::RuntimeConfigReset(Ok(entry)) = response else {
+            panic!("expected runtime config reset success");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Int(4));
     }
 
     #[test]

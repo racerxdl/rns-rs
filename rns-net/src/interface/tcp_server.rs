@@ -7,7 +7,7 @@
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use rns_core::constants;
@@ -25,17 +25,44 @@ pub struct TcpServerConfig {
     pub listen_port: u16,
     pub interface_id: InterfaceId,
     pub max_connections: Option<usize>,
+    pub runtime: Arc<Mutex<TcpServerRuntime>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TcpServerRuntime {
+    pub max_connections: Option<usize>,
+}
+
+impl TcpServerRuntime {
+    pub fn from_config(config: &TcpServerConfig) -> Self {
+        Self {
+            max_connections: config.max_connections,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TcpServerRuntimeConfigHandle {
+    pub interface_name: String,
+    pub runtime: Arc<Mutex<TcpServerRuntime>>,
+    pub startup: TcpServerRuntime,
 }
 
 impl Default for TcpServerConfig {
     fn default() -> Self {
-        TcpServerConfig {
+        let mut config = TcpServerConfig {
             name: String::new(),
             listen_ip: "0.0.0.0".into(),
             listen_port: 4242,
             interface_id: InterfaceId(0),
             max_connections: None,
-        }
+            runtime: Arc::new(Mutex::new(TcpServerRuntime {
+                max_connections: None,
+            })),
+        };
+        let startup = TcpServerRuntime::from_config(&config);
+        config.runtime = Arc::new(Mutex::new(startup));
+        config
     }
 }
 
@@ -62,12 +89,12 @@ pub fn start(config: TcpServerConfig, tx: EventSender, next_id: Arc<AtomicU64>) 
     log::info!("[{}] TCP server listening on {}", config.name, addr);
 
     let name = config.name.clone();
-    let max_connections = config.max_connections;
+    let runtime = Arc::clone(&config.runtime);
     let active_connections = Arc::new(AtomicUsize::new(0));
     thread::Builder::new()
         .name(format!("tcp-server-{}", config.interface_id.0))
         .spawn(move || {
-            listener_loop(listener, name, tx, next_id, max_connections, active_connections);
+            listener_loop(listener, name, tx, next_id, runtime, active_connections);
         })?;
 
     Ok(())
@@ -79,7 +106,7 @@ fn listener_loop(
     name: String,
     tx: EventSender,
     next_id: Arc<AtomicU64>,
-    max_connections: Option<usize>,
+    runtime: Arc<Mutex<TcpServerRuntime>>,
     active_connections: Arc<AtomicUsize>,
 ) {
     for stream_result in listener.incoming() {
@@ -91,6 +118,7 @@ fn listener_loop(
             }
         };
 
+        let max_connections = runtime.lock().unwrap().max_connections;
         if let Some(max) = max_connections {
             if active_connections.load(Ordering::Relaxed) >= max {
                 let peer = stream.peer_addr().ok();
@@ -251,14 +279,19 @@ impl InterfaceFactory for TcpServerFactory {
         let max_connections = params
             .get("max_connections")
             .and_then(|v| v.parse().ok());
-
-        Ok(Box::new(TcpServerConfig {
+        let mut config = TcpServerConfig {
             name: name.to_string(),
             listen_ip,
             listen_port,
             interface_id: id,
             max_connections,
-        }))
+            runtime: Arc::new(Mutex::new(TcpServerRuntime {
+                max_connections: None,
+            })),
+        };
+        let startup = TcpServerRuntime::from_config(&config);
+        config.runtime = Arc::new(Mutex::new(startup));
+        Ok(Box::new(config))
     }
 
     fn start(
@@ -272,6 +305,16 @@ impl InterfaceFactory for TcpServerFactory {
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "wrong config type"))?;
         start(cfg, ctx.tx, ctx.next_dynamic_id)?;
         Ok(StartResult::Listener)
+    }
+}
+
+pub(crate) fn runtime_handle_from_config(
+    config: &TcpServerConfig,
+) -> TcpServerRuntimeConfigHandle {
+    TcpServerRuntimeConfigHandle {
+        interface_name: config.name.clone(),
+        runtime: Arc::clone(&config.runtime),
+        startup: TcpServerRuntime::from_config(config),
     }
 }
 
@@ -290,19 +333,33 @@ mod tests {
             .port()
     }
 
+    fn make_server_config(
+        port: u16,
+        interface_id: u64,
+        max_connections: Option<usize>,
+    ) -> TcpServerConfig {
+        let mut config = TcpServerConfig {
+            name: "test-server".into(),
+            listen_ip: "127.0.0.1".into(),
+            listen_port: port,
+            interface_id: InterfaceId(interface_id),
+            max_connections,
+            runtime: Arc::new(Mutex::new(TcpServerRuntime {
+                max_connections: None,
+            })),
+        };
+        let startup = TcpServerRuntime::from_config(&config);
+        config.runtime = Arc::new(Mutex::new(startup));
+        config
+    }
+
     #[test]
     fn accept_connection() {
         let port = find_free_port();
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(1000));
 
-        let config = TcpServerConfig {
-            name: "test-server".into(),
-            listen_ip: "127.0.0.1".into(),
-            listen_port: port,
-            interface_id: InterfaceId(1),
-            max_connections: None,
-        };
+        let config = make_server_config(port, 1, None);
 
         start(config, tx, next_id).unwrap();
 
@@ -330,13 +387,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(2000));
 
-        let config = TcpServerConfig {
-            name: "test-server".into(),
-            listen_ip: "127.0.0.1".into(),
-            listen_port: port,
-            interface_id: InterfaceId(2),
-            max_connections: None,
-        };
+        let config = make_server_config(port, 2, None);
 
         start(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -368,13 +419,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(3000));
 
-        let config = TcpServerConfig {
-            name: "test-server".into(),
-            listen_ip: "127.0.0.1".into(),
-            listen_port: port,
-            interface_id: InterfaceId(3),
-            max_connections: None,
-        };
+        let config = make_server_config(port, 3, None);
 
         start(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -408,13 +453,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(4000));
 
-        let config = TcpServerConfig {
-            name: "test-server".into(),
-            listen_ip: "127.0.0.1".into(),
-            listen_port: port,
-            interface_id: InterfaceId(4),
-            max_connections: None,
-        };
+        let config = make_server_config(port, 4, None);
 
         start(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -444,13 +483,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(5000));
 
-        let config = TcpServerConfig {
-            name: "test-server".into(),
-            listen_ip: "127.0.0.1".into(),
-            listen_port: port,
-            interface_id: InterfaceId(5),
-            max_connections: None,
-        };
+        let config = make_server_config(port, 5, None);
 
         start(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -478,13 +511,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(6000));
 
-        let config = TcpServerConfig {
-            name: "test-server".into(),
-            listen_ip: "127.0.0.1".into(),
-            listen_port: port,
-            interface_id: InterfaceId(6),
-            max_connections: None,
-        };
+        let config = make_server_config(port, 6, None);
 
         // Should not error
         start(config, tx, next_id).unwrap();
@@ -496,13 +523,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(7000));
 
-        let config = TcpServerConfig {
-            name: "test-server".into(),
-            listen_ip: "127.0.0.1".into(),
-            listen_port: port,
-            interface_id: InterfaceId(7),
-            max_connections: Some(2),
-        };
+        let config = make_server_config(port, 7, Some(2));
 
         start(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -541,13 +562,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(7100));
 
-        let config = TcpServerConfig {
-            name: "test-server".into(),
-            listen_ip: "127.0.0.1".into(),
-            listen_port: port,
-            interface_id: InterfaceId(71),
-            max_connections: Some(1),
-        };
+        let config = make_server_config(port, 71, Some(1));
 
         start(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -571,6 +586,36 @@ mod tests {
             matches!(event, Event::InterfaceUp(_, _, _)),
             "expected InterfaceUp after slot freed, got {:?}",
             event
+        );
+    }
+
+    #[test]
+    fn runtime_max_connections_updates_live() {
+        let port = find_free_port();
+        let (tx, rx) = mpsc::channel();
+        let next_id = Arc::new(AtomicU64::new(7200));
+
+        let config = make_server_config(port, 72, None);
+        let runtime = Arc::clone(&config.runtime);
+
+        start(config, tx, next_id).unwrap();
+        thread::sleep(Duration::from_millis(50));
+
+        let _client1 = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(matches!(event, Event::InterfaceUp(_, _, _)));
+
+        {
+            let mut runtime = runtime.lock().unwrap();
+            runtime.max_connections = Some(1);
+        }
+
+        let _client2 = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        let result = rx.recv_timeout(Duration::from_millis(400));
+        assert!(
+            result.is_err(),
+            "expected no InterfaceUp after lowering max_connections, got {:?}",
+            result
         );
     }
 }

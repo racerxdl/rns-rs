@@ -130,6 +130,7 @@ fn main() {
                     listen_port: port,
                     interface_id: InterfaceId(1),
                     max_connections: None,
+                    ..TcpServerConfig::default()
                 }),
                 mode: MODE_FULL,
                 ifac: None,

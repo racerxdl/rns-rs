@@ -617,6 +617,7 @@ fn start_test_pair() -> TestPair {
             listen_port: tcp_port,
             interface_id: InterfaceId(1),
             max_connections: None,
+            ..TcpServerConfig::default()
         }),
         mode: MODE_FULL,
         ifac: None,

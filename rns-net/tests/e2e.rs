@@ -561,6 +561,7 @@ fn start_transport_node(port: u16) -> RnsNode {
                     listen_port: port,
                     interface_id: InterfaceId(1),
                     max_connections: None,
+                    ..TcpServerConfig::default()
                 }),
                 mode: MODE_FULL,
                 ifac: None,
@@ -862,6 +863,7 @@ fn test_direct_link_no_transport() {
                     listen_port: port,
                     interface_id: InterfaceId(1),
                     max_connections: None,
+                    ..TcpServerConfig::default()
                 }),
                 mode: MODE_FULL,
                 ifac: None,
@@ -1397,6 +1399,7 @@ fn test_plain_message_delivery() {
                     listen_port: port,
                     interface_id: InterfaceId(1),
                     max_connections: None,
+                    ..TcpServerConfig::default()
                 }),
                 mode: MODE_FULL,
                 ifac: None,
@@ -1487,6 +1490,7 @@ fn test_group_message_delivery() {
                     listen_port: port,
                     interface_id: InterfaceId(1),
                     max_connections: None,
+                    ..TcpServerConfig::default()
                 }),
                 mode: MODE_FULL,
                 ifac: None,
@@ -1581,6 +1585,7 @@ fn test_group_wrong_key_fails() {
                     listen_port: port,
                     interface_id: InterfaceId(1),
                     max_connections: None,
+                    ..TcpServerConfig::default()
                 }),
                 mode: MODE_FULL,
                 ifac: None,
@@ -2857,6 +2862,7 @@ fn discovery_announce_received_by_client() {
                     listen_port: port,
                     interface_id: InterfaceId(1),
                     max_connections: None,
+                    ..TcpServerConfig::default()
                 }),
                 mode: MODE_FULL,
                 ifac: None,
@@ -3025,6 +3031,7 @@ fn discovery_announce_through_relay() {
                     listen_port: port_a,
                     interface_id: InterfaceId(1),
                     max_connections: None,
+                    ..TcpServerConfig::default()
                 }),
                 mode: MODE_FULL,
                 ifac: None,
@@ -3098,6 +3105,7 @@ fn discovery_announce_through_relay() {
                         listen_port: port_b,
                         interface_id: InterfaceId(2),
                         max_connections: None,
+                        ..TcpServerConfig::default()
                     }),
                     mode: MODE_FULL,
                     ifac: None,

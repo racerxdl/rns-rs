@@ -22,6 +22,8 @@ use crate::interface::local::LocalServerConfig;
 use crate::interface::{InterfaceEntry, InterfaceStats};
 #[cfg(feature = "iface-backbone")]
 use crate::interface::backbone::{runtime_handle_from_mode, BackboneMode};
+#[cfg(feature = "iface-tcp")]
+use crate::interface::tcp_server::{runtime_handle_from_config as tcp_runtime_handle_from_config, TcpServerConfig};
 use crate::storage;
 use crate::time;
 
@@ -626,6 +628,16 @@ impl RnsNode {
                     if let Some(handle) = runtime_handle_from_mode(mode) {
                         driver.register_backbone_runtime(handle);
                     }
+                }
+            }
+            #[cfg(feature = "iface-tcp")]
+            if iface_config.type_name == "TCPServerInterface" {
+                if let Some(config) = iface_config
+                    .config_data
+                    .as_any()
+                    .downcast_ref::<TcpServerConfig>()
+                {
+                    driver.register_tcp_server_runtime(tcp_runtime_handle_from_config(config));
                 }
             }
 
