@@ -42,7 +42,8 @@ impl Args {
                     // Boolean flags that don't take values
                     match key.as_str() {
                         "version" | "exampleconfig" | "help" | "stdin" | "stdout" | "force"
-                        | "blackholed" | "daemon" | "disable-auth" => {
+                        | "blackholed" | "daemon" | "disable-auth" | "json"
+                        | "value-only" | "keys-only" => {
                             flags.insert(key, "true".into());
                         }
                         _ => {
@@ -178,11 +179,22 @@ mod tests {
 
     #[test]
     fn parse_long_boolean_flags() {
-        let a = args(&["--stdin", "--stdout", "--force", "--blackholed"]);
+        let a = args(&[
+            "--stdin",
+            "--stdout",
+            "--force",
+            "--blackholed",
+            "--json",
+            "--value-only",
+            "--keys-only",
+        ]);
         assert!(a.has("stdin"));
         assert!(a.has("stdout"));
         assert!(a.has("force"));
         assert!(a.has("blackholed"));
+        assert!(a.has("json"));
+        assert!(a.has("value-only"));
+        assert!(a.has("keys-only"));
     }
 
     #[test]

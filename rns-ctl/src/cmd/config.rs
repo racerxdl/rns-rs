@@ -22,7 +22,9 @@ pub fn run(args: Args) {
         return;
     }
 
-    let json_output = args.has("j");
+    let json_output = args.has("j") || args.has("json");
+    let value_only = args.has("value-only");
+    let keys_only = args.has("keys-only");
     let action = args.positional.first().map(|s| s.as_str()).unwrap_or_default();
 
     let mut client = connect(args.config_path());
@@ -47,7 +49,7 @@ pub fn run(args: Args) {
                     serde_json::to_string_pretty(&pickle_to_json(&response)).unwrap_or_default()
                 );
             } else {
-                print_list(&response);
+                print_list(&response, keys_only);
             }
         }
         "get" => {
@@ -77,7 +79,7 @@ pub fn run(args: Args) {
                     serde_json::to_string_pretty(&pickle_to_json(&response)).unwrap_or_default()
                 );
             } else {
-                print_entry_or_none(&response, key);
+                print_entry_or_none(&response, key, value_only);
             }
         }
         "set" => {
@@ -112,7 +114,7 @@ pub fn run(args: Args) {
                     ),
                 ]),
             );
-            handle_mutation_response(&response, json_output);
+            handle_mutation_response(&response, json_output, value_only);
         }
         "reset" => {
             let key = match args.positional.get(1) {
@@ -135,7 +137,7 @@ pub fn run(args: Args) {
                     ),
                 ]),
             );
-            handle_mutation_response(&response, json_output);
+            handle_mutation_response(&response, json_output, value_only);
         }
         _ => {
             eprintln!("Unknown config subcommand: {}", action);
@@ -206,8 +208,8 @@ fn rpc_call(client: &mut RpcClient, request: PickleValue) -> PickleValue {
 
 fn parse_scalar_value(raw: &str) -> PickleValue {
     match raw {
-        "true" => PickleValue::Bool(true),
-        "false" => PickleValue::Bool(false),
+        raw if raw.eq_ignore_ascii_case("true") => PickleValue::Bool(true),
+        raw if raw.eq_ignore_ascii_case("false") => PickleValue::Bool(false),
         _ => {
             if let Ok(v) = raw.parse::<i64>() {
                 PickleValue::Int(v)
@@ -220,22 +222,51 @@ fn parse_scalar_value(raw: &str) -> PickleValue {
     }
 }
 
-fn print_list(response: &PickleValue) {
+fn print_list(response: &PickleValue, keys_only: bool) {
     let Some(entries) = response.as_list() else {
         eprintln!("Unexpected response");
         process::exit(1);
     };
-    for entry in entries {
-        print_entry(entry);
+    let mut sorted_entries: Vec<&PickleValue> = entries.iter().collect();
+    sorted_entries.sort_by(|a, b| {
+        let akey = a.get("key").and_then(|v| v.as_str()).unwrap_or_default();
+        let bkey = b.get("key").and_then(|v| v.as_str()).unwrap_or_default();
+        akey.cmp(bkey)
+    });
+
+    if sorted_entries.is_empty() {
+        println!("No runtime config entries");
+        return;
+    }
+
+    if keys_only {
+        for entry in sorted_entries {
+            println!(
+                "{}",
+                entry.get("key")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("<unknown>")
+            );
+        }
+        return;
+    }
+
+    println!(
+        "{:<52} {:<16} {:<17} {:<20}",
+        "Key", "Value", "Source", "Apply"
+    );
+    println!("{}", "-".repeat(110));
+    for entry in sorted_entries {
+        print_list_entry(entry);
     }
 }
 
-fn print_entry_or_none(response: &PickleValue, key: &str) {
+fn print_entry_or_none(response: &PickleValue, key: &str, value_only: bool) {
     if matches!(response, PickleValue::None) {
         println!("No runtime config entry for {}", key);
         return;
     }
-    print_entry(response);
+    print_entry(response, value_only);
 }
 
 fn filter_list_by_prefix(response: PickleValue, prefix: &str) -> PickleValue {
@@ -256,7 +287,7 @@ fn filter_list_by_prefix(response: PickleValue, prefix: &str) -> PickleValue {
     }
 }
 
-fn handle_mutation_response(response: &PickleValue, json_output: bool) {
+fn handle_mutation_response(response: &PickleValue, json_output: bool, value_only: bool) {
     if json_output {
         println!(
             "{}",
@@ -270,11 +301,33 @@ fn handle_mutation_response(response: &PickleValue, json_output: bool) {
         eprintln!("{}", message);
         process::exit(1);
     } else {
-        print_entry(response);
+        print_entry(response, value_only);
     }
 }
 
-fn print_entry(entry: &PickleValue) {
+fn print_list_entry(entry: &PickleValue) {
+    let key = entry.get("key").and_then(|v| v.as_str()).unwrap_or("<unknown>");
+    let value = format_pickle_scalar(entry.get("value").unwrap_or(&PickleValue::None));
+    let source = entry
+        .get("source")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let apply_mode = entry
+        .get("apply_mode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    println!("{:<52} {:<16} {:<17} {:<20}", key, value, source, apply_mode);
+}
+
+fn print_entry(entry: &PickleValue, value_only: bool) {
+    if value_only {
+        println!(
+            "{}",
+            format_pickle_scalar(entry.get("value").unwrap_or(&PickleValue::None))
+        );
+        return;
+    }
+
     let key = entry.get("key").and_then(|v| v.as_str()).unwrap_or("<unknown>");
     let value = format_pickle_scalar(entry.get("value").unwrap_or(&PickleValue::None));
     let default = format_pickle_scalar(entry.get("default").unwrap_or(&PickleValue::None));
@@ -333,12 +386,60 @@ fn print_usage() {
     println!("Usage: rns-ctl config <COMMAND> [OPTIONS]");
     println!();
     println!("Commands:");
-    println!("    list [--prefix PREFIX]      List supported runtime config keys");
+    println!("    list [--prefix PREFIX]      List supported runtime config entries");
     println!("    get <key>                   Get one runtime config entry");
     println!("    set <key> <value>           Set one runtime config value");
     println!("    reset <key>                 Reset one runtime config value");
     println!();
     println!("Options:");
     println!("    -c, --config PATH           Config directory");
-    println!("    -j                          JSON output");
+    println!("    -j, --json                  JSON output");
+    println!("        --keys-only             Print only keys for list");
+    println!("        --value-only            Print only the effective value");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_scalar_value_handles_case_insensitive_bools() {
+        assert_eq!(parse_scalar_value("TRUE"), PickleValue::Bool(true));
+        assert_eq!(parse_scalar_value("False"), PickleValue::Bool(false));
+    }
+
+    #[test]
+    fn parse_scalar_value_prefers_int_over_float() {
+        assert_eq!(parse_scalar_value("42"), PickleValue::Int(42));
+        assert_eq!(parse_scalar_value("4.25"), PickleValue::Float(4.25));
+    }
+
+    #[test]
+    fn filter_list_by_prefix_keeps_matching_keys() {
+        let response = PickleValue::List(vec![
+            PickleValue::Dict(vec![(
+                PickleValue::String("key".into()),
+                PickleValue::String("global.tick_interval_ms".into()),
+            )]),
+            PickleValue::Dict(vec![(
+                PickleValue::String("key".into()),
+                PickleValue::String("backbone.public.idle_timeout_secs".into()),
+            )]),
+        ]);
+
+        let filtered = filter_list_by_prefix(response, "global.");
+        let PickleValue::List(entries) = filtered else {
+            panic!("expected list");
+        };
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].get("key").and_then(|v| v.as_str()),
+            Some("global.tick_interval_ms")
+        );
+    }
+
+    #[test]
+    fn format_pickle_scalar_renders_strings_without_quotes() {
+        assert_eq!(format_pickle_scalar(&PickleValue::String("ask_app".into())), "ask_app");
+    }
 }
