@@ -16,7 +16,7 @@ use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rns_core::constants;
 use rns_core::transport::types::{InterfaceId, InterfaceInfo};
@@ -37,6 +37,7 @@ pub struct BackboneConfig {
     pub listen_port: u16,
     pub interface_id: InterfaceId,
     pub max_connections: Option<usize>,
+    pub idle_timeout: Option<Duration>,
 }
 
 impl Default for BackboneConfig {
@@ -47,6 +48,7 @@ impl Default for BackboneConfig {
             listen_port: 0,
             interface_id: InterfaceId(0),
             max_connections: None,
+            idle_timeout: None,
         }
     }
 }
@@ -104,10 +106,11 @@ pub fn start(config: BackboneConfig, tx: EventSender, next_id: Arc<AtomicU64>) -
 
     let name = config.name.clone();
     let max_connections = config.max_connections;
+    let idle_timeout = config.idle_timeout;
     thread::Builder::new()
         .name(format!("backbone-epoll-{}", config.interface_id.0))
         .spawn(move || {
-            if let Err(e) = epoll_loop(listener, name, tx, next_id, max_connections) {
+            if let Err(e) = epoll_loop(listener, name, tx, next_id, max_connections, idle_timeout) {
                 log::error!("backbone epoll loop error: {}", e);
             }
         })?;
@@ -119,6 +122,8 @@ pub fn start(config: BackboneConfig, tx: EventSender, next_id: Arc<AtomicU64>) -
 struct ClientState {
     id: InterfaceId,
     decoder: hdlc::Decoder,
+    connected_at: Instant,
+    has_received_data: bool,
 }
 
 /// Main epoll event loop.
@@ -128,6 +133,7 @@ fn epoll_loop(
     tx: EventSender,
     next_id: Arc<AtomicU64>,
     max_connections: Option<usize>,
+    idle_timeout: Option<Duration>,
 ) -> io::Result<()> {
     let epfd = unsafe { libc::epoll_create1(0) };
     if epfd < 0 {
@@ -253,6 +259,8 @@ fn epoll_loop(
                                 ClientState {
                                     id: client_id,
                                     decoder: hdlc::Decoder::new(),
+                                    connected_at: Instant::now(),
+                                    has_received_data: false,
                                 },
                             );
 
@@ -310,6 +318,7 @@ fn epoll_loop(
                         should_remove = true;
                     } else if let Some(client) = clients.get_mut(&fd) {
                         client_id = client.id;
+                        client.has_received_data = true;
                         for frame in client.decoder.feed(&buf[..n as usize]) {
                             if tx
                                 .send(Event::Frame {
@@ -341,6 +350,35 @@ fn epoll_loop(
                     clients.remove(&fd);
                     let _ = tx.send(Event::InterfaceDown(client_id));
                 }
+            }
+        }
+
+        if let Some(timeout) = idle_timeout {
+            let now = Instant::now();
+            let timed_out: Vec<(RawFd, InterfaceId)> = clients
+                .iter()
+                .filter_map(|(&fd, client)| {
+                    if client.has_received_data || now.duration_since(client.connected_at) < timeout
+                    {
+                        None
+                    } else {
+                        Some((fd, client.id))
+                    }
+                })
+                .collect();
+
+            for (fd, client_id) in timed_out {
+                log::info!(
+                    "[{}] backbone client {} disconnected due to idle timeout",
+                    name,
+                    client_id.0
+                );
+                unsafe {
+                    libc::epoll_ctl(epfd, libc::EPOLL_CTL_DEL, fd, std::ptr::null_mut());
+                    libc::close(fd);
+                }
+                clients.remove(&fd);
+                let _ = tx.send(Event::InterfaceDown(client_id));
             }
         }
     }
@@ -642,12 +680,18 @@ impl InterfaceFactory for BackboneInterfaceFactory {
             let max_connections = params
                 .get("max_connections")
                 .and_then(|v| v.parse().ok());
+            let idle_timeout = params
+                .get("idle_timeout")
+                .and_then(|v| v.parse::<f64>().ok())
+                .filter(|v| *v > 0.0)
+                .map(Duration::from_secs_f64);
             Ok(Box::new(BackboneMode::Server(BackboneConfig {
                 name: name.to_string(),
                 listen_ip,
                 listen_port,
                 interface_id: id,
                 max_connections,
+                idle_timeout,
             })))
         }
     }
@@ -729,6 +773,7 @@ mod tests {
             listen_port: port,
             interface_id: InterfaceId(80),
             max_connections: None,
+            idle_timeout: None,
         };
 
         start(config, tx, next_id).unwrap();
@@ -762,6 +807,7 @@ mod tests {
             listen_port: port,
             interface_id: InterfaceId(81),
             max_connections: None,
+            idle_timeout: None,
         };
 
         start(config, tx, next_id).unwrap();
@@ -798,6 +844,7 @@ mod tests {
             listen_port: port,
             interface_id: InterfaceId(82),
             max_connections: None,
+            idle_timeout: None,
         };
 
         start(config, tx, next_id).unwrap();
@@ -838,6 +885,7 @@ mod tests {
             listen_port: port,
             interface_id: InterfaceId(83),
             max_connections: None,
+            idle_timeout: None,
         };
 
         start(config, tx, next_id).unwrap();
@@ -871,6 +919,7 @@ mod tests {
             listen_port: port,
             interface_id: InterfaceId(84),
             max_connections: None,
+            idle_timeout: None,
         };
 
         start(config, tx, next_id).unwrap();
@@ -905,6 +954,7 @@ mod tests {
             listen_port: port,
             interface_id: InterfaceId(85),
             max_connections: None,
+            idle_timeout: None,
         };
 
         start(config, tx, next_id).unwrap();
@@ -948,6 +998,7 @@ mod tests {
             listen_port: port,
             interface_id: InterfaceId(86),
             max_connections: None,
+            idle_timeout: None,
         };
 
         // Should not error
@@ -966,6 +1017,7 @@ mod tests {
             listen_port: port,
             interface_id: InterfaceId(87),
             max_connections: None,
+            idle_timeout: None,
         };
 
         start(config, tx, next_id).unwrap();
@@ -1091,6 +1143,7 @@ mod tests {
             listen_port: port,
             interface_id: InterfaceId(88),
             max_connections: Some(2),
+            idle_timeout: None,
         };
 
         start(config, tx, next_id).unwrap();
@@ -1136,6 +1189,7 @@ mod tests {
             listen_port: port,
             interface_id: InterfaceId(89),
             max_connections: Some(1),
+            idle_timeout: None,
         };
 
         start(config, tx, next_id).unwrap();
@@ -1191,5 +1245,80 @@ mod tests {
         // Should get InterfaceUp again
         let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
         assert!(matches!(event, Event::InterfaceUp(InterfaceId(9300), _, _)));
+    }
+
+    #[test]
+    fn backbone_idle_timeout_disconnects_silent_client() {
+        let port = find_free_port();
+        let (tx, rx) = mpsc::channel();
+        let next_id = Arc::new(AtomicU64::new(9400));
+
+        let config = BackboneConfig {
+            name: "test-backbone".into(),
+            listen_ip: "127.0.0.1".into(),
+            listen_port: port,
+            interface_id: InterfaceId(94),
+            max_connections: None,
+            idle_timeout: Some(Duration::from_millis(150)),
+        };
+
+        start(config, tx, next_id).unwrap();
+        thread::sleep(Duration::from_millis(50));
+
+        let _client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+
+        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let client_id = match event {
+            Event::InterfaceUp(id, _, _) => id,
+            other => panic!("expected InterfaceUp, got {:?}", other),
+        };
+
+        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(matches!(event, Event::InterfaceDown(id) if id == client_id));
+    }
+
+    #[test]
+    fn backbone_idle_timeout_ignores_client_after_data() {
+        let port = find_free_port();
+        let (tx, rx) = mpsc::channel();
+        let next_id = Arc::new(AtomicU64::new(9500));
+
+        let config = BackboneConfig {
+            name: "test-backbone".into(),
+            listen_ip: "127.0.0.1".into(),
+            listen_port: port,
+            interface_id: InterfaceId(95),
+            max_connections: None,
+            idle_timeout: Some(Duration::from_millis(200)),
+        };
+
+        start(config, tx, next_id).unwrap();
+        thread::sleep(Duration::from_millis(50));
+
+        let mut client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+
+        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let client_id = match event {
+            Event::InterfaceUp(id, _, _) => id,
+            other => panic!("expected InterfaceUp, got {:?}", other),
+        };
+
+        client.write_all(&hdlc::frame(&[1u8; 24])).unwrap();
+
+        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        match event {
+            Event::Frame { interface_id, data } => {
+                assert_eq!(interface_id, client_id);
+                assert_eq!(data, vec![1u8; 24]);
+            }
+            other => panic!("expected Frame, got {:?}", other),
+        }
+
+        let result = rx.recv_timeout(Duration::from_millis(500));
+        assert!(
+            result.is_err(),
+            "expected no InterfaceDown after client sent data, got {:?}",
+            result
+        );
     }
 }
