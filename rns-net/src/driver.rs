@@ -1,6 +1,8 @@
 //! Driver loop: receives events, drives the TransportEngine, dispatches actions.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use rns_core::packet::RawPacket;
 use rns_core::transport::tables::PathEntry;
@@ -16,7 +18,8 @@ use rns_hooks::{create_hook_slots, EngineAccess, HookContext, HookManager, HookP
 use crate::event::{
     BlackholeInfo, Event, EventReceiver, InterfaceStatsResponse, LocalDestinationEntry,
     NextHopResponse, PathTableEntry, QueryRequest, QueryResponse, RateTableEntry,
-    SingleInterfaceStat,
+    RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError, RuntimeConfigErrorCode,
+    RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
 };
 use crate::holepunch::orchestrator::{HolePunchManager, HolePunchManagerAction};
 use crate::ifac;
@@ -25,6 +28,24 @@ use crate::link_manager::{LinkManager, LinkManagerAction};
 use crate::time;
 
 const DEFAULT_KNOWN_DESTINATIONS_TTL: f64 = 48.0 * 60.0 * 60.0;
+const DEFAULT_TICK_INTERVAL_MS: u64 = 1000;
+const DEFAULT_KNOWN_DESTINATIONS_CLEANUP_INTERVAL_TICKS: u32 = 3600;
+const DEFAULT_ANNOUNCE_CACHE_CLEANUP_INTERVAL_TICKS: u32 = 3600;
+const DEFAULT_ANNOUNCE_CACHE_CLEANUP_BATCH_SIZE: usize = 10_000;
+const DEFAULT_DISCOVERY_CLEANUP_INTERVAL_TICKS: u32 = 3600;
+const DEFAULT_MANAGEMENT_ANNOUNCE_INTERVAL_SECS: f64 = 300.0;
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RuntimeConfigDefaults {
+    pub(crate) tick_interval_ms: u64,
+    pub(crate) known_destinations_ttl: f64,
+    pub(crate) known_destinations_cleanup_interval_ticks: u32,
+    pub(crate) announce_cache_cleanup_interval_ticks: u32,
+    pub(crate) announce_cache_cleanup_batch_size: usize,
+    pub(crate) discovery_cleanup_interval_ticks: u32,
+    pub(crate) management_announce_interval_secs: f64,
+    pub(crate) direct_connect_policy: crate::event::HolePunchPolicy,
+}
 
 /// Thin wrapper providing `EngineAccess` for a `TransportEngine` + Driver interfaces.
 #[cfg(feature = "rns-hooks")]
@@ -295,6 +316,8 @@ pub struct Driver {
     pub(crate) holepunch_manager: HolePunchManager,
     /// Event sender for worker threads to send results back to the driver loop.
     pub(crate) event_tx: crate::event::EventSender,
+    /// Shared timer interval used by the node timer thread.
+    pub(crate) tick_interval_ms: Arc<AtomicU64>,
     /// Storage for discovered interfaces.
     pub(crate) discovered_interfaces: crate::discovery::DiscoveredInterfaceStorage,
     /// Required stamp value for accepting discovered interfaces.
@@ -309,14 +332,28 @@ pub struct Driver {
     pub(crate) interface_announcer: Option<crate::discovery::InterfaceAnnouncer>,
     /// Tick counter for periodic discovery cleanup (every ~3600 ticks = ~1 hour).
     pub(crate) discovery_cleanup_counter: u32,
+    /// Runtime-configurable discovery cleanup interval.
+    pub(crate) discovery_cleanup_interval_ticks: u32,
     /// Tick counter for periodic memory/cache cleanup (every ~3600 ticks = ~1 hour).
     pub(crate) cache_cleanup_counter: u32,
+    /// Tick counter for incremental announce-cache cleanup scheduling.
+    pub(crate) announce_cache_cleanup_counter: u32,
+    /// Runtime-configurable cleanup interval for known destinations.
+    pub(crate) known_destinations_cleanup_interval_ticks: u32,
+    /// Runtime-configurable interval for starting announce cache cleanup.
+    pub(crate) announce_cache_cleanup_interval_ticks: u32,
     /// When set, announce cache cleanup is in progress (contains active packet hashes).
     pub(crate) cache_cleanup_active_hashes: Option<Vec<[u8; 32]>>,
     /// Directory iterator for incremental announce cache cleanup.
     pub(crate) cache_cleanup_entries: Option<std::fs::ReadDir>,
     /// Running total of files removed during current cache cleanup cycle.
     pub(crate) cache_cleanup_removed: usize,
+    /// Runtime-configurable announce cache cleanup batch size.
+    pub(crate) announce_cache_cleanup_batch_size: usize,
+    /// Runtime-configurable management announce interval.
+    pub(crate) management_announce_interval_secs: f64,
+    /// Startup/default runtime-config values.
+    pub(crate) runtime_config_defaults: RuntimeConfigDefaults,
     /// Hook slots for the WASM hook system (one per HookPoint).
     #[cfg(feature = "rns-hooks")]
     pub(crate) hook_slots: [HookSlot; HookPoint::COUNT],
@@ -352,6 +389,18 @@ impl Driver {
         let mut local_destinations = HashMap::new();
         local_destinations.insert(tunnel_synth_dest, rns_core::constants::DESTINATION_PLAIN);
         local_destinations.insert(path_request_dest, rns_core::constants::DESTINATION_PLAIN);
+        let runtime_config_defaults = RuntimeConfigDefaults {
+            tick_interval_ms: DEFAULT_TICK_INTERVAL_MS,
+            known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
+            known_destinations_cleanup_interval_ticks:
+                DEFAULT_KNOWN_DESTINATIONS_CLEANUP_INTERVAL_TICKS,
+            announce_cache_cleanup_interval_ticks:
+                DEFAULT_ANNOUNCE_CACHE_CLEANUP_INTERVAL_TICKS,
+            announce_cache_cleanup_batch_size: DEFAULT_ANNOUNCE_CACHE_CLEANUP_BATCH_SIZE,
+            discovery_cleanup_interval_ticks: DEFAULT_DISCOVERY_CLEANUP_INTERVAL_TICKS,
+            management_announce_interval_secs: DEFAULT_MANAGEMENT_ANNOUNCE_INTERVAL_SECS,
+            direct_connect_policy: crate::event::HolePunchPolicy::default(),
+        };
         Driver {
             engine,
             interfaces: HashMap::new(),
@@ -379,6 +428,7 @@ impl Driver {
                 None,
             ),
             event_tx: tx,
+            tick_interval_ms: Arc::new(AtomicU64::new(DEFAULT_TICK_INTERVAL_MS)),
             discovered_interfaces: crate::discovery::DiscoveredInterfaceStorage::new(
                 std::env::temp_dir().join("rns-discovered-interfaces"),
             ),
@@ -388,10 +438,22 @@ impl Driver {
             discover_interfaces: false,
             interface_announcer: None,
             discovery_cleanup_counter: 0,
+            discovery_cleanup_interval_ticks: runtime_config_defaults
+                .discovery_cleanup_interval_ticks,
             cache_cleanup_counter: 0,
+            announce_cache_cleanup_counter: 0,
+            known_destinations_cleanup_interval_ticks: runtime_config_defaults
+                .known_destinations_cleanup_interval_ticks,
+            announce_cache_cleanup_interval_ticks: runtime_config_defaults
+                .announce_cache_cleanup_interval_ticks,
             cache_cleanup_active_hashes: None,
             cache_cleanup_entries: None,
             cache_cleanup_removed: 0,
+            announce_cache_cleanup_batch_size: runtime_config_defaults
+                .announce_cache_cleanup_batch_size,
+            management_announce_interval_secs: runtime_config_defaults
+                .management_announce_interval_secs,
+            runtime_config_defaults,
             #[cfg(feature = "rns-hooks")]
             hook_slots: create_hook_slots(),
             #[cfg(feature = "rns-hooks")]
@@ -404,6 +466,163 @@ impl Driver {
     #[cfg(feature = "rns-hooks")]
     fn provider_events_enabled(&self) -> bool {
         self.provider_bridge.is_some()
+    }
+
+    pub(crate) fn set_tick_interval_handle(&mut self, tick_interval_ms: Arc<AtomicU64>) {
+        self.tick_interval_ms = tick_interval_ms;
+    }
+
+    fn runtime_config_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
+        let defaults = self.runtime_config_defaults;
+        let make_entry = |key: &str,
+                          value: RuntimeConfigValue,
+                          default: RuntimeConfigValue,
+                          apply_mode: RuntimeConfigApplyMode,
+                          description: &str| RuntimeConfigEntry {
+            key: key.to_string(),
+            source: if value == default {
+                RuntimeConfigSource::Startup
+            } else {
+                RuntimeConfigSource::RuntimeOverride
+            },
+            value,
+            default,
+            apply_mode,
+            description: Some(description.to_string()),
+        };
+
+        match key {
+            "global.tick_interval_ms" => Some(make_entry(
+                key,
+                RuntimeConfigValue::Int(
+                    self.tick_interval_ms.load(Ordering::Relaxed) as i64,
+                ),
+                RuntimeConfigValue::Int(defaults.tick_interval_ms as i64),
+                RuntimeConfigApplyMode::Immediate,
+                "Driver tick interval in milliseconds.",
+            )),
+            "global.known_destinations_ttl_secs" => Some(make_entry(
+                key,
+                RuntimeConfigValue::Float(self.known_destinations_ttl),
+                RuntimeConfigValue::Float(defaults.known_destinations_ttl),
+                RuntimeConfigApplyMode::Immediate,
+                "TTL for known destinations without an active path.",
+            )),
+            "global.known_destinations_cleanup_interval_ticks" => Some(make_entry(
+                key,
+                RuntimeConfigValue::Int(self.known_destinations_cleanup_interval_ticks as i64),
+                RuntimeConfigValue::Int(
+                    defaults.known_destinations_cleanup_interval_ticks as i64,
+                ),
+                RuntimeConfigApplyMode::Immediate,
+                "Tick interval between known-destinations cleanup passes.",
+            )),
+            "global.announce_cache_cleanup_interval_ticks" => Some(make_entry(
+                key,
+                RuntimeConfigValue::Int(self.announce_cache_cleanup_interval_ticks as i64),
+                RuntimeConfigValue::Int(defaults.announce_cache_cleanup_interval_ticks as i64),
+                RuntimeConfigApplyMode::Immediate,
+                "Tick interval between announce-cache cleanup cycles.",
+            )),
+            "global.announce_cache_cleanup_batch_size" => Some(make_entry(
+                key,
+                RuntimeConfigValue::Int(self.announce_cache_cleanup_batch_size as i64),
+                RuntimeConfigValue::Int(defaults.announce_cache_cleanup_batch_size as i64),
+                RuntimeConfigApplyMode::Immediate,
+                "Number of announce-cache entries processed per cleanup tick.",
+            )),
+            "global.discovery_cleanup_interval_ticks" => Some(make_entry(
+                key,
+                RuntimeConfigValue::Int(self.discovery_cleanup_interval_ticks as i64),
+                RuntimeConfigValue::Int(defaults.discovery_cleanup_interval_ticks as i64),
+                RuntimeConfigApplyMode::Immediate,
+                "Tick interval between discovered-interface cleanup passes.",
+            )),
+            "global.management_announce_interval_secs" => Some(make_entry(
+                key,
+                RuntimeConfigValue::Float(self.management_announce_interval_secs),
+                RuntimeConfigValue::Float(defaults.management_announce_interval_secs),
+                RuntimeConfigApplyMode::Immediate,
+                "Interval between management announces in seconds.",
+            )),
+            "global.direct_connect_policy" => Some(make_entry(
+                key,
+                RuntimeConfigValue::String(Self::holepunch_policy_name(
+                    self.holepunch_manager.policy(),
+                )),
+                RuntimeConfigValue::String(Self::holepunch_policy_name(
+                    defaults.direct_connect_policy,
+                )),
+                RuntimeConfigApplyMode::Immediate,
+                "Policy for incoming direct-connect proposals.",
+            )),
+            _ => None,
+        }
+    }
+
+    fn list_runtime_config(&self) -> Vec<RuntimeConfigEntry> {
+        [
+            "global.tick_interval_ms",
+            "global.known_destinations_ttl_secs",
+            "global.known_destinations_cleanup_interval_ticks",
+            "global.announce_cache_cleanup_interval_ticks",
+            "global.announce_cache_cleanup_batch_size",
+            "global.discovery_cleanup_interval_ticks",
+            "global.management_announce_interval_secs",
+            "global.direct_connect_policy",
+        ]
+        .into_iter()
+        .filter_map(|key| self.runtime_config_entry(key))
+        .collect()
+    }
+
+    fn holepunch_policy_name(policy: crate::event::HolePunchPolicy) -> String {
+        match policy {
+            crate::event::HolePunchPolicy::Reject => "reject".to_string(),
+            crate::event::HolePunchPolicy::AcceptAll => "accept_all".to_string(),
+            crate::event::HolePunchPolicy::AskApp => "ask_app".to_string(),
+        }
+    }
+
+    fn parse_holepunch_policy(value: &RuntimeConfigValue) -> Option<crate::event::HolePunchPolicy> {
+        match value {
+            RuntimeConfigValue::String(s) => match s.to_ascii_lowercase().as_str() {
+                "reject" => Some(crate::event::HolePunchPolicy::Reject),
+                "accept_all" | "acceptall" => Some(crate::event::HolePunchPolicy::AcceptAll),
+                "ask_app" | "askapp" => Some(crate::event::HolePunchPolicy::AskApp),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn expect_u64(value: RuntimeConfigValue, key: &str) -> Result<u64, RuntimeConfigError> {
+        match value {
+            RuntimeConfigValue::Int(v) if v >= 0 => Ok(v as u64),
+            RuntimeConfigValue::Int(_) => Err(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::InvalidValue,
+                message: format!("{} must be >= 0", key),
+            }),
+            _ => Err(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::InvalidType,
+                message: format!("{} expects an integer", key),
+            }),
+        }
+    }
+
+    fn expect_f64(value: RuntimeConfigValue, key: &str) -> Result<f64, RuntimeConfigError> {
+        match value {
+            RuntimeConfigValue::Float(v) if v >= 0.0 => Ok(v),
+            RuntimeConfigValue::Int(v) if v >= 0 => Ok(v as f64),
+            RuntimeConfigValue::Float(_) | RuntimeConfigValue::Int(_) => Err(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::InvalidValue,
+                message: format!("{} must be >= 0", key),
+            }),
+            _ => Err(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::InvalidType,
+                message: format!("{} expects a numeric value", key),
+            }),
+        }
     }
 
     #[cfg(feature = "rns-hooks")]
@@ -664,10 +883,12 @@ impl Driver {
 
                     self.tick_discovery_announcer(now);
 
-                    // Periodic discovery cleanup (every ~3600 ticks = ~1 hour)
+                    // Periodic discovery cleanup
                     if self.discover_interfaces {
                         self.discovery_cleanup_counter += 1;
-                        if self.discovery_cleanup_counter >= 3600 {
+                        if self.discovery_cleanup_counter
+                            >= self.discovery_cleanup_interval_ticks
+                        {
                             self.discovery_cleanup_counter = 0;
                             if let Ok(removed) = self.discovered_interfaces.cleanup() {
                                 if removed > 0 {
@@ -680,9 +901,11 @@ impl Driver {
                         }
                     }
 
-                    // Periodic memory/cache cleanup (every ~3600 ticks = ~1 hour)
+                    // Periodic known-destinations cleanup
                     self.cache_cleanup_counter += 1;
-                    if self.cache_cleanup_counter >= 3600 {
+                    if self.cache_cleanup_counter
+                        >= self.known_destinations_cleanup_interval_ticks
+                    {
                         self.cache_cleanup_counter = 0;
 
                         let active_dests = self.engine.active_destination_hashes();
@@ -708,16 +931,23 @@ impl Driver {
                                 kd_removed, rl_removed
                             );
                         }
+                    }
 
-                        // Start incremental announce cache cleanup
+                    // Periodic announce-cache cleanup scheduling
+                    self.announce_cache_cleanup_counter += 1;
+                    if self.announce_cache_cleanup_counter
+                        >= self.announce_cache_cleanup_interval_ticks
+                    {
+                        self.announce_cache_cleanup_counter = 0;
                         if self.announce_cache.is_some() && self.cache_cleanup_active_hashes.is_none() {
-                            self.cache_cleanup_active_hashes = Some(self.engine.active_packet_hashes());
+                            self.cache_cleanup_active_hashes =
+                                Some(self.engine.active_packet_hashes());
                             self.cache_cleanup_entries = None;
                             self.cache_cleanup_removed = 0;
                         }
                     }
 
-                    // Incremental announce cache cleanup (10k files per tick)
+                    // Incremental announce cache cleanup
                     if self.cache_cleanup_active_hashes.is_some() {
                         if let Some(ref cache) = self.announce_cache {
                             if self.cache_cleanup_entries.is_none() {
@@ -738,7 +968,11 @@ impl Driver {
                                 Some(entries) => entries,
                                 None => continue,
                             };
-                            match cache.clean_batch(active_hashes, entries, 10_000) {
+                            match cache.clean_batch(
+                                active_hashes,
+                                entries,
+                                self.announce_cache_cleanup_batch_size,
+                            ) {
                                 Ok((removed, finished)) => {
                                     self.cache_cleanup_removed += removed;
                                     if finished {
@@ -1536,9 +1770,27 @@ impl Driver {
                 );
                 QueryResponse::DiscoveredInterfaces(interfaces)
             }
+            QueryRequest::ListRuntimeConfig => {
+                QueryResponse::RuntimeConfigList(self.list_runtime_config())
+            }
+            QueryRequest::GetRuntimeConfig { key } => {
+                QueryResponse::RuntimeConfigEntry(self.runtime_config_entry(&key))
+            }
             // Mutating queries handled by handle_query_mut
             QueryRequest::SendProbe { .. } => QueryResponse::SendProbe(None),
             QueryRequest::CheckProof { .. } => QueryResponse::CheckProof(None),
+            QueryRequest::SetRuntimeConfig { .. } => QueryResponse::RuntimeConfigSet(Err(
+                RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::Unsupported,
+                    message: "mutating runtime config is handled separately".to_string(),
+                },
+            )),
+            QueryRequest::ResetRuntimeConfig { .. } => QueryResponse::RuntimeConfigReset(Err(
+                RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::Unsupported,
+                    message: "mutating runtime config is handled separately".to_string(),
+                },
+            )),
         }
     }
 
@@ -1698,6 +1950,178 @@ impl Driver {
                     Some((rtt, _received)) => QueryResponse::CheckProof(Some(rtt)),
                     None => QueryResponse::CheckProof(None),
                 }
+            }
+            QueryRequest::SetRuntimeConfig { key, value } => {
+                let result = match key.as_str() {
+                    "global.tick_interval_ms" => {
+                        match Self::expect_u64(value, &key) {
+                            Ok(value) => {
+                                let clamped = value.clamp(100, 10_000);
+                                self.tick_interval_ms.store(clamped, Ordering::Relaxed);
+                                Ok(())
+                            }
+                            Err(err) => Err(err),
+                        }
+                    }
+                    "global.known_destinations_ttl_secs" => {
+                        match Self::expect_f64(value, &key) {
+                            Ok(value) => {
+                                self.known_destinations_ttl = value;
+                                Ok(())
+                            }
+                            Err(err) => Err(err),
+                        }
+                    }
+                    "global.known_destinations_cleanup_interval_ticks" => {
+                        match Self::expect_u64(value, &key) {
+                            Ok(value) if value > 0 => {
+                                self.known_destinations_cleanup_interval_ticks = value as u32;
+                                Ok(())
+                            }
+                            Ok(_) => Err(RuntimeConfigError {
+                                code: RuntimeConfigErrorCode::InvalidValue,
+                                message: format!("{} must be >= 1", key),
+                            }),
+                            Err(err) => Err(err),
+                        }
+                    }
+                    "global.announce_cache_cleanup_interval_ticks" => {
+                        match Self::expect_u64(value, &key) {
+                            Ok(value) if value > 0 => {
+                                self.announce_cache_cleanup_interval_ticks = value as u32;
+                                Ok(())
+                            }
+                            Ok(_) => Err(RuntimeConfigError {
+                                code: RuntimeConfigErrorCode::InvalidValue,
+                                message: format!("{} must be >= 1", key),
+                            }),
+                            Err(err) => Err(err),
+                        }
+                    }
+                    "global.announce_cache_cleanup_batch_size" => {
+                        match Self::expect_u64(value, &key) {
+                            Ok(value) if value > 0 => {
+                                self.announce_cache_cleanup_batch_size = value as usize;
+                                Ok(())
+                            }
+                            Ok(_) => Err(RuntimeConfigError {
+                                code: RuntimeConfigErrorCode::InvalidValue,
+                                message: format!("{} must be >= 1", key),
+                            }),
+                            Err(err) => Err(err),
+                        }
+                    }
+                    "global.discovery_cleanup_interval_ticks" => {
+                        match Self::expect_u64(value, &key) {
+                            Ok(value) if value > 0 => {
+                                self.discovery_cleanup_interval_ticks = value as u32;
+                                Ok(())
+                            }
+                            Ok(_) => Err(RuntimeConfigError {
+                                code: RuntimeConfigErrorCode::InvalidValue,
+                                message: format!("{} must be >= 1", key),
+                            }),
+                            Err(err) => Err(err),
+                        }
+                    }
+                    "global.management_announce_interval_secs" => {
+                        match Self::expect_f64(value, &key) {
+                            Ok(value) => {
+                                self.management_announce_interval_secs = value;
+                                Ok(())
+                            }
+                            Err(err) => Err(err),
+                        }
+                    }
+                    "global.direct_connect_policy" => {
+                        let policy = match Self::parse_holepunch_policy(&value) {
+                            Some(policy) => policy,
+                            None => {
+                                return QueryResponse::RuntimeConfigSet(Err(RuntimeConfigError {
+                                    code: RuntimeConfigErrorCode::InvalidValue,
+                                    message: format!(
+                                        "{} must be one of: reject, accept_all, ask_app",
+                                        key
+                                    ),
+                                }))
+                            }
+                        };
+                        self.holepunch_manager.set_policy(policy);
+                        Ok(())
+                    }
+                    _ => {
+                        return QueryResponse::RuntimeConfigSet(Err(RuntimeConfigError {
+                            code: RuntimeConfigErrorCode::UnknownKey,
+                            message: format!("unknown runtime-config key '{}'", key),
+                        }))
+                    }
+                };
+
+                QueryResponse::RuntimeConfigSet(match result {
+                    Ok(()) => self.runtime_config_entry(&key).ok_or(RuntimeConfigError {
+                        code: RuntimeConfigErrorCode::ApplyFailed,
+                        message: format!("failed to read back runtime-config key '{}'", key),
+                    }),
+                    Err(err) => Err(err),
+                })
+            }
+            QueryRequest::ResetRuntimeConfig { key } => {
+                let defaults = self.runtime_config_defaults;
+                let result = match key.as_str() {
+                    "global.tick_interval_ms" => {
+                        self.tick_interval_ms
+                            .store(defaults.tick_interval_ms, Ordering::Relaxed);
+                        Ok(())
+                    }
+                    "global.known_destinations_ttl_secs" => {
+                        self.known_destinations_ttl = defaults.known_destinations_ttl;
+                        Ok(())
+                    }
+                    "global.known_destinations_cleanup_interval_ticks" => {
+                        self.known_destinations_cleanup_interval_ticks =
+                            defaults.known_destinations_cleanup_interval_ticks;
+                        Ok(())
+                    }
+                    "global.announce_cache_cleanup_interval_ticks" => {
+                        self.announce_cache_cleanup_interval_ticks =
+                            defaults.announce_cache_cleanup_interval_ticks;
+                        Ok(())
+                    }
+                    "global.announce_cache_cleanup_batch_size" => {
+                        self.announce_cache_cleanup_batch_size =
+                            defaults.announce_cache_cleanup_batch_size;
+                        Ok(())
+                    }
+                    "global.discovery_cleanup_interval_ticks" => {
+                        self.discovery_cleanup_interval_ticks =
+                            defaults.discovery_cleanup_interval_ticks;
+                        Ok(())
+                    }
+                    "global.management_announce_interval_secs" => {
+                        self.management_announce_interval_secs =
+                            defaults.management_announce_interval_secs;
+                        Ok(())
+                    }
+                    "global.direct_connect_policy" => {
+                        self.holepunch_manager
+                            .set_policy(defaults.direct_connect_policy);
+                        Ok(())
+                    }
+                    _ => {
+                        return QueryResponse::RuntimeConfigReset(Err(RuntimeConfigError {
+                            code: RuntimeConfigErrorCode::UnknownKey,
+                            message: format!("unknown runtime-config key '{}'", key),
+                        }))
+                    }
+                };
+
+                QueryResponse::RuntimeConfigReset(match result {
+                    Ok(()) => self.runtime_config_entry(&key).ok_or(RuntimeConfigError {
+                        code: RuntimeConfigErrorCode::ApplyFailed,
+                        message: format!("failed to read back runtime-config key '{}'", key),
+                    }),
+                    Err(err) => Err(err),
+                })
             }
             other => self.handle_query(other),
         }
@@ -3043,9 +3467,6 @@ impl Driver {
         self.event_tx.clone()
     }
 
-    /// Management announce interval in seconds.
-    const MANAGEMENT_ANNOUNCE_INTERVAL: f64 = 300.0;
-
     /// Delay before first management announce after startup.
     const MANAGEMENT_ANNOUNCE_DELAY: f64 = 5.0;
 
@@ -3154,7 +3575,7 @@ impl Driver {
         }
 
         // Periodic re-announce
-        if now - self.last_management_announce >= Self::MANAGEMENT_ANNOUNCE_INTERVAL {
+        if now - self.last_management_announce >= self.management_announce_interval_secs {
             self.emit_management_announces(now);
         }
     }
@@ -3426,6 +3847,20 @@ mod tests {
                 remote_identified,
             )
         }
+    }
+
+    fn new_test_driver() -> Driver {
+        let transport_config = TransportConfig {
+            transport_enabled: false,
+            identity_hash: None,
+            prefer_shorter_path: false,
+            max_paths_per_destination: 1,
+        };
+        let (callbacks, _, _, _, _, _) = MockCallbacks::new();
+        let (tx, rx) = event::channel();
+        let mut driver = Driver::new(transport_config, rx, tx, Box::new(callbacks));
+        driver.set_tick_interval_handle(Arc::new(AtomicU64::new(1000)));
+        driver
     }
 
     impl Callbacks for MockCallbacks {
@@ -4937,6 +5372,57 @@ mod tests {
             !sent_packets.is_empty(),
             "Management announce should be sent after startup delay"
         );
+    }
+
+    #[test]
+    fn runtime_config_list_contains_global_keys() {
+        let driver = new_test_driver();
+        let response = driver.handle_query(QueryRequest::ListRuntimeConfig);
+        let QueryResponse::RuntimeConfigList(entries) = response else {
+            panic!("expected runtime config list");
+        };
+        let keys: Vec<String> = entries.into_iter().map(|entry| entry.key).collect();
+        assert!(keys.contains(&"global.tick_interval_ms".to_string()));
+        assert!(keys.contains(&"global.known_destinations_ttl_secs".to_string()));
+        assert!(keys.contains(&"global.direct_connect_policy".to_string()));
+    }
+
+    #[test]
+    fn runtime_config_set_and_reset_tick_interval() {
+        let mut driver = new_test_driver();
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "global.tick_interval_ms".into(),
+            value: RuntimeConfigValue::Int(250),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected runtime config set success");
+        };
+        assert_eq!(entry.key, "global.tick_interval_ms");
+        assert_eq!(entry.value, RuntimeConfigValue::Int(250));
+        assert_eq!(driver.tick_interval_ms.load(Ordering::Relaxed), 250);
+
+        let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
+            key: "global.tick_interval_ms".into(),
+        });
+        let QueryResponse::RuntimeConfigReset(Ok(entry)) = response else {
+            panic!("expected runtime config reset success");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Int(1000));
+        assert_eq!(driver.tick_interval_ms.load(Ordering::Relaxed), 1000);
+    }
+
+    #[test]
+    fn runtime_config_rejects_invalid_policy() {
+        let mut driver = new_test_driver();
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "global.direct_connect_policy".into(),
+            value: RuntimeConfigValue::String("bogus".into()),
+        });
+        let QueryResponse::RuntimeConfigSet(Err(err)) = response else {
+            panic!("expected runtime config set failure");
+        };
+        assert_eq!(err.code, RuntimeConfigErrorCode::InvalidValue);
     }
 
     #[test]

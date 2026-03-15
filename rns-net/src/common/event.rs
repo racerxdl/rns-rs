@@ -22,6 +22,60 @@ impl Default for HolePunchPolicy {
     }
 }
 
+/// Scalar runtime-config value.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RuntimeConfigValue {
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    String(String),
+}
+
+/// Source of a runtime-config value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeConfigSource {
+    Startup,
+    RuntimeOverride,
+}
+
+/// How a runtime-config change applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeConfigApplyMode {
+    Immediate,
+    NewConnectionsOnly,
+    NextReconnect,
+    RestartRequired,
+}
+
+/// A runtime-config entry exposed by the daemon.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RuntimeConfigEntry {
+    pub key: String,
+    pub value: RuntimeConfigValue,
+    pub default: RuntimeConfigValue,
+    pub source: RuntimeConfigSource,
+    pub apply_mode: RuntimeConfigApplyMode,
+    pub description: Option<String>,
+}
+
+/// Runtime-config mutation error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeConfigError {
+    pub code: RuntimeConfigErrorCode,
+    pub message: String,
+}
+
+/// Category of runtime-config mutation error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeConfigErrorCode {
+    UnknownKey,
+    InvalidType,
+    InvalidValue,
+    Unsupported,
+    NotFound,
+    ApplyFailed,
+}
+
 /// Events sent to the driver thread.
 ///
 /// `W` is the writer type (e.g. `Box<dyn Writer>` for sync,
@@ -257,6 +311,14 @@ pub enum QueryRequest {
     },
     /// Check if a proof was received for a probe packet.
     CheckProof { packet_hash: [u8; 32] },
+    /// List runtime-config entries currently supported by the daemon.
+    ListRuntimeConfig,
+    /// Get a single runtime-config entry by key.
+    GetRuntimeConfig { key: String },
+    /// Set a runtime-config value by key.
+    SetRuntimeConfig { key: String, value: RuntimeConfigValue },
+    /// Reset a runtime-config value to its startup/default value.
+    ResetRuntimeConfig { key: String },
 }
 
 /// Responses to queries.
@@ -289,6 +351,14 @@ pub enum QueryResponse {
     SendProbe(Option<([u8; 32], u8)>),
     /// Proof check: RTT if received, None if still pending.
     CheckProof(Option<f64>),
+    /// Runtime-config entries currently supported by the daemon.
+    RuntimeConfigList(Vec<RuntimeConfigEntry>),
+    /// A specific runtime-config entry, or None if the key is unknown.
+    RuntimeConfigEntry(Option<RuntimeConfigEntry>),
+    /// Result of setting a runtime-config value.
+    RuntimeConfigSet(Result<RuntimeConfigEntry, RuntimeConfigError>),
+    /// Result of resetting a runtime-config value.
+    RuntimeConfigReset(Result<RuntimeConfigEntry, RuntimeConfigError>),
 }
 
 /// Interface statistics response.

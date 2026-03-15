@@ -22,7 +22,9 @@ use rns_crypto::sha256::sha256;
 
 use crate::event::{
     BlackholeInfo, Event, EventSender, HookInfo, InterfaceStatsResponse, PathTableEntry,
-    QueryRequest, QueryResponse, RateTableEntry, SingleInterfaceStat,
+    QueryRequest, QueryResponse, RateTableEntry, RuntimeConfigApplyMode, RuntimeConfigEntry,
+    RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue,
+    SingleInterfaceStat,
 };
 use crate::md5::hmac_md5;
 use crate::pickle::{self, PickleValue};
@@ -369,7 +371,72 @@ fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Resu
                         })?;
                     Ok(hooks_to_pickle(&hooks))
                 }
+                "runtime_config" => {
+                    let resp = send_query(event_tx, QueryRequest::ListRuntimeConfig)?;
+                    if let QueryResponse::RuntimeConfigList(entries) = resp {
+                        Ok(runtime_config_list_to_pickle(&entries))
+                    } else {
+                        Ok(PickleValue::None)
+                    }
+                }
+                "runtime_config_entry" => {
+                    let key = request
+                        .get("key")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    let resp = send_query(event_tx, QueryRequest::GetRuntimeConfig { key })?;
+                    if let QueryResponse::RuntimeConfigEntry(entry) = resp {
+                        Ok(entry
+                            .as_ref()
+                            .map(runtime_config_entry_to_pickle)
+                            .unwrap_or(PickleValue::None))
+                    } else {
+                        Ok(PickleValue::None)
+                    }
+                }
                 _ => Ok(PickleValue::None),
+            };
+        }
+    }
+
+    if let Some(set_val) = request.get("set").and_then(|v| v.as_str()) {
+        if set_val == "runtime_config" {
+            let key = request
+                .get("key")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let Some(value) = request
+                .get("value")
+                .and_then(runtime_config_value_from_pickle)
+            else {
+                return Ok(runtime_config_error_to_pickle(&RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::InvalidType,
+                    message: "runtime-config set requires a scalar value".into(),
+                }));
+            };
+            let resp = send_query(event_tx, QueryRequest::SetRuntimeConfig { key, value })?;
+            return if let QueryResponse::RuntimeConfigSet(result) = resp {
+                Ok(runtime_config_result_to_pickle(result))
+            } else {
+                Ok(PickleValue::None)
+            };
+        }
+    }
+
+    if let Some(reset_val) = request.get("reset").and_then(|v| v.as_str()) {
+        if reset_val == "runtime_config" {
+            let key = request
+                .get("key")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let resp = send_query(event_tx, QueryRequest::ResetRuntimeConfig { key })?;
+            return if let QueryResponse::RuntimeConfigReset(result) = resp {
+                Ok(runtime_config_result_to_pickle(result))
+            } else {
+                Ok(PickleValue::None)
             };
         }
     }
@@ -1082,6 +1149,98 @@ fn hooks_to_pickle(hooks: &[HookInfo]) -> PickleValue {
             })
             .collect(),
     )
+}
+
+fn runtime_config_value_to_pickle(value: &RuntimeConfigValue) -> PickleValue {
+    match value {
+        RuntimeConfigValue::Int(v) => PickleValue::Int(*v),
+        RuntimeConfigValue::Float(v) => PickleValue::Float(*v),
+        RuntimeConfigValue::Bool(v) => PickleValue::Bool(*v),
+        RuntimeConfigValue::String(v) => PickleValue::String(v.clone()),
+    }
+}
+
+fn runtime_config_value_from_pickle(value: &PickleValue) -> Option<RuntimeConfigValue> {
+    match value {
+        PickleValue::Int(v) => Some(RuntimeConfigValue::Int(*v)),
+        PickleValue::Float(v) => Some(RuntimeConfigValue::Float(*v)),
+        PickleValue::Bool(v) => Some(RuntimeConfigValue::Bool(*v)),
+        PickleValue::String(v) => Some(RuntimeConfigValue::String(v.clone())),
+        _ => None,
+    }
+}
+
+fn runtime_config_entry_to_pickle(entry: &RuntimeConfigEntry) -> PickleValue {
+    PickleValue::Dict(vec![
+        (
+            PickleValue::String("key".into()),
+            PickleValue::String(entry.key.clone()),
+        ),
+        (
+            PickleValue::String("value".into()),
+            runtime_config_value_to_pickle(&entry.value),
+        ),
+        (
+            PickleValue::String("default".into()),
+            runtime_config_value_to_pickle(&entry.default),
+        ),
+        (
+            PickleValue::String("source".into()),
+            PickleValue::String(match entry.source {
+                RuntimeConfigSource::Startup => "startup".into(),
+                RuntimeConfigSource::RuntimeOverride => "runtime_override".into(),
+            }),
+        ),
+        (
+            PickleValue::String("apply_mode".into()),
+            PickleValue::String(match entry.apply_mode {
+                RuntimeConfigApplyMode::Immediate => "immediate".into(),
+                RuntimeConfigApplyMode::NewConnectionsOnly => "new_connections_only".into(),
+                RuntimeConfigApplyMode::NextReconnect => "next_reconnect".into(),
+                RuntimeConfigApplyMode::RestartRequired => "restart_required".into(),
+            }),
+        ),
+        (
+            PickleValue::String("description".into()),
+            entry.description
+                .as_ref()
+                .map(|v| PickleValue::String(v.clone()))
+                .unwrap_or(PickleValue::None),
+        ),
+    ])
+}
+
+fn runtime_config_list_to_pickle(entries: &[RuntimeConfigEntry]) -> PickleValue {
+    PickleValue::List(entries.iter().map(runtime_config_entry_to_pickle).collect())
+}
+
+fn runtime_config_error_to_pickle(error: &RuntimeConfigError) -> PickleValue {
+    PickleValue::Dict(vec![
+        (
+            PickleValue::String("error".into()),
+            PickleValue::String(match error.code {
+                RuntimeConfigErrorCode::UnknownKey => "unknown_key".into(),
+                RuntimeConfigErrorCode::InvalidType => "invalid_type".into(),
+                RuntimeConfigErrorCode::InvalidValue => "invalid_value".into(),
+                RuntimeConfigErrorCode::Unsupported => "unsupported".into(),
+                RuntimeConfigErrorCode::NotFound => "not_found".into(),
+                RuntimeConfigErrorCode::ApplyFailed => "apply_failed".into(),
+            }),
+        ),
+        (
+            PickleValue::String("message".into()),
+            PickleValue::String(error.message.clone()),
+        ),
+    ])
+}
+
+fn runtime_config_result_to_pickle(
+    result: Result<RuntimeConfigEntry, RuntimeConfigError>,
+) -> PickleValue {
+    match result {
+        Ok(entry) => runtime_config_entry_to_pickle(&entry),
+        Err(error) => runtime_config_error_to_pickle(&error),
+    }
 }
 
 // --- RPC Client ---
@@ -1818,6 +1977,82 @@ mod tests {
 
         let pr = decoded.get("probe_responder").unwrap().as_bytes().unwrap();
         assert_eq!(pr, &probe_hash);
+    }
+
+    #[test]
+    fn runtime_config_get_and_set_rpc() {
+        let (event_tx, event_rx) = crate::event::channel();
+
+        let driver = thread::spawn(move || {
+            if let Ok(Event::Query(QueryRequest::GetRuntimeConfig { key }, resp_tx)) = event_rx.recv()
+            {
+                assert_eq!(key, "global.tick_interval_ms");
+                let _ = resp_tx.send(QueryResponse::RuntimeConfigEntry(Some(
+                    RuntimeConfigEntry {
+                        key,
+                        value: RuntimeConfigValue::Int(1000),
+                        default: RuntimeConfigValue::Int(1000),
+                        source: RuntimeConfigSource::Startup,
+                        apply_mode: RuntimeConfigApplyMode::Immediate,
+                        description: Some("tick".into()),
+                    },
+                )));
+            } else {
+                panic!("expected GetRuntimeConfig query");
+            }
+
+            if let Ok(Event::Query(QueryRequest::SetRuntimeConfig { key, value }, resp_tx)) =
+                event_rx.recv()
+            {
+                assert_eq!(key, "global.tick_interval_ms");
+                assert_eq!(value, RuntimeConfigValue::Int(250));
+                let _ = resp_tx.send(QueryResponse::RuntimeConfigSet(Ok(RuntimeConfigEntry {
+                    key,
+                    value: RuntimeConfigValue::Int(250),
+                    default: RuntimeConfigValue::Int(1000),
+                    source: RuntimeConfigSource::RuntimeOverride,
+                    apply_mode: RuntimeConfigApplyMode::Immediate,
+                    description: Some("tick".into()),
+                })));
+            } else {
+                panic!("expected SetRuntimeConfig query");
+            }
+        });
+
+        let get_request = PickleValue::Dict(vec![
+            (
+                PickleValue::String("get".into()),
+                PickleValue::String("runtime_config_entry".into()),
+            ),
+            (
+                PickleValue::String("key".into()),
+                PickleValue::String("global.tick_interval_ms".into()),
+            ),
+        ]);
+        let get_response = handle_rpc_request(&get_request, &event_tx).unwrap();
+        assert_eq!(
+            get_response.get("key").and_then(|v| v.as_str()),
+            Some("global.tick_interval_ms")
+        );
+
+        let set_request = PickleValue::Dict(vec![
+            (
+                PickleValue::String("set".into()),
+                PickleValue::String("runtime_config".into()),
+            ),
+            (
+                PickleValue::String("key".into()),
+                PickleValue::String("global.tick_interval_ms".into()),
+            ),
+            (PickleValue::String("value".into()), PickleValue::Int(250)),
+        ]);
+        let set_response = handle_rpc_request(&set_request, &event_tx).unwrap();
+        assert_eq!(
+            set_response.get("value").and_then(|v| v.as_int()),
+            Some(250)
+        );
+
+        driver.join().unwrap();
     }
 
     // Helper: create a connected TCP pair

@@ -65,7 +65,9 @@ impl RnsNode {
         };
 
         let (tx, rx) = event::channel();
+        let tick_interval_ms = Arc::new(AtomicU64::new(1000));
         let mut driver = Driver::new(transport_config, rx, tx.clone(), callbacks);
+        driver.set_tick_interval_handle(Arc::clone(&tick_interval_ms));
 
         // Connect to the daemon via LocalClientInterface
         let local_config = LocalClientConfig {
@@ -118,7 +120,6 @@ impl RnsNode {
         );
 
         // Spawn timer thread with configurable tick interval
-        let tick_interval_ms = Arc::new(AtomicU64::new(1000));
         let timer_tx = tx.clone();
         let timer_interval = Arc::clone(&tick_interval_ms);
         thread::Builder::new()
