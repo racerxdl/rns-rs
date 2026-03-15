@@ -84,6 +84,11 @@ impl AnnounceCache {
         Ok(Some((raw.to_vec(), iface_name)))
     }
 
+    /// Open a directory iterator for incremental cleanup.
+    pub fn entries(&self) -> io::Result<fs::ReadDir> {
+        fs::read_dir(&self.base_path)
+    }
+
     /// Remove cached announces whose packet hashes are not in the active set.
     ///
     /// `active_hashes`: set of packet hashes that should be kept.
@@ -91,36 +96,51 @@ impl AnnounceCache {
     /// Returns `(removed_count, finished)` where `finished` is true if all files
     /// were processed (no more work to do).
     pub fn clean(&self, active_hashes: &[[u8; 32]], batch_limit: usize) -> io::Result<(usize, bool)> {
-        use std::collections::HashSet;
-
-        let active_set: HashSet<[u8; 32]> = active_hashes.iter().copied().collect();
-
-        let entries = match fs::read_dir(&self.base_path) {
-            Ok(e) => e,
+        let mut entries = match fs::read_dir(&self.base_path) {
+            Ok(entries) => entries,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok((0, true)),
             Err(e) => return Err(e),
         };
+        self.clean_batch(active_hashes, &mut entries, batch_limit)
+    }
 
+    /// Incrementally remove stale cached announces from an existing directory iterator.
+    ///
+    /// `entries` keeps iteration state across calls, allowing batched cleanup to
+    /// make forward progress through large directories.
+    pub fn clean_batch(
+        &self,
+        active_hashes: &[[u8; 32]],
+        entries: &mut fs::ReadDir,
+        batch_limit: usize,
+    ) -> io::Result<(usize, bool)> {
+        use std::collections::HashSet;
+
+        let active_set: HashSet<[u8; 32]> = active_hashes.iter().copied().collect();
         let mut removed = 0;
         let mut processed = 0;
-        for entry in entries {
+
+        loop {
+            if batch_limit > 0 && processed >= batch_limit {
+                return Ok((removed, false));
+            }
+
+            let Some(entry) = entries.next() else {
+                return Ok((removed, true));
+            };
+
             let entry = entry?;
             let path = entry.path();
             if !path.is_file() {
                 continue;
             }
-
             processed += 1;
-            if batch_limit > 0 && processed > batch_limit {
-                return Ok((removed, false));
-            }
 
             let filename = match path.file_name().and_then(|n| n.to_str()) {
                 Some(n) => n,
                 None => continue,
             };
 
-            // Parse hex filename back to hash
             match hex_decode(filename) {
                 Some(hash) => {
                     if !active_set.contains(&hash) {
@@ -129,14 +149,11 @@ impl AnnounceCache {
                     }
                 }
                 None => {
-                    // Invalid filename — remove
                     let _ = fs::remove_file(&path);
                     removed += 1;
                 }
             }
         }
-
-        Ok((removed, true))
     }
 
     /// Get the base path for testing.
@@ -300,6 +317,41 @@ mod tests {
         let (removed, finished) = cache.clean(&[], 0).unwrap();
         assert_eq!(removed, 0);
         assert!(finished);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_clean_batch_progresses_across_calls() {
+        let dir = temp_dir();
+        let cache = AnnounceCache::new(dir.clone());
+
+        let keep = [0x10; 32];
+        let stale1 = [0x20; 32];
+        let stale2 = [0x30; 32];
+
+        cache.store(&keep, &[0x01], None).unwrap();
+        cache.store(&stale1, &[0x02], None).unwrap();
+        cache.store(&stale2, &[0x03], None).unwrap();
+
+        let mut entries = cache.entries().unwrap();
+
+        let mut removed_total = 0;
+        let mut finished = false;
+        for _ in 0..4 {
+            let (removed, done) = cache.clean_batch(&[keep], &mut entries, 1).unwrap();
+            removed_total += removed;
+            if done {
+                finished = true;
+                break;
+            }
+        }
+
+        assert!(finished);
+        assert_eq!(removed_total, 2);
+        assert!(cache.get(&keep).unwrap().is_some());
+        assert!(cache.get(&stale1).unwrap().is_none());
+        assert!(cache.get(&stale2).unwrap().is_none());
 
         let _ = fs::remove_dir_all(&dir);
     }

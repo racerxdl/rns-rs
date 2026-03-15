@@ -309,6 +309,8 @@ pub struct Driver {
     pub(crate) cache_cleanup_counter: u32,
     /// When set, announce cache cleanup is in progress (contains active packet hashes).
     pub(crate) cache_cleanup_active_hashes: Option<Vec<[u8; 32]>>,
+    /// Directory iterator for incremental announce cache cleanup.
+    pub(crate) cache_cleanup_entries: Option<std::fs::ReadDir>,
     /// Running total of files removed during current cache cleanup cycle.
     pub(crate) cache_cleanup_removed: usize,
     /// Hook slots for the WASM hook system (one per HookPoint).
@@ -383,6 +385,7 @@ impl Driver {
             discovery_cleanup_counter: 0,
             cache_cleanup_counter: 0,
             cache_cleanup_active_hashes: None,
+            cache_cleanup_entries: None,
             cache_cleanup_removed: 0,
             #[cfg(feature = "rns-hooks")]
             hook_slots: create_hook_slots(),
@@ -698,6 +701,7 @@ impl Driver {
                         // Start incremental announce cache cleanup
                         if self.announce_cache.is_some() && self.cache_cleanup_active_hashes.is_none() {
                             self.cache_cleanup_active_hashes = Some(self.engine.active_packet_hashes());
+                            self.cache_cleanup_entries = None;
                             self.cache_cleanup_removed = 0;
                         }
                     }
@@ -705,8 +709,25 @@ impl Driver {
                     // Incremental announce cache cleanup (10k files per tick)
                     if self.cache_cleanup_active_hashes.is_some() {
                         if let Some(ref cache) = self.announce_cache {
+                            if self.cache_cleanup_entries.is_none() {
+                                match cache.entries() {
+                                    Ok(entries) => self.cache_cleanup_entries = Some(entries),
+                                    Err(e) => {
+                                        log::warn!("Announce cache cleanup failed to open directory: {}", e);
+                                        self.cache_cleanup_active_hashes = None;
+                                        self.cache_cleanup_entries = None;
+                                    }
+                                }
+                            }
+                        }
+
+                        if let Some(ref cache) = self.announce_cache {
                             let active_hashes = self.cache_cleanup_active_hashes.as_ref().unwrap();
-                            match cache.clean(active_hashes, 10_000) {
+                            let entries = match self.cache_cleanup_entries.as_mut() {
+                                Some(entries) => entries,
+                                None => continue,
+                            };
+                            match cache.clean_batch(active_hashes, entries, 10_000) {
                                 Ok((removed, finished)) => {
                                     self.cache_cleanup_removed += removed;
                                     if finished {
@@ -717,15 +738,18 @@ impl Driver {
                                             );
                                         }
                                         self.cache_cleanup_active_hashes = None;
+                                        self.cache_cleanup_entries = None;
                                     }
                                 }
                                 Err(e) => {
                                     log::warn!("Announce cache cleanup failed: {}", e);
                                     self.cache_cleanup_active_hashes = None;
+                                    self.cache_cleanup_entries = None;
                                 }
                             }
                         } else {
                             self.cache_cleanup_active_hashes = None;
+                            self.cache_cleanup_entries = None;
                         }
                     }
                 }

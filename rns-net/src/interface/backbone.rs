@@ -9,9 +9,9 @@
 //!
 //! Matches Python `BackboneInterface.py`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read, Write};
-use std::net::{TcpListener, TcpStream, ToSocketAddrs};
+use std::net::{IpAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -38,6 +38,18 @@ pub struct BackboneConfig {
     pub interface_id: InterfaceId,
     pub max_connections: Option<usize>,
     pub idle_timeout: Option<Duration>,
+    pub abuse: BackboneAbuseConfig,
+}
+
+/// Configurable behavior-based abuse detection for inbound peers.
+#[derive(Debug, Clone, Default)]
+pub struct BackboneAbuseConfig {
+    pub blacklist_duration: Option<Duration>,
+    pub idle_timeout_threshold: Option<usize>,
+    pub idle_timeout_window: Option<Duration>,
+    pub flap_threshold: Option<usize>,
+    pub flap_window: Option<Duration>,
+    pub flap_max_connection_age: Option<Duration>,
 }
 
 impl Default for BackboneConfig {
@@ -49,6 +61,7 @@ impl Default for BackboneConfig {
             interface_id: InterfaceId(0),
             max_connections: None,
             idle_timeout: None,
+            abuse: BackboneAbuseConfig::default(),
         }
     }
 }
@@ -107,10 +120,19 @@ pub fn start(config: BackboneConfig, tx: EventSender, next_id: Arc<AtomicU64>) -
     let name = config.name.clone();
     let max_connections = config.max_connections;
     let idle_timeout = config.idle_timeout;
+    let abuse = config.abuse.clone();
     thread::Builder::new()
         .name(format!("backbone-epoll-{}", config.interface_id.0))
         .spawn(move || {
-            if let Err(e) = epoll_loop(listener, name, tx, next_id, max_connections, idle_timeout) {
+            if let Err(e) = epoll_loop(
+                listener,
+                name,
+                tx,
+                next_id,
+                max_connections,
+                idle_timeout,
+                abuse,
+            ) {
                 log::error!("backbone epoll loop error: {}", e);
             }
         })?;
@@ -121,9 +143,66 @@ pub fn start(config: BackboneConfig, tx: EventSender, next_id: Arc<AtomicU64>) -
 /// Per-client tracking state.
 struct ClientState {
     id: InterfaceId,
+    peer_ip: IpAddr,
     decoder: hdlc::Decoder,
     connected_at: Instant,
     has_received_data: bool,
+}
+
+#[derive(Debug, Clone)]
+struct PeerEventWindow {
+    events: VecDeque<Instant>,
+}
+
+impl PeerEventWindow {
+    fn new() -> Self {
+        Self {
+            events: VecDeque::new(),
+        }
+    }
+
+    fn record(&mut self, now: Instant, window: Duration) -> usize {
+        self.events.push_back(now);
+        self.prune(now, window);
+        self.events.len()
+    }
+
+    fn prune(&mut self, now: Instant, window: Duration) {
+        while let Some(oldest) = self.events.front().copied() {
+            if now.duration_since(oldest) > window {
+                self.events.pop_front();
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.events.is_empty()
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PeerBehaviorState {
+    idle_timeouts: PeerEventWindow,
+    flaps: PeerEventWindow,
+    blacklisted_until: Option<Instant>,
+}
+
+impl PeerBehaviorState {
+    fn new() -> Self {
+        Self {
+            idle_timeouts: PeerEventWindow::new(),
+            flaps: PeerEventWindow::new(),
+            blacklisted_until: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum DisconnectReason {
+    RemoteClosed,
+    IdleTimeout,
 }
 
 /// Main epoll event loop.
@@ -134,6 +213,7 @@ fn epoll_loop(
     next_id: Arc<AtomicU64>,
     max_connections: Option<usize>,
     idle_timeout: Option<Duration>,
+    abuse: BackboneAbuseConfig,
 ) -> io::Result<()> {
     let epfd = unsafe { libc::epoll_create1(0) };
     if epfd < 0 {
@@ -152,9 +232,11 @@ fn epoll_loop(
     }
 
     let mut clients: HashMap<RawFd, ClientState> = HashMap::new();
+    let mut peers: HashMap<IpAddr, PeerBehaviorState> = HashMap::new();
     let mut events = vec![libc::epoll_event { events: 0, u64: 0 }; 64];
 
     loop {
+        cleanup_peer_state(&mut peers, &abuse);
         let nfds =
             unsafe { libc::epoll_wait(epfd, events.as_mut_ptr(), events.len() as i32, 1000) };
 
@@ -183,6 +265,18 @@ fn epoll_loop(
                 loop {
                     match listener.accept() {
                         Ok((stream, peer_addr)) => {
+                            let peer_ip = peer_addr.ip();
+
+                            if is_ip_blacklisted(&mut peers, peer_ip) {
+                                log::warn!(
+                                    "[{}] rejecting blacklisted peer {}",
+                                    name,
+                                    peer_addr
+                                );
+                                drop(stream);
+                                continue;
+                            }
+
                             if let Some(max) = max_connections {
                                 if clients.len() >= max {
                                     log::warn!(
@@ -258,6 +352,7 @@ fn epoll_loop(
                                 client_fd,
                                 ClientState {
                                     id: client_id,
+                                    peer_ip,
                                     decoder: hdlc::Decoder::new(),
                                     connected_at: Instant::now(),
                                     has_received_data: false,
@@ -342,13 +437,17 @@ fn epoll_loop(
                 }
 
                 if should_remove {
-                    log::info!("[{}] backbone client {} disconnected", name, client_id.0);
-                    unsafe {
-                        libc::epoll_ctl(epfd, libc::EPOLL_CTL_DEL, fd, std::ptr::null_mut());
-                        libc::close(fd);
-                    }
-                    clients.remove(&fd);
-                    let _ = tx.send(Event::InterfaceDown(client_id));
+                    disconnect_client(
+                        epfd,
+                        &mut clients,
+                        &mut peers,
+                        &abuse,
+                        &name,
+                        &tx,
+                        fd,
+                        client_id,
+                        DisconnectReason::RemoteClosed,
+                    );
                 }
             }
         }
@@ -368,20 +467,155 @@ fn epoll_loop(
                 .collect();
 
             for (fd, client_id) in timed_out {
-                log::info!(
-                    "[{}] backbone client {} disconnected due to idle timeout",
-                    name,
-                    client_id.0
+                disconnect_client(
+                    epfd,
+                    &mut clients,
+                    &mut peers,
+                    &abuse,
+                    &name,
+                    &tx,
+                    fd,
+                    client_id,
+                    DisconnectReason::IdleTimeout,
                 );
-                unsafe {
-                    libc::epoll_ctl(epfd, libc::EPOLL_CTL_DEL, fd, std::ptr::null_mut());
-                    libc::close(fd);
-                }
-                clients.remove(&fd);
-                let _ = tx.send(Event::InterfaceDown(client_id));
             }
         }
     }
+}
+
+fn cleanup_peer_state(peers: &mut HashMap<IpAddr, PeerBehaviorState>, abuse: &BackboneAbuseConfig) {
+    let now = Instant::now();
+    let idle_window = abuse.idle_timeout_window;
+    let flap_window = abuse.flap_window;
+    peers.retain(|_, state| {
+        if let Some(window) = idle_window {
+            state.idle_timeouts.prune(now, window);
+        }
+        if let Some(window) = flap_window {
+            state.flaps.prune(now, window);
+        }
+        if matches!(state.blacklisted_until, Some(until) if now >= until) {
+            state.blacklisted_until = None;
+        }
+        state.blacklisted_until.is_some()
+            || !state.idle_timeouts.is_empty()
+            || !state.flaps.is_empty()
+    });
+}
+
+fn is_ip_blacklisted(peers: &mut HashMap<IpAddr, PeerBehaviorState>, peer_ip: IpAddr) -> bool {
+    let now = Instant::now();
+    if let Some(state) = peers.get_mut(&peer_ip) {
+        if let Some(until) = state.blacklisted_until {
+            if now < until {
+                return true;
+            }
+            state.blacklisted_until = None;
+        }
+    }
+    false
+}
+
+fn disconnect_client(
+    epfd: RawFd,
+    clients: &mut HashMap<RawFd, ClientState>,
+    peers: &mut HashMap<IpAddr, PeerBehaviorState>,
+    abuse: &BackboneAbuseConfig,
+    name: &str,
+    tx: &EventSender,
+    fd: RawFd,
+    client_id: InterfaceId,
+    reason: DisconnectReason,
+) {
+    let Some(client) = clients.remove(&fd) else {
+        return;
+    };
+
+    match reason {
+        DisconnectReason::RemoteClosed => {
+            log::info!("[{}] backbone client {} disconnected", name, client_id.0);
+        }
+        DisconnectReason::IdleTimeout => {
+            log::info!(
+                "[{}] backbone client {} disconnected due to idle timeout",
+                name,
+                client_id.0
+            );
+        }
+    }
+
+    unsafe {
+        libc::epoll_ctl(epfd, libc::EPOLL_CTL_DEL, fd, std::ptr::null_mut());
+        libc::close(fd);
+    }
+
+    record_peer_behavior(peers, abuse, name, &client, reason);
+    let _ = tx.send(Event::InterfaceDown(client_id));
+}
+
+fn record_peer_behavior(
+    peers: &mut HashMap<IpAddr, PeerBehaviorState>,
+    abuse: &BackboneAbuseConfig,
+    name: &str,
+    client: &ClientState,
+    reason: DisconnectReason,
+) {
+    let now = Instant::now();
+    let state = peers
+        .entry(client.peer_ip)
+        .or_insert_with(PeerBehaviorState::new);
+
+    if let (
+        DisconnectReason::IdleTimeout,
+        Some(threshold),
+        Some(window),
+        Some(blacklist_duration),
+    ) = (
+        reason,
+        abuse.idle_timeout_threshold,
+        abuse.idle_timeout_window,
+        abuse.blacklist_duration,
+    ) {
+        if state.idle_timeouts.record(now, window) >= threshold {
+            blacklist_ip(state, blacklist_duration, name, client.peer_ip, "repeated idle timeouts");
+        }
+    }
+
+    if matches!(reason, DisconnectReason::RemoteClosed)
+        && !client.has_received_data
+        && abuse.flap_threshold.is_some()
+        && abuse.flap_window.is_some()
+        && abuse.flap_max_connection_age.is_some()
+        && abuse.blacklist_duration.is_some()
+        && now.duration_since(client.connected_at) <= abuse.flap_max_connection_age.unwrap()
+    {
+        let threshold = abuse.flap_threshold.unwrap();
+        let window = abuse.flap_window.unwrap();
+        let blacklist_duration = abuse.blacklist_duration.unwrap();
+        if state.flaps.record(now, window) >= threshold {
+            blacklist_ip(state, blacklist_duration, name, client.peer_ip, "rapid silent reconnect churn");
+        }
+    }
+}
+
+fn blacklist_ip(
+    state: &mut PeerBehaviorState,
+    duration: Duration,
+    name: &str,
+    peer_ip: IpAddr,
+    reason: &str,
+) {
+    let until = Instant::now() + duration;
+    state.blacklisted_until = Some(until);
+    state.idle_timeouts.events.clear();
+    state.flaps.events.clear();
+    log::warn!(
+        "[{}] blacklisting peer {} for {:.0}s due to {}",
+        name,
+        peer_ip,
+        duration.as_secs_f64(),
+        reason
+    );
 }
 
 fn set_tcp_keepalive(fd: RawFd) {
@@ -637,6 +871,14 @@ enum BackboneMode {
 /// (server mode).
 pub struct BackboneInterfaceFactory;
 
+fn parse_positive_duration_secs(params: &HashMap<String, String>, key: &str) -> Option<Duration> {
+    params
+        .get(key)
+        .and_then(|v| v.parse::<f64>().ok())
+        .filter(|v| *v > 0.0)
+        .map(Duration::from_secs_f64)
+}
+
 impl InterfaceFactory for BackboneInterfaceFactory {
     fn type_name(&self) -> &str {
         "BackboneInterface"
@@ -680,11 +922,25 @@ impl InterfaceFactory for BackboneInterfaceFactory {
             let max_connections = params
                 .get("max_connections")
                 .and_then(|v| v.parse().ok());
-            let idle_timeout = params
-                .get("idle_timeout")
-                .and_then(|v| v.parse::<f64>().ok())
-                .filter(|v| *v > 0.0)
-                .map(Duration::from_secs_f64);
+            let idle_timeout = parse_positive_duration_secs(params, "idle_timeout");
+            let abuse = BackboneAbuseConfig {
+                blacklist_duration: parse_positive_duration_secs(params, "blacklist_duration"),
+                idle_timeout_threshold: params
+                    .get("idle_timeout_blacklist_threshold")
+                    .and_then(|v| v.parse().ok()),
+                idle_timeout_window: parse_positive_duration_secs(
+                    params,
+                    "idle_timeout_blacklist_window",
+                ),
+                flap_threshold: params
+                    .get("flap_blacklist_threshold")
+                    .and_then(|v| v.parse().ok()),
+                flap_window: parse_positive_duration_secs(params, "flap_blacklist_window"),
+                flap_max_connection_age: parse_positive_duration_secs(
+                    params,
+                    "flap_max_connection_age",
+                ),
+            };
             Ok(Box::new(BackboneMode::Server(BackboneConfig {
                 name: name.to_string(),
                 listen_ip,
@@ -692,6 +948,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                 interface_id: id,
                 max_connections,
                 idle_timeout,
+                abuse,
             })))
         }
     }
@@ -774,6 +1031,7 @@ mod tests {
             interface_id: InterfaceId(80),
             max_connections: None,
             idle_timeout: None,
+            abuse: BackboneAbuseConfig::default(),
         };
 
         start(config, tx, next_id).unwrap();
@@ -808,6 +1066,7 @@ mod tests {
             interface_id: InterfaceId(81),
             max_connections: None,
             idle_timeout: None,
+            abuse: BackboneAbuseConfig::default(),
         };
 
         start(config, tx, next_id).unwrap();
@@ -845,6 +1104,7 @@ mod tests {
             interface_id: InterfaceId(82),
             max_connections: None,
             idle_timeout: None,
+            abuse: BackboneAbuseConfig::default(),
         };
 
         start(config, tx, next_id).unwrap();
@@ -886,6 +1146,7 @@ mod tests {
             interface_id: InterfaceId(83),
             max_connections: None,
             idle_timeout: None,
+            abuse: BackboneAbuseConfig::default(),
         };
 
         start(config, tx, next_id).unwrap();
@@ -920,6 +1181,7 @@ mod tests {
             interface_id: InterfaceId(84),
             max_connections: None,
             idle_timeout: None,
+            abuse: BackboneAbuseConfig::default(),
         };
 
         start(config, tx, next_id).unwrap();
@@ -955,6 +1217,7 @@ mod tests {
             interface_id: InterfaceId(85),
             max_connections: None,
             idle_timeout: None,
+            abuse: BackboneAbuseConfig::default(),
         };
 
         start(config, tx, next_id).unwrap();
@@ -999,6 +1262,7 @@ mod tests {
             interface_id: InterfaceId(86),
             max_connections: None,
             idle_timeout: None,
+            abuse: BackboneAbuseConfig::default(),
         };
 
         // Should not error
@@ -1018,6 +1282,7 @@ mod tests {
             interface_id: InterfaceId(87),
             max_connections: None,
             idle_timeout: None,
+            abuse: BackboneAbuseConfig::default(),
         };
 
         start(config, tx, next_id).unwrap();
@@ -1144,6 +1409,7 @@ mod tests {
             interface_id: InterfaceId(88),
             max_connections: Some(2),
             idle_timeout: None,
+            abuse: BackboneAbuseConfig::default(),
         };
 
         start(config, tx, next_id).unwrap();
@@ -1190,6 +1456,7 @@ mod tests {
             interface_id: InterfaceId(89),
             max_connections: Some(1),
             idle_timeout: None,
+            abuse: BackboneAbuseConfig::default(),
         };
 
         start(config, tx, next_id).unwrap();
@@ -1260,6 +1527,7 @@ mod tests {
             interface_id: InterfaceId(94),
             max_connections: None,
             idle_timeout: Some(Duration::from_millis(150)),
+            abuse: BackboneAbuseConfig::default(),
         };
 
         start(config, tx, next_id).unwrap();
@@ -1290,6 +1558,7 @@ mod tests {
             interface_id: InterfaceId(95),
             max_connections: None,
             idle_timeout: Some(Duration::from_millis(200)),
+            abuse: BackboneAbuseConfig::default(),
         };
 
         start(config, tx, next_id).unwrap();
@@ -1320,5 +1589,95 @@ mod tests {
             "expected no InterfaceDown after client sent data, got {:?}",
             result
         );
+    }
+
+    #[test]
+    fn backbone_blacklists_repeated_idle_timeouts() {
+        let port = find_free_port();
+        let (tx, rx) = mpsc::channel();
+        let next_id = Arc::new(AtomicU64::new(9600));
+
+        let config = BackboneConfig {
+            name: "test-backbone".into(),
+            listen_ip: "127.0.0.1".into(),
+            listen_port: port,
+            interface_id: InterfaceId(96),
+            max_connections: None,
+            idle_timeout: Some(Duration::from_millis(100)),
+            abuse: BackboneAbuseConfig {
+                blacklist_duration: Some(Duration::from_millis(600)),
+                idle_timeout_threshold: Some(2),
+                idle_timeout_window: Some(Duration::from_secs(2)),
+                flap_threshold: None,
+                flap_window: None,
+                flap_max_connection_age: None,
+            },
+        };
+
+        start(config, tx, next_id).unwrap();
+        thread::sleep(Duration::from_millis(50));
+
+        for _ in 0..2 {
+            let _client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+            let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert!(matches!(event, Event::InterfaceUp(_, _, _)));
+            let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            assert!(matches!(event, Event::InterfaceDown(_)));
+        }
+
+        let _client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        let result = rx.recv_timeout(Duration::from_millis(300));
+        assert!(
+            result.is_err(),
+            "expected blacklisted peer to be rejected without InterfaceUp, got {:?}",
+            result
+        );
+
+        thread::sleep(Duration::from_millis(700));
+
+        let _client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(matches!(event, Event::InterfaceUp(_, _, _)));
+    }
+
+    #[test]
+    fn backbone_parse_config_reads_abuse_settings() {
+        let factory = BackboneInterfaceFactory;
+        let mut params = HashMap::new();
+        params.insert("listen_ip".into(), "127.0.0.1".into());
+        params.insert("listen_port".into(), "4242".into());
+        params.insert("idle_timeout".into(), "15".into());
+        params.insert("blacklist_duration".into(), "120".into());
+        params.insert("idle_timeout_blacklist_threshold".into(), "4".into());
+        params.insert("idle_timeout_blacklist_window".into(), "300".into());
+        params.insert("flap_blacklist_threshold".into(), "8".into());
+        params.insert("flap_blacklist_window".into(), "60".into());
+        params.insert("flap_max_connection_age".into(), "5".into());
+
+        let config = factory
+            .parse_config("test-backbone", InterfaceId(97), &params)
+            .unwrap();
+        let mode = *config.into_any().downcast::<BackboneMode>().unwrap();
+
+        match mode {
+            BackboneMode::Server(config) => {
+                assert_eq!(config.listen_ip, "127.0.0.1");
+                assert_eq!(config.listen_port, 4242);
+                assert_eq!(config.idle_timeout, Some(Duration::from_secs(15)));
+                assert_eq!(config.abuse.blacklist_duration, Some(Duration::from_secs(120)));
+                assert_eq!(config.abuse.idle_timeout_threshold, Some(4));
+                assert_eq!(
+                    config.abuse.idle_timeout_window,
+                    Some(Duration::from_secs(300))
+                );
+                assert_eq!(config.abuse.flap_threshold, Some(8));
+                assert_eq!(config.abuse.flap_window, Some(Duration::from_secs(60)));
+                assert_eq!(
+                    config.abuse.flap_max_connection_age,
+                    Some(Duration::from_secs(5))
+                );
+            }
+            BackboneMode::Client(_) => panic!("expected server config"),
+        }
     }
 }
