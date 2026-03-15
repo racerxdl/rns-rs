@@ -20,6 +20,8 @@ use crate::ifac;
 #[cfg(feature = "iface-local")]
 use crate::interface::local::LocalServerConfig;
 use crate::interface::{InterfaceEntry, InterfaceStats};
+#[cfg(feature = "iface-backbone")]
+use crate::interface::backbone::{runtime_handle_from_mode, BackboneMode};
 use crate::storage;
 use crate::time;
 
@@ -614,6 +616,19 @@ impl RnsNode {
             .registry
             .unwrap_or_else(crate::interface::registry::InterfaceRegistry::with_builtins);
         for iface_config in config.interfaces {
+            #[cfg(feature = "iface-backbone")]
+            if iface_config.type_name == "BackboneInterface" {
+                if let Some(mode) = iface_config
+                    .config_data
+                    .as_any()
+                    .downcast_ref::<BackboneMode>()
+                {
+                    if let Some(handle) = runtime_handle_from_mode(mode) {
+                        driver.register_backbone_runtime(handle);
+                    }
+                }
+            }
+
             let factory = match registry.get(&iface_config.type_name) {
                 Some(f) => f,
                 None => {

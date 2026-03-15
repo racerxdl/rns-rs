@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 
 use rns_core::packet::RawPacket;
 use rns_core::transport::tables::PathEntry;
@@ -21,6 +22,10 @@ use crate::event::{
     RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError, RuntimeConfigErrorCode,
     RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
 };
+#[cfg(feature = "iface-backbone")]
+use crate::interface::backbone::BackboneRuntimeConfigHandle;
+#[cfg(all(feature = "iface-backbone", test))]
+use crate::interface::backbone::{BackboneAbuseConfig, BackboneServerRuntime};
 use crate::holepunch::orchestrator::{HolePunchManager, HolePunchManagerAction};
 use crate::ifac;
 use crate::interface::{InterfaceEntry, InterfaceStats};
@@ -318,6 +323,9 @@ pub struct Driver {
     pub(crate) event_tx: crate::event::EventSender,
     /// Shared timer interval used by the node timer thread.
     pub(crate) tick_interval_ms: Arc<AtomicU64>,
+    /// Runtime-config handles for backbone server interfaces, keyed by config name.
+    #[cfg(feature = "iface-backbone")]
+    pub(crate) backbone_runtime: HashMap<String, BackboneRuntimeConfigHandle>,
     /// Storage for discovered interfaces.
     pub(crate) discovered_interfaces: crate::discovery::DiscoveredInterfaceStorage,
     /// Required stamp value for accepting discovered interfaces.
@@ -429,6 +437,8 @@ impl Driver {
             ),
             event_tx: tx,
             tick_interval_ms: Arc::new(AtomicU64::new(DEFAULT_TICK_INTERVAL_MS)),
+            #[cfg(feature = "iface-backbone")]
+            backbone_runtime: HashMap::new(),
             discovered_interfaces: crate::discovery::DiscoveredInterfaceStorage::new(
                 std::env::temp_dir().join("rns-discovered-interfaces"),
             ),
@@ -470,6 +480,15 @@ impl Driver {
 
     pub(crate) fn set_tick_interval_handle(&mut self, tick_interval_ms: Arc<AtomicU64>) {
         self.tick_interval_ms = tick_interval_ms;
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    pub(crate) fn register_backbone_runtime(
+        &mut self,
+        handle: BackboneRuntimeConfigHandle,
+    ) {
+        self.backbone_runtime
+            .insert(handle.interface_name.clone(), handle);
     }
 
     fn runtime_config_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
@@ -556,12 +575,18 @@ impl Driver {
                 RuntimeConfigApplyMode::Immediate,
                 "Policy for incoming direct-connect proposals.",
             )),
-            _ => None,
+            _ => {
+                #[cfg(feature = "iface-backbone")]
+                if let Some(entry) = self.backbone_runtime_entry(key) {
+                    return Some(entry);
+                }
+                None
+            }
         }
     }
 
     fn list_runtime_config(&self) -> Vec<RuntimeConfigEntry> {
-        [
+        let mut entries: Vec<RuntimeConfigEntry> = [
             "global.tick_interval_ms",
             "global.known_destinations_ttl_secs",
             "global.known_destinations_cleanup_interval_ticks",
@@ -573,7 +598,14 @@ impl Driver {
         ]
         .into_iter()
         .filter_map(|key| self.runtime_config_entry(key))
-        .collect()
+        .collect();
+
+        #[cfg(feature = "iface-backbone")]
+        {
+            entries.extend(self.list_backbone_runtime_config());
+        }
+
+        entries
     }
 
     fn holepunch_policy_name(policy: crate::event::HolePunchPolicy) -> String {
@@ -622,6 +654,229 @@ impl Driver {
                 code: RuntimeConfigErrorCode::InvalidType,
                 message: format!("{} expects a numeric value", key),
             }),
+        }
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    fn split_backbone_runtime_key<'a>(
+        &self,
+        key: &'a str,
+    ) -> Result<(&'a str, &'a str), RuntimeConfigError> {
+        let rest = key.strip_prefix("backbone.").ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::UnknownKey,
+            message: format!("unknown runtime-config key '{}'", key),
+        })?;
+        rest.split_once('.').ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::UnknownKey,
+            message: format!("unknown runtime-config key '{}'", key),
+        })
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    fn set_optional_duration(
+        value: RuntimeConfigValue,
+        key: &str,
+    ) -> Result<Option<Duration>, RuntimeConfigError> {
+        let secs = Self::expect_f64(value, key)?;
+        if secs == 0.0 {
+            Ok(None)
+        } else {
+            Ok(Some(Duration::from_secs_f64(secs)))
+        }
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    fn set_optional_usize(
+        value: RuntimeConfigValue,
+        key: &str,
+    ) -> Result<Option<usize>, RuntimeConfigError> {
+        let raw = Self::expect_u64(value, key)?;
+        if raw == 0 {
+            Ok(None)
+        } else {
+            Ok(Some(raw as usize))
+        }
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    fn set_backbone_runtime_config(
+        &mut self,
+        key: &str,
+        value: RuntimeConfigValue,
+    ) -> Result<(), RuntimeConfigError> {
+        let (name, setting) = self.split_backbone_runtime_key(key)?;
+        let handle = self.backbone_runtime.get(name).ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::NotFound,
+            message: format!("backbone interface '{}' not found", name),
+        })?;
+        let mut runtime = handle.runtime.lock().unwrap();
+        match setting {
+            "idle_timeout_secs" => {
+                runtime.idle_timeout = Self::set_optional_duration(value, key)?;
+                Ok(())
+            }
+            "blacklist_duration_secs" => {
+                runtime.abuse.blacklist_duration = Self::set_optional_duration(value, key)?;
+                Ok(())
+            }
+            "idle_timeout_blacklist_threshold" => {
+                runtime.abuse.idle_timeout_threshold = Self::set_optional_usize(value, key)?;
+                Ok(())
+            }
+            "idle_timeout_blacklist_window_secs" => {
+                runtime.abuse.idle_timeout_window = Self::set_optional_duration(value, key)?;
+                Ok(())
+            }
+            "flap_blacklist_threshold" => {
+                runtime.abuse.flap_threshold = Self::set_optional_usize(value, key)?;
+                Ok(())
+            }
+            "flap_blacklist_window_secs" => {
+                runtime.abuse.flap_window = Self::set_optional_duration(value, key)?;
+                Ok(())
+            }
+            "flap_max_connection_age_secs" => {
+                runtime.abuse.flap_max_connection_age = Self::set_optional_duration(value, key)?;
+                Ok(())
+            }
+            "max_connections" => {
+                runtime.max_connections = Self::set_optional_usize(value, key)?;
+                Ok(())
+            }
+            _ => Err(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::UnknownKey,
+                message: format!("unknown runtime-config key '{}'", key),
+            }),
+        }
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    fn reset_backbone_runtime_config(&mut self, key: &str) -> Result<(), RuntimeConfigError> {
+        let (name, setting) = self.split_backbone_runtime_key(key)?;
+        let handle = self.backbone_runtime.get(name).ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::NotFound,
+            message: format!("backbone interface '{}' not found", name),
+        })?;
+        let mut runtime = handle.runtime.lock().unwrap();
+        let startup = handle.startup.clone();
+        match setting {
+            "idle_timeout_secs" => runtime.idle_timeout = startup.idle_timeout,
+            "blacklist_duration_secs" => runtime.abuse.blacklist_duration = startup.abuse.blacklist_duration,
+            "idle_timeout_blacklist_threshold" => runtime.abuse.idle_timeout_threshold = startup.abuse.idle_timeout_threshold,
+            "idle_timeout_blacklist_window_secs" => runtime.abuse.idle_timeout_window = startup.abuse.idle_timeout_window,
+            "flap_blacklist_threshold" => runtime.abuse.flap_threshold = startup.abuse.flap_threshold,
+            "flap_blacklist_window_secs" => runtime.abuse.flap_window = startup.abuse.flap_window,
+            "flap_max_connection_age_secs" => runtime.abuse.flap_max_connection_age = startup.abuse.flap_max_connection_age,
+            "max_connections" => runtime.max_connections = startup.max_connections,
+            _ => {
+                return Err(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::UnknownKey,
+                    message: format!("unknown runtime-config key '{}'", key),
+                })
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    fn list_backbone_runtime_config(&self) -> Vec<RuntimeConfigEntry> {
+        let mut entries = Vec::new();
+        let mut names: Vec<&String> = self.backbone_runtime.keys().collect();
+        names.sort();
+        for name in names {
+            for suffix in [
+                "idle_timeout_secs",
+                "blacklist_duration_secs",
+                "idle_timeout_blacklist_threshold",
+                "idle_timeout_blacklist_window_secs",
+                "flap_blacklist_threshold",
+                "flap_blacklist_window_secs",
+                "flap_max_connection_age_secs",
+                "max_connections",
+            ] {
+                let key = format!("backbone.{}.{}", name, suffix);
+                if let Some(entry) = self.backbone_runtime_entry(&key) {
+                    entries.push(entry);
+                }
+            }
+        }
+        entries
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    fn backbone_runtime_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
+        let rest = key.strip_prefix("backbone.")?;
+        let (name, setting) = rest.split_once('.')?;
+        let handle = self.backbone_runtime.get(name)?;
+        let current = handle.runtime.lock().unwrap().clone();
+        let startup = handle.startup.clone();
+
+        let make_entry = |value: RuntimeConfigValue,
+                          default: RuntimeConfigValue,
+                          apply_mode: RuntimeConfigApplyMode,
+                          description: &str| RuntimeConfigEntry {
+            key: key.to_string(),
+            source: if value == default {
+                RuntimeConfigSource::Startup
+            } else {
+                RuntimeConfigSource::RuntimeOverride
+            },
+            value,
+            default,
+            apply_mode,
+            description: Some(description.to_string()),
+        };
+
+        match setting {
+            "idle_timeout_secs" => Some(make_entry(
+                RuntimeConfigValue::Float(current.idle_timeout.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
+                RuntimeConfigValue::Float(startup.idle_timeout.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
+                RuntimeConfigApplyMode::Immediate,
+                "Disconnect silent inbound peers after this many seconds; 0 disables the timeout.",
+            )),
+            "blacklist_duration_secs" => Some(make_entry(
+                RuntimeConfigValue::Float(current.abuse.blacklist_duration.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
+                RuntimeConfigValue::Float(startup.abuse.blacklist_duration.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
+                RuntimeConfigApplyMode::Immediate,
+                "Temporary blacklist duration for abusive peers; 0 disables blacklisting.",
+            )),
+            "idle_timeout_blacklist_threshold" => Some(make_entry(
+                RuntimeConfigValue::Int(current.abuse.idle_timeout_threshold.unwrap_or(0) as i64),
+                RuntimeConfigValue::Int(startup.abuse.idle_timeout_threshold.unwrap_or(0) as i64),
+                RuntimeConfigApplyMode::Immediate,
+                "Repeated idle-timeout count needed before temporary blacklisting; 0 disables.",
+            )),
+            "idle_timeout_blacklist_window_secs" => Some(make_entry(
+                RuntimeConfigValue::Float(current.abuse.idle_timeout_window.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
+                RuntimeConfigValue::Float(startup.abuse.idle_timeout_window.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
+                RuntimeConfigApplyMode::Immediate,
+                "Window for counting repeated idle timeouts; 0 disables.",
+            )),
+            "flap_blacklist_threshold" => Some(make_entry(
+                RuntimeConfigValue::Int(current.abuse.flap_threshold.unwrap_or(0) as i64),
+                RuntimeConfigValue::Int(startup.abuse.flap_threshold.unwrap_or(0) as i64),
+                RuntimeConfigApplyMode::Immediate,
+                "Rapid silent reconnect count needed before temporary blacklisting; 0 disables.",
+            )),
+            "flap_blacklist_window_secs" => Some(make_entry(
+                RuntimeConfigValue::Float(current.abuse.flap_window.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
+                RuntimeConfigValue::Float(startup.abuse.flap_window.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
+                RuntimeConfigApplyMode::Immediate,
+                "Window for counting rapid silent reconnect churn; 0 disables.",
+            )),
+            "flap_max_connection_age_secs" => Some(make_entry(
+                RuntimeConfigValue::Float(current.abuse.flap_max_connection_age.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
+                RuntimeConfigValue::Float(startup.abuse.flap_max_connection_age.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
+                RuntimeConfigApplyMode::Immediate,
+                "Only connections shorter than this count as flap events; 0 disables.",
+            )),
+            "max_connections" => Some(make_entry(
+                RuntimeConfigValue::Int(current.max_connections.unwrap_or(0) as i64),
+                RuntimeConfigValue::Int(startup.max_connections.unwrap_or(0) as i64),
+                RuntimeConfigApplyMode::NewConnectionsOnly,
+                "Maximum simultaneous inbound backbone connections; 0 disables the cap.",
+            )),
+            _ => None,
         }
     }
 
@@ -2049,6 +2304,9 @@ impl Driver {
                         self.holepunch_manager.set_policy(policy);
                         Ok(())
                     }
+                    #[cfg(feature = "iface-backbone")]
+                    _ if key.starts_with("backbone.") => self
+                        .set_backbone_runtime_config(&key, value),
                     _ => {
                         return QueryResponse::RuntimeConfigSet(Err(RuntimeConfigError {
                             code: RuntimeConfigErrorCode::UnknownKey,
@@ -2107,6 +2365,8 @@ impl Driver {
                             .set_policy(defaults.direct_connect_policy);
                         Ok(())
                     }
+                    #[cfg(feature = "iface-backbone")]
+                    _ if key.starts_with("backbone.") => self.reset_backbone_runtime_config(&key),
                     _ => {
                         return QueryResponse::RuntimeConfigReset(Err(RuntimeConfigError {
                             code: RuntimeConfigErrorCode::UnknownKey,
@@ -3863,6 +4123,27 @@ mod tests {
         driver
     }
 
+    #[cfg(feature = "iface-backbone")]
+    fn register_test_backbone(driver: &mut Driver, name: &str) {
+        let startup = BackboneServerRuntime {
+            max_connections: Some(8),
+            idle_timeout: Some(Duration::from_secs(10)),
+            abuse: BackboneAbuseConfig {
+                blacklist_duration: Some(Duration::from_secs(120)),
+                idle_timeout_threshold: Some(4),
+                idle_timeout_window: Some(Duration::from_secs(300)),
+                flap_threshold: Some(8),
+                flap_window: Some(Duration::from_secs(60)),
+                flap_max_connection_age: Some(Duration::from_secs(5)),
+            },
+        };
+        driver.register_backbone_runtime(BackboneRuntimeConfigHandle {
+            interface_name: name.to_string(),
+            runtime: Arc::new(std::sync::Mutex::new(startup.clone())),
+            startup,
+        });
+    }
+
     impl Callbacks for MockCallbacks {
         fn on_announce(&mut self, announced: crate::destination::AnnouncedIdentity) {
             self.announces
@@ -5423,6 +5704,53 @@ mod tests {
             panic!("expected runtime config set failure");
         };
         assert_eq!(err.code, RuntimeConfigErrorCode::InvalidValue);
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    #[test]
+    fn runtime_config_lists_backbone_keys() {
+        let mut driver = new_test_driver();
+        register_test_backbone(&mut driver, "public");
+        let response = driver.handle_query(QueryRequest::ListRuntimeConfig);
+        let QueryResponse::RuntimeConfigList(entries) = response else {
+            panic!("expected runtime config list");
+        };
+        let keys: Vec<String> = entries.into_iter().map(|entry| entry.key).collect();
+        assert!(keys.contains(&"backbone.public.idle_timeout_secs".to_string()));
+        assert!(keys.contains(&"backbone.public.max_connections".to_string()));
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    #[test]
+    fn runtime_config_sets_backbone_values() {
+        let mut driver = new_test_driver();
+        register_test_backbone(&mut driver, "public");
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "backbone.public.idle_timeout_secs".into(),
+            value: RuntimeConfigValue::Float(2.5),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected runtime config set success");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Float(2.5));
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "backbone.public.max_connections".into(),
+            value: RuntimeConfigValue::Int(0),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected runtime config set success");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Int(0));
+
+        let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
+            key: "backbone.public.max_connections".into(),
+        });
+        let QueryResponse::RuntimeConfigReset(Ok(entry)) = response else {
+            panic!("expected runtime config reset success");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Int(8));
     }
 
     #[test]

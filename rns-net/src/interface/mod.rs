@@ -121,10 +121,15 @@ pub struct StartContext {
 
 /// Opaque interface config data. Each factory downcasts to its concrete type.
 pub trait InterfaceConfigData: Send + Any {
+    fn as_any(&self) -> &dyn Any;
     fn into_any(self: Box<Self>) -> Box<dyn Any>;
 }
 
 impl<T: Send + 'static> InterfaceConfigData for T {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn into_any(self: Box<Self>) -> Box<dyn Any> {
         self
     }

@@ -14,7 +14,7 @@ use std::io::{self, Read, Write};
 use std::net::{IpAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -39,6 +39,7 @@ pub struct BackboneConfig {
     pub max_connections: Option<usize>,
     pub idle_timeout: Option<Duration>,
     pub abuse: BackboneAbuseConfig,
+    pub runtime: Arc<Mutex<BackboneServerRuntime>>,
 }
 
 /// Configurable behavior-based abuse detection for inbound peers.
@@ -52,9 +53,34 @@ pub struct BackboneAbuseConfig {
     pub flap_max_connection_age: Option<Duration>,
 }
 
+/// Live runtime state for a backbone server interface.
+#[derive(Debug, Clone)]
+pub struct BackboneServerRuntime {
+    pub max_connections: Option<usize>,
+    pub idle_timeout: Option<Duration>,
+    pub abuse: BackboneAbuseConfig,
+}
+
+impl BackboneServerRuntime {
+    pub fn from_config(config: &BackboneConfig) -> Self {
+        Self {
+            max_connections: config.max_connections,
+            idle_timeout: config.idle_timeout,
+            abuse: config.abuse.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BackboneRuntimeConfigHandle {
+    pub interface_name: String,
+    pub runtime: Arc<Mutex<BackboneServerRuntime>>,
+    pub startup: BackboneServerRuntime,
+}
+
 impl Default for BackboneConfig {
     fn default() -> Self {
-        BackboneConfig {
+        let mut config = BackboneConfig {
             name: String::new(),
             listen_ip: "0.0.0.0".into(),
             listen_port: 0,
@@ -62,7 +88,15 @@ impl Default for BackboneConfig {
             max_connections: None,
             idle_timeout: None,
             abuse: BackboneAbuseConfig::default(),
-        }
+            runtime: Arc::new(Mutex::new(BackboneServerRuntime {
+                max_connections: None,
+                idle_timeout: None,
+                abuse: BackboneAbuseConfig::default(),
+            })),
+        };
+        let startup = BackboneServerRuntime::from_config(&config);
+        config.runtime = Arc::new(Mutex::new(startup));
+        config
     }
 }
 
@@ -118,21 +152,11 @@ pub fn start(config: BackboneConfig, tx: EventSender, next_id: Arc<AtomicU64>) -
     );
 
     let name = config.name.clone();
-    let max_connections = config.max_connections;
-    let idle_timeout = config.idle_timeout;
-    let abuse = config.abuse.clone();
+    let runtime = Arc::clone(&config.runtime);
     thread::Builder::new()
         .name(format!("backbone-epoll-{}", config.interface_id.0))
         .spawn(move || {
-            if let Err(e) = epoll_loop(
-                listener,
-                name,
-                tx,
-                next_id,
-                max_connections,
-                idle_timeout,
-                abuse,
-            ) {
+            if let Err(e) = epoll_loop(listener, name, tx, next_id, runtime) {
                 log::error!("backbone epoll loop error: {}", e);
             }
         })?;
@@ -211,9 +235,7 @@ fn epoll_loop(
     name: String,
     tx: EventSender,
     next_id: Arc<AtomicU64>,
-    max_connections: Option<usize>,
-    idle_timeout: Option<Duration>,
-    abuse: BackboneAbuseConfig,
+    runtime: Arc<Mutex<BackboneServerRuntime>>,
 ) -> io::Result<()> {
     let epfd = unsafe { libc::epoll_create1(0) };
     if epfd < 0 {
@@ -236,6 +258,10 @@ fn epoll_loop(
     let mut events = vec![libc::epoll_event { events: 0, u64: 0 }; 64];
 
     loop {
+        let runtime_snapshot = runtime.lock().unwrap().clone();
+        let max_connections = runtime_snapshot.max_connections;
+        let idle_timeout = runtime_snapshot.idle_timeout;
+        let abuse = runtime_snapshot.abuse.clone();
         cleanup_peer_state(&mut peers, &abuse);
         let nfds =
             unsafe { libc::epoll_wait(epfd, events.as_mut_ptr(), events.len() as i32, 1000) };
@@ -859,7 +885,7 @@ fn client_reconnect(config: &BackboneClientConfig, tx: &EventSender) -> Option<T
 
 /// Internal enum used by [`BackboneInterfaceFactory`] to carry either a
 /// server or client config through the opaque `InterfaceConfigData` channel.
-enum BackboneMode {
+pub(crate) enum BackboneMode {
     Server(BackboneConfig),
     Client(BackboneClientConfig),
 }
@@ -941,7 +967,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                     "flap_max_connection_age",
                 ),
             };
-            Ok(Box::new(BackboneMode::Server(BackboneConfig {
+            let mut config = BackboneConfig {
                 name: name.to_string(),
                 listen_ip,
                 listen_port,
@@ -949,7 +975,15 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                 max_connections,
                 idle_timeout,
                 abuse,
-            })))
+                runtime: Arc::new(Mutex::new(BackboneServerRuntime {
+                    max_connections: None,
+                    idle_timeout: None,
+                    abuse: BackboneAbuseConfig::default(),
+                })),
+            };
+            let startup = BackboneServerRuntime::from_config(&config);
+            config.runtime = Arc::new(Mutex::new(startup));
+            Ok(Box::new(BackboneMode::Server(config)))
         }
     }
 
@@ -1004,6 +1038,17 @@ impl InterfaceFactory for BackboneInterfaceFactory {
     }
 }
 
+pub(crate) fn runtime_handle_from_mode(mode: &BackboneMode) -> Option<BackboneRuntimeConfigHandle> {
+    match mode {
+        BackboneMode::Server(config) => Some(BackboneRuntimeConfigHandle {
+            interface_name: config.name.clone(),
+            runtime: Arc::clone(&config.runtime),
+            startup: BackboneServerRuntime::from_config(config),
+        }),
+        BackboneMode::Client(_) => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1018,21 +1063,39 @@ mod tests {
             .port()
     }
 
+    fn make_server_config(
+        port: u16,
+        interface_id: u64,
+        max_connections: Option<usize>,
+        idle_timeout: Option<Duration>,
+        abuse: BackboneAbuseConfig,
+    ) -> BackboneConfig {
+        let mut config = BackboneConfig {
+            name: "test-backbone".into(),
+            listen_ip: "127.0.0.1".into(),
+            listen_port: port,
+            interface_id: InterfaceId(interface_id),
+            max_connections,
+            idle_timeout,
+            abuse,
+            runtime: Arc::new(Mutex::new(BackboneServerRuntime {
+                max_connections: None,
+                idle_timeout: None,
+                abuse: BackboneAbuseConfig::default(),
+            })),
+        };
+        let startup = BackboneServerRuntime::from_config(&config);
+        config.runtime = Arc::new(Mutex::new(startup));
+        config
+    }
+
     #[test]
     fn backbone_accept_connection() {
         let port = find_free_port();
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(8000));
 
-        let config = BackboneConfig {
-            name: "test-backbone".into(),
-            listen_ip: "127.0.0.1".into(),
-            listen_port: port,
-            interface_id: InterfaceId(80),
-            max_connections: None,
-            idle_timeout: None,
-            abuse: BackboneAbuseConfig::default(),
-        };
+        let config = make_server_config(port, 80, None, None, BackboneAbuseConfig::default());
 
         start(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -1059,15 +1122,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(8100));
 
-        let config = BackboneConfig {
-            name: "test-backbone".into(),
-            listen_ip: "127.0.0.1".into(),
-            listen_port: port,
-            interface_id: InterfaceId(81),
-            max_connections: None,
-            idle_timeout: None,
-            abuse: BackboneAbuseConfig::default(),
-        };
+        let config = make_server_config(port, 81, None, None, BackboneAbuseConfig::default());
 
         start(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -1097,15 +1152,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(8200));
 
-        let config = BackboneConfig {
-            name: "test-backbone".into(),
-            listen_ip: "127.0.0.1".into(),
-            listen_port: port,
-            interface_id: InterfaceId(82),
-            max_connections: None,
-            idle_timeout: None,
-            abuse: BackboneAbuseConfig::default(),
-        };
+        let config = make_server_config(port, 82, None, None, BackboneAbuseConfig::default());
 
         start(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -1139,15 +1186,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(8300));
 
-        let config = BackboneConfig {
-            name: "test-backbone".into(),
-            listen_ip: "127.0.0.1".into(),
-            listen_port: port,
-            interface_id: InterfaceId(83),
-            max_connections: None,
-            idle_timeout: None,
-            abuse: BackboneAbuseConfig::default(),
-        };
+        let config = make_server_config(port, 83, None, None, BackboneAbuseConfig::default());
 
         start(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -1174,15 +1213,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(8400));
 
-        let config = BackboneConfig {
-            name: "test-backbone".into(),
-            listen_ip: "127.0.0.1".into(),
-            listen_port: port,
-            interface_id: InterfaceId(84),
-            max_connections: None,
-            idle_timeout: None,
-            abuse: BackboneAbuseConfig::default(),
-        };
+        let config = make_server_config(port, 84, None, None, BackboneAbuseConfig::default());
 
         start(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -1210,15 +1241,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(8500));
 
-        let config = BackboneConfig {
-            name: "test-backbone".into(),
-            listen_ip: "127.0.0.1".into(),
-            listen_port: port,
-            interface_id: InterfaceId(85),
-            max_connections: None,
-            idle_timeout: None,
-            abuse: BackboneAbuseConfig::default(),
-        };
+        let config = make_server_config(port, 85, None, None, BackboneAbuseConfig::default());
 
         start(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -1255,15 +1278,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(8600));
 
-        let config = BackboneConfig {
-            name: "test-backbone".into(),
-            listen_ip: "127.0.0.1".into(),
-            listen_port: port,
-            interface_id: InterfaceId(86),
-            max_connections: None,
-            idle_timeout: None,
-            abuse: BackboneAbuseConfig::default(),
-        };
+        let config = make_server_config(port, 86, None, None, BackboneAbuseConfig::default());
 
         // Should not error
         start(config, tx, next_id).unwrap();
@@ -1275,15 +1290,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(8700));
 
-        let config = BackboneConfig {
-            name: "test-backbone".into(),
-            listen_ip: "127.0.0.1".into(),
-            listen_port: port,
-            interface_id: InterfaceId(87),
-            max_connections: None,
-            idle_timeout: None,
-            abuse: BackboneAbuseConfig::default(),
-        };
+        let config = make_server_config(port, 87, None, None, BackboneAbuseConfig::default());
 
         start(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -1402,15 +1409,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(8800));
 
-        let config = BackboneConfig {
-            name: "test-backbone".into(),
-            listen_ip: "127.0.0.1".into(),
-            listen_port: port,
-            interface_id: InterfaceId(88),
-            max_connections: Some(2),
-            idle_timeout: None,
-            abuse: BackboneAbuseConfig::default(),
-        };
+        let config = make_server_config(port, 88, Some(2), None, BackboneAbuseConfig::default());
 
         start(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -1449,15 +1448,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(8900));
 
-        let config = BackboneConfig {
-            name: "test-backbone".into(),
-            listen_ip: "127.0.0.1".into(),
-            listen_port: port,
-            interface_id: InterfaceId(89),
-            max_connections: Some(1),
-            idle_timeout: None,
-            abuse: BackboneAbuseConfig::default(),
-        };
+        let config = make_server_config(port, 89, Some(1), None, BackboneAbuseConfig::default());
 
         start(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -1520,15 +1511,13 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(9400));
 
-        let config = BackboneConfig {
-            name: "test-backbone".into(),
-            listen_ip: "127.0.0.1".into(),
-            listen_port: port,
-            interface_id: InterfaceId(94),
-            max_connections: None,
-            idle_timeout: Some(Duration::from_millis(150)),
-            abuse: BackboneAbuseConfig::default(),
-        };
+        let config = make_server_config(
+            port,
+            94,
+            None,
+            Some(Duration::from_millis(150)),
+            BackboneAbuseConfig::default(),
+        );
 
         start(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -1551,15 +1540,13 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(9500));
 
-        let config = BackboneConfig {
-            name: "test-backbone".into(),
-            listen_ip: "127.0.0.1".into(),
-            listen_port: port,
-            interface_id: InterfaceId(95),
-            max_connections: None,
-            idle_timeout: Some(Duration::from_millis(200)),
-            abuse: BackboneAbuseConfig::default(),
-        };
+        let config = make_server_config(
+            port,
+            95,
+            None,
+            Some(Duration::from_millis(200)),
+            BackboneAbuseConfig::default(),
+        );
 
         start(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -1597,14 +1584,12 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(9600));
 
-        let config = BackboneConfig {
-            name: "test-backbone".into(),
-            listen_ip: "127.0.0.1".into(),
-            listen_port: port,
-            interface_id: InterfaceId(96),
-            max_connections: None,
-            idle_timeout: Some(Duration::from_millis(100)),
-            abuse: BackboneAbuseConfig {
+        let config = make_server_config(
+            port,
+            96,
+            None,
+            Some(Duration::from_millis(100)),
+            BackboneAbuseConfig {
                 blacklist_duration: Some(Duration::from_millis(600)),
                 idle_timeout_threshold: Some(2),
                 idle_timeout_window: Some(Duration::from_secs(2)),
@@ -1612,7 +1597,7 @@ mod tests {
                 flap_window: None,
                 flap_max_connection_age: None,
             },
-        };
+        );
 
         start(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -1638,6 +1623,34 @@ mod tests {
         let _client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
         let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
         assert!(matches!(event, Event::InterfaceUp(_, _, _)));
+    }
+
+    #[test]
+    fn backbone_runtime_idle_timeout_updates_live() {
+        let port = find_free_port();
+        let (tx, rx) = mpsc::channel();
+        let next_id = Arc::new(AtomicU64::new(9650));
+
+        let config = make_server_config(port, 97, None, None, BackboneAbuseConfig::default());
+        let runtime = Arc::clone(&config.runtime);
+
+        start(config, tx, next_id).unwrap();
+        thread::sleep(Duration::from_millis(50));
+
+        let _client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let client_id = match event {
+            Event::InterfaceUp(id, _, _) => id,
+            other => panic!("expected InterfaceUp, got {:?}", other),
+        };
+
+        {
+            let mut runtime = runtime.lock().unwrap();
+            runtime.idle_timeout = Some(Duration::from_millis(150));
+        }
+
+        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(matches!(event, Event::InterfaceDown(id) if id == client_id));
     }
 
     #[test]
