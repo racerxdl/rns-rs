@@ -541,6 +541,7 @@ fn wait_for_resource_progress(
 
 const TIMEOUT: Duration = Duration::from_secs(10);
 const SETTLE: Duration = Duration::from_millis(1500);
+const KNOWN_DESTINATIONS_TTL: Duration = Duration::from_secs(48 * 60 * 60);
 
 const APP_NAME: &str = "e2e_test";
 
@@ -581,6 +582,7 @@ fn start_transport_node(port: u16) -> RnsNode {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -629,6 +631,7 @@ fn start_client_node(port: u16, identity: &Identity, callbacks: Box<dyn Callback
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -880,6 +883,7 @@ fn test_direct_link_no_transport() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -1414,6 +1418,7 @@ fn test_plain_message_delivery() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -1503,6 +1508,7 @@ fn test_group_message_delivery() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -1596,6 +1602,7 @@ fn test_group_wrong_key_fails() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -2679,6 +2686,7 @@ fn test_udp_announce_and_message() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -2727,6 +2735,7 @@ fn test_udp_announce_and_message() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -2879,6 +2888,7 @@ fn discovery_announce_received_by_client() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -2933,6 +2943,7 @@ fn discovery_announce_received_by_client() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -3045,6 +3056,7 @@ fn discovery_announce_through_relay() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -3108,6 +3120,7 @@ fn discovery_announce_through_relay() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -3160,6 +3173,7 @@ fn discovery_announce_through_relay() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,

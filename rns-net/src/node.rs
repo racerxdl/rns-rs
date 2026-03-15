@@ -23,6 +23,9 @@ use crate::interface::{InterfaceEntry, InterfaceStats};
 use crate::storage;
 use crate::time;
 
+#[cfg(test)]
+const DEFAULT_KNOWN_DESTINATIONS_TTL: Duration = Duration::from_secs(48 * 60 * 60);
+
 /// Parse an interface mode string to the corresponding constant.
 /// Matches Python's `_synthesize_interface()` in `RNS/Reticulum.py`.
 fn parse_interface_mode(mode: &str) -> u8 {
@@ -172,6 +175,8 @@ pub struct NodeConfig {
     /// Maximum number of alternative paths stored per destination.
     /// Default 1 (single path, backward-compatible).
     pub max_paths_per_destination: usize,
+    /// TTL for recalled known destinations without an active path.
+    pub known_destinations_ttl: Duration,
     /// Custom interface registry. If `None`, uses `InterfaceRegistry::with_builtins()`.
     pub registry: Option<crate::interface::registry::InterfaceRegistry>,
     /// If true, a single interface failing to start will abort the entire node.
@@ -437,6 +442,9 @@ impl RnsNode {
             respond_to_probes: rns_config.reticulum.respond_to_probes,
             prefer_shorter_path: rns_config.reticulum.prefer_shorter_path,
             max_paths_per_destination: rns_config.reticulum.max_paths_per_destination,
+            known_destinations_ttl: Duration::from_secs(
+                rns_config.reticulum.known_destinations_ttl,
+            ),
             interfaces: interface_configs,
             registry: None,
             panic_on_interface_error: rns_config.reticulum.panic_on_interface_error,
@@ -479,6 +487,7 @@ impl RnsNode {
 
         let (tx, rx) = event::channel();
         let mut driver = Driver::new(transport_config, rx, tx.clone(), callbacks);
+        driver.known_destinations_ttl = config.known_destinations_ttl.as_secs_f64();
 
         #[cfg(feature = "rns-hooks")]
         if let Some(provider_config) = config.provider_bridge.clone() {
@@ -1525,6 +1534,7 @@ mod tests {
                 respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -1561,6 +1571,7 @@ mod tests {
                 respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -1597,6 +1608,7 @@ mod tests {
                 respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -1993,6 +2005,7 @@ enable_transport = False
                 respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -2038,6 +2051,7 @@ enable_transport = False
                 respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -2079,6 +2093,7 @@ enable_transport = False
                 respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -2117,6 +2132,7 @@ enable_transport = False
                 respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -2162,6 +2178,7 @@ enable_transport = False
                 respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -2208,6 +2225,7 @@ enable_transport = False
                 respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -2252,6 +2270,7 @@ enable_transport = False
                 respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -2307,6 +2326,7 @@ enable_transport = False
                 respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
@@ -2354,6 +2374,7 @@ enable_transport = False
                 respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,

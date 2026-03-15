@@ -60,6 +60,8 @@ pub struct ReticulumSection {
     /// Maximum number of alternative paths stored per destination.
     /// Default 1 (single path, backward-compatible).
     pub max_paths_per_destination: usize,
+    /// TTL for recalled known destinations without an active path, in seconds.
+    pub known_destinations_ttl: u64,
     #[cfg(feature = "rns-hooks")]
     pub provider_bridge: bool,
     #[cfg(feature = "rns-hooks")]
@@ -95,6 +97,7 @@ impl Default for ReticulumSection {
             required_discovery_value: None,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            known_destinations_ttl: 48 * 60 * 60,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: false,
             #[cfg(feature = "rns-hooks")]
@@ -498,6 +501,13 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
         })?;
         section.max_paths_per_destination = n.max(1);
     }
+    if let Some(v) = kvs.get("known_destinations_ttl") {
+        section.known_destinations_ttl =
+            v.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
+                key: "known_destinations_ttl".into(),
+                value: v.clone(),
+            })?;
+    }
     #[cfg(feature = "rns-hooks")]
     if let Some(v) = kvs.get("provider_bridge") {
         section.provider_bridge = parse_bool(v).ok_or_else(|| ConfigError::InvalidValue {
@@ -634,6 +644,7 @@ panic_on_interface_error = Yes
 use_implicit_proof = False
 respond_to_probes = True
 network_identity = /home/user/.reticulum/identity
+known_destinations_ttl = 1234
 "#;
         let config = parse(input).unwrap();
         assert!(config.reticulum.enable_transport);
@@ -648,6 +659,7 @@ network_identity = /home/user/.reticulum/identity
             config.reticulum.network_identity.as_deref(),
             Some("/home/user/.reticulum/identity")
         );
+        assert_eq!(config.reticulum.known_destinations_ttl, 1234);
     }
 
     #[test]

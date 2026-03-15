@@ -24,6 +24,8 @@ use crate::interface::{InterfaceEntry, InterfaceStats};
 use crate::link_manager::{LinkManager, LinkManagerAction};
 use crate::time;
 
+const DEFAULT_KNOWN_DESTINATIONS_TTL: f64 = 48.0 * 60.0 * 60.0;
+
 /// Thin wrapper providing `EngineAccess` for a `TransportEngine` + Driver interfaces.
 #[cfg(feature = "rns-hooks")]
 struct EngineRef<'a> {
@@ -270,6 +272,8 @@ pub struct Driver {
     pub(crate) initial_announce_sent: bool,
     /// Cache of known announced identities, keyed by destination hash.
     pub(crate) known_destinations: HashMap<[u8; 16], crate::destination::AnnouncedIdentity>,
+    /// TTL for known destinations without an active path, in seconds.
+    pub(crate) known_destinations_ttl: f64,
     /// Destination hash for rnstransport.path.request (PLAIN).
     pub(crate) path_request_dest: [u8; 16],
     /// Proof strategies per destination hash.
@@ -363,6 +367,7 @@ impl Driver {
             last_management_announce: 0.0,
             initial_announce_sent: false,
             known_destinations: HashMap::new(),
+            known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
             path_request_dest,
             proof_strategies: HashMap::new(),
             sent_packets: HashMap::new(),
@@ -682,10 +687,16 @@ impl Driver {
 
                         let active_dests = self.engine.active_destination_hashes();
 
-                        // Cull known_destinations for destinations no longer in path table
+                        // Retain known destinations while their path is active, while they are
+                        // locally registered, or until their configured TTL expires.
+                        let now = time::now();
+                        let ttl = self.known_destinations_ttl;
                         let kd_before = self.known_destinations.len();
-                        self.known_destinations
-                            .retain(|k, _| active_dests.contains(k) || self.local_destinations.contains_key(k));
+                        self.known_destinations.retain(|k, announced| {
+                            active_dests.contains(k)
+                                || self.local_destinations.contains_key(k)
+                                || now - announced.received_at < ttl
+                        });
                         let kd_removed = kd_before - self.known_destinations.len();
 
                         // Cull rate limiter entries
@@ -5054,6 +5065,60 @@ mod tests {
         assert_eq!(recalled.identity_hash.0, *identity.hash());
         assert_eq!(&recalled.public_key, &identity.get_public_key().unwrap());
         assert_eq!(recalled.hops, 1);
+    }
+
+    #[test]
+    fn known_destinations_cleanup_respects_ttl() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
+            rx,
+            tx.clone(),
+            Box::new(cbs),
+        );
+
+        driver.known_destinations_ttl = 10.0;
+        driver.cache_cleanup_counter = 3599;
+
+        let stale_dest = [0x11; 16];
+        let fresh_dest = [0x22; 16];
+        driver.known_destinations.insert(
+            stale_dest,
+            crate::destination::AnnouncedIdentity {
+                dest_hash: rns_core::types::DestHash(stale_dest),
+                identity_hash: rns_core::types::IdentityHash([0x33; 16]),
+                public_key: [0x44; 64],
+                app_data: None,
+                hops: 1,
+                received_at: time::now() - 20.0,
+                receiving_interface: InterfaceId(1),
+            },
+        );
+        driver.known_destinations.insert(
+            fresh_dest,
+            crate::destination::AnnouncedIdentity {
+                dest_hash: rns_core::types::DestHash(fresh_dest),
+                identity_hash: rns_core::types::IdentityHash([0x55; 16]),
+                public_key: [0x66; 64],
+                app_data: None,
+                hops: 1,
+                received_at: time::now() - 5.0,
+                receiving_interface: InterfaceId(1),
+            },
+        );
+
+        tx.send(Event::Tick).unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        assert!(!driver.known_destinations.contains_key(&stale_dest));
+        assert!(driver.known_destinations.contains_key(&fresh_dest));
     }
 
     #[test]

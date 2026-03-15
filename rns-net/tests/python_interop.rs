@@ -14,6 +14,8 @@ use std::time::Duration;
 use rns_net::{AnnouncedIdentity, DestHash, PacketHash};
 use rns_net::{Callbacks, InterfaceConfig, NodeConfig, RnsNode, TcpClientConfig, MODE_FULL};
 
+const KNOWN_DESTINATIONS_TTL: Duration = Duration::from_secs(48 * 60 * 60);
+
 struct TestCallbacks {
     announce_tx: Sender<(DestHash, u8)>,
 }
@@ -164,6 +166,7 @@ except (KeyboardInterrupt, SystemExit):
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
