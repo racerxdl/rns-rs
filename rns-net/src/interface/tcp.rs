@@ -5,6 +5,7 @@
 use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::os::unix::io::AsRawFd;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -26,11 +27,40 @@ pub struct TcpClientConfig {
     pub connect_timeout: Duration,
     /// Linux network interface to bind the socket to (e.g. "usb0").
     pub device: Option<String>,
+    pub runtime: Arc<Mutex<TcpClientRuntime>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TcpClientRuntime {
+    pub target_host: String,
+    pub target_port: u16,
+    pub reconnect_wait: Duration,
+    pub max_reconnect_tries: Option<u32>,
+    pub connect_timeout: Duration,
+}
+
+impl TcpClientRuntime {
+    pub fn from_config(config: &TcpClientConfig) -> Self {
+        Self {
+            target_host: config.target_host.clone(),
+            target_port: config.target_port,
+            reconnect_wait: config.reconnect_wait,
+            max_reconnect_tries: config.max_reconnect_tries,
+            connect_timeout: config.connect_timeout,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TcpClientRuntimeConfigHandle {
+    pub interface_name: String,
+    pub runtime: Arc<Mutex<TcpClientRuntime>>,
+    pub startup: TcpClientRuntime,
 }
 
 impl Default for TcpClientConfig {
     fn default() -> Self {
-        TcpClientConfig {
+        let mut config = TcpClientConfig {
             name: String::new(),
             target_host: "127.0.0.1".into(),
             target_port: 4242,
@@ -39,7 +69,17 @@ impl Default for TcpClientConfig {
             max_reconnect_tries: None,
             connect_timeout: Duration::from_secs(5),
             device: None,
-        }
+            runtime: Arc::new(Mutex::new(TcpClientRuntime {
+                target_host: "127.0.0.1".into(),
+                target_port: 4242,
+                reconnect_wait: Duration::from_secs(5),
+                max_reconnect_tries: None,
+                connect_timeout: Duration::from_secs(5),
+            })),
+        };
+        let startup = TcpClientRuntime::from_config(&config);
+        config.runtime = Arc::new(Mutex::new(startup));
+        config
     }
 }
 
@@ -144,7 +184,8 @@ fn set_socket_options(stream: &TcpStream) -> io::Result<()> {
 
 /// Try to connect to the target host:port with timeout.
 fn try_connect(config: &TcpClientConfig) -> io::Result<TcpStream> {
-    let addr_str = format!("{}:{}", config.target_host, config.target_port);
+    let runtime = config.runtime.lock().unwrap().clone();
+    let addr_str = format!("{}:{}", runtime.target_host, runtime.target_port);
     let addr = addr_str
         .to_socket_addrs()?
         .next()
@@ -152,12 +193,12 @@ fn try_connect(config: &TcpClientConfig) -> io::Result<TcpStream> {
 
     #[cfg(target_os = "linux")]
     let stream = if let Some(ref device) = config.device {
-        connect_with_device(&addr, device, config.connect_timeout)?
+        connect_with_device(&addr, device, runtime.connect_timeout)?
     } else {
-        TcpStream::connect_timeout(&addr, config.connect_timeout)?
+        TcpStream::connect_timeout(&addr, runtime.connect_timeout)?
     };
     #[cfg(not(target_os = "linux"))]
-    let stream = TcpStream::connect_timeout(&addr, config.connect_timeout)?;
+    let stream = TcpStream::connect_timeout(&addr, runtime.connect_timeout)?;
     set_socket_options(&stream)?;
     Ok(stream)
 }
@@ -371,10 +412,11 @@ fn reader_loop(mut stream: TcpStream, config: TcpClientConfig, tx: EventSender) 
 fn reconnect(config: &TcpClientConfig, tx: &EventSender) -> Option<TcpStream> {
     let mut attempts = 0u32;
     loop {
-        thread::sleep(config.reconnect_wait);
+        let runtime = config.runtime.lock().unwrap().clone();
+        thread::sleep(runtime.reconnect_wait);
         attempts += 1;
 
-        if let Some(max) = config.max_reconnect_tries {
+        if let Some(max) = runtime.max_reconnect_tries {
             if attempts > max {
                 let _ = tx.send(Event::InterfaceDown(config.interface_id));
                 return None;
@@ -494,6 +536,16 @@ impl InterfaceFactory for TcpClientFactory {
     }
 }
 
+pub(crate) fn tcp_client_runtime_handle_from_config(
+    config: &TcpClientConfig,
+) -> TcpClientRuntimeConfigHandle {
+    TcpClientRuntimeConfigHandle {
+        interface_name: config.name.clone(),
+        runtime: Arc::clone(&config.runtime),
+        startup: TcpClientRuntime::from_config(config),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -518,6 +570,13 @@ mod tests {
             reconnect_wait: Duration::from_millis(100),
             max_reconnect_tries: Some(2),
             connect_timeout: Duration::from_secs(2),
+            runtime: Arc::new(Mutex::new(TcpClientRuntime {
+                target_host: "127.0.0.1".into(),
+                target_port: port,
+                reconnect_wait: Duration::from_millis(100),
+                max_reconnect_tries: Some(2),
+                connect_timeout: Duration::from_secs(2),
+            })),
             device: None,
         }
     }
@@ -724,6 +783,7 @@ mod tests {
             max_reconnect_tries: Some(0),
             connect_timeout: Duration::from_millis(500),
             device: None,
+            ..TcpClientConfig::default()
         };
 
         let start_time = std::time::Instant::now();

@@ -27,6 +27,8 @@ use crate::interface::backbone::BackboneRuntimeConfigHandle;
 #[cfg(all(feature = "iface-backbone", test))]
 use crate::interface::backbone::{BackboneAbuseConfig, BackboneServerRuntime};
 #[cfg(feature = "iface-tcp")]
+use crate::interface::tcp::TcpClientRuntimeConfigHandle;
+#[cfg(feature = "iface-tcp")]
 use crate::interface::tcp_server::TcpServerRuntimeConfigHandle;
 #[cfg(all(feature = "iface-tcp", test))]
 use crate::interface::tcp_server::TcpServerRuntime;
@@ -376,6 +378,9 @@ pub struct Driver {
     /// Runtime-config handles for TCP server interfaces, keyed by config name.
     #[cfg(feature = "iface-tcp")]
     pub(crate) tcp_server_runtime: HashMap<String, TcpServerRuntimeConfigHandle>,
+    /// Runtime-config handles for TCP client interfaces, keyed by config name.
+    #[cfg(feature = "iface-tcp")]
+    pub(crate) tcp_client_runtime: HashMap<String, TcpClientRuntimeConfigHandle>,
     /// Runtime-config state for TCP server discovery metadata, keyed by config name.
     #[cfg(feature = "iface-tcp")]
     pub(crate) tcp_server_discovery_runtime: HashMap<String, TcpServerDiscoveryRuntimeHandle>,
@@ -498,6 +503,8 @@ impl Driver {
             backbone_discovery_runtime: HashMap::new(),
             #[cfg(feature = "iface-tcp")]
             tcp_server_runtime: HashMap::new(),
+            #[cfg(feature = "iface-tcp")]
+            tcp_client_runtime: HashMap::new(),
             #[cfg(feature = "iface-tcp")]
             tcp_server_discovery_runtime: HashMap::new(),
             discovered_interfaces: crate::discovery::DiscoveredInterfaceStorage::new(
@@ -686,6 +693,15 @@ impl Driver {
     }
 
     #[cfg(feature = "iface-tcp")]
+    pub(crate) fn register_tcp_client_runtime(
+        &mut self,
+        handle: TcpClientRuntimeConfigHandle,
+    ) {
+        self.tcp_client_runtime
+            .insert(handle.interface_name.clone(), handle);
+    }
+
+    #[cfg(feature = "iface-tcp")]
     pub(crate) fn register_tcp_server_discovery_runtime(
         &mut self,
         handle: TcpServerDiscoveryRuntimeHandle,
@@ -794,6 +810,10 @@ impl Driver {
                 if let Some(entry) = self.tcp_server_runtime_entry(key) {
                     return Some(entry);
                 }
+                #[cfg(feature = "iface-tcp")]
+                if let Some(entry) = self.tcp_client_runtime_entry(key) {
+                    return Some(entry);
+                }
                 None
             }
         }
@@ -822,6 +842,7 @@ impl Driver {
         #[cfg(feature = "iface-tcp")]
         {
             entries.extend(self.list_tcp_server_runtime_config());
+            entries.extend(self.list_tcp_client_runtime_config());
         }
 
         entries
@@ -1212,6 +1233,171 @@ impl Driver {
             }
         }
         entries
+    }
+
+    #[cfg(feature = "iface-tcp")]
+    fn list_tcp_client_runtime_config(&self) -> Vec<RuntimeConfigEntry> {
+        let mut entries = Vec::new();
+        let mut names: Vec<&String> = self.tcp_client_runtime.keys().collect();
+        names.sort();
+        for name in names {
+            for suffix in [
+                "target_host",
+                "target_port",
+                "connect_timeout_secs",
+                "reconnect_wait_secs",
+                "max_reconnect_tries",
+            ] {
+                let key = format!("tcp_client.{}.{}", name, suffix);
+                if let Some(entry) = self.tcp_client_runtime_entry(&key) {
+                    entries.push(entry);
+                }
+            }
+        }
+        entries
+    }
+
+    #[cfg(feature = "iface-tcp")]
+    fn tcp_client_runtime_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
+        let rest = key.strip_prefix("tcp_client.")?;
+        let (name, setting) = rest.split_once('.')?;
+        let handle = self.tcp_client_runtime.get(name)?;
+        let current = handle.runtime.lock().unwrap().clone();
+        let startup = handle.startup.clone();
+        let make_entry = |value: RuntimeConfigValue,
+                          default: RuntimeConfigValue,
+                          description: &str| -> RuntimeConfigEntry {
+            RuntimeConfigEntry {
+                key: key.to_string(),
+                source: if value == default {
+                    RuntimeConfigSource::Startup
+                } else {
+                    RuntimeConfigSource::RuntimeOverride
+                },
+                value,
+                default,
+                apply_mode: RuntimeConfigApplyMode::NextReconnect,
+                description: Some(description.to_string()),
+            }
+        };
+        match setting {
+            "target_host" => Some(make_entry(
+                RuntimeConfigValue::String(current.target_host),
+                RuntimeConfigValue::String(startup.target_host),
+                "TCP client target host; applies on the next reconnect.",
+            )),
+            "target_port" => Some(make_entry(
+                RuntimeConfigValue::Int(current.target_port as i64),
+                RuntimeConfigValue::Int(startup.target_port as i64),
+                "TCP client target port; applies on the next reconnect.",
+            )),
+            "connect_timeout_secs" => Some(make_entry(
+                RuntimeConfigValue::Float(current.connect_timeout.as_secs_f64()),
+                RuntimeConfigValue::Float(startup.connect_timeout.as_secs_f64()),
+                "TCP client connect timeout in seconds; applies on the next reconnect.",
+            )),
+            "reconnect_wait_secs" => Some(make_entry(
+                RuntimeConfigValue::Float(current.reconnect_wait.as_secs_f64()),
+                RuntimeConfigValue::Float(startup.reconnect_wait.as_secs_f64()),
+                "Delay between TCP client reconnect attempts in seconds.",
+            )),
+            "max_reconnect_tries" => Some(make_entry(
+                RuntimeConfigValue::Int(current.max_reconnect_tries.unwrap_or(0) as i64),
+                RuntimeConfigValue::Int(startup.max_reconnect_tries.unwrap_or(0) as i64),
+                "Maximum TCP client reconnect attempts; 0 disables the cap.",
+            )),
+            _ => None,
+        }
+    }
+
+    #[cfg(feature = "iface-tcp")]
+    fn split_tcp_client_runtime_key<'a>(
+        &self,
+        key: &'a str,
+    ) -> Result<(&'a str, &'a str), RuntimeConfigError> {
+        let rest = key.strip_prefix("tcp_client.").ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::UnknownKey,
+            message: format!("unknown runtime-config key '{}'", key),
+        })?;
+        rest.split_once('.').ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::UnknownKey,
+            message: format!("unknown runtime-config key '{}'", key),
+        })
+    }
+
+    #[cfg(feature = "iface-tcp")]
+    fn set_tcp_client_runtime_config(
+        &mut self,
+        key: &str,
+        value: RuntimeConfigValue,
+    ) -> Result<(), RuntimeConfigError> {
+        let (name, setting) = self.split_tcp_client_runtime_key(key)?;
+        let handle = self.tcp_client_runtime.get(name).ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::NotFound,
+            message: format!("tcp client interface '{}' not found", name),
+        })?;
+        let mut runtime = handle.runtime.lock().unwrap();
+        match setting {
+            "target_host" => {
+                runtime.target_host = Self::expect_string(value, key)?;
+                Ok(())
+            }
+            "target_port" => {
+                let port = Self::expect_u64(value, key)?;
+                if port > u16::MAX as u64 {
+                    return Err(RuntimeConfigError {
+                        code: RuntimeConfigErrorCode::InvalidValue,
+                        message: format!("{} must be <= {}", key, u16::MAX),
+                    });
+                }
+                runtime.target_port = port as u16;
+                Ok(())
+            }
+            "connect_timeout_secs" => {
+                runtime.connect_timeout = Duration::from_secs_f64(Self::expect_f64(value, key)?);
+                Ok(())
+            }
+            "reconnect_wait_secs" => {
+                runtime.reconnect_wait = Duration::from_secs_f64(Self::expect_f64(value, key)?);
+                Ok(())
+            }
+            "max_reconnect_tries" => {
+                runtime.max_reconnect_tries = match Self::expect_u64(value, key)? {
+                    0 => None,
+                    raw => Some(raw as u32),
+                };
+                Ok(())
+            }
+            _ => Err(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::UnknownKey,
+                message: format!("unknown runtime-config key '{}'", key),
+            }),
+        }
+    }
+
+    #[cfg(feature = "iface-tcp")]
+    fn reset_tcp_client_runtime_config(&mut self, key: &str) -> Result<(), RuntimeConfigError> {
+        let (name, setting) = self.split_tcp_client_runtime_key(key)?;
+        let handle = self.tcp_client_runtime.get(name).ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::NotFound,
+            message: format!("tcp client interface '{}' not found", name),
+        })?;
+        let mut runtime = handle.runtime.lock().unwrap();
+        let startup = handle.startup.clone();
+        match setting {
+            "target_host" => runtime.target_host = startup.target_host,
+            "target_port" => runtime.target_port = startup.target_port,
+            "connect_timeout_secs" => runtime.connect_timeout = startup.connect_timeout,
+            "reconnect_wait_secs" => runtime.reconnect_wait = startup.reconnect_wait,
+            "max_reconnect_tries" => runtime.max_reconnect_tries = startup.max_reconnect_tries,
+            _ => {
+                return Err(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::UnknownKey,
+                    message: format!("unknown runtime-config key '{}'", key),
+                })
+            }
+        }
+        Ok(())
     }
 
     #[cfg(feature = "iface-tcp")]
@@ -3270,6 +3456,10 @@ impl Driver {
                     _ if key.starts_with("tcp_server.") => {
                         self.set_tcp_server_runtime_config(&key, value)
                     }
+                    #[cfg(feature = "iface-tcp")]
+                    _ if key.starts_with("tcp_client.") => {
+                        self.set_tcp_client_runtime_config(&key, value)
+                    }
                     _ => {
                         return QueryResponse::RuntimeConfigSet(Err(RuntimeConfigError {
                             code: RuntimeConfigErrorCode::UnknownKey,
@@ -3337,6 +3527,10 @@ impl Driver {
                     #[cfg(feature = "iface-tcp")]
                     _ if key.starts_with("tcp_server.") => {
                         self.reset_tcp_server_runtime_config(&key)
+                    }
+                    #[cfg(feature = "iface-tcp")]
+                    _ if key.starts_with("tcp_client.") => {
+                        self.reset_tcp_client_runtime_config(&key)
                     }
                     _ => {
                         return QueryResponse::RuntimeConfigReset(Err(RuntimeConfigError {
@@ -5187,6 +5381,22 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "iface-tcp")]
+    fn register_test_tcp_client(driver: &mut Driver, name: &str) {
+        let startup = crate::interface::tcp::TcpClientRuntime {
+            target_host: "127.0.0.1".into(),
+            target_port: 4242,
+            reconnect_wait: Duration::from_secs(5),
+            max_reconnect_tries: Some(3),
+            connect_timeout: Duration::from_secs(5),
+        };
+        driver.register_tcp_client_runtime(crate::interface::tcp::TcpClientRuntimeConfigHandle {
+            interface_name: name.to_string(),
+            runtime: Arc::new(std::sync::Mutex::new(startup.clone())),
+            startup,
+        });
+    }
+
     impl Callbacks for MockCallbacks {
         fn on_announce(&mut self, announced: crate::destination::AnnouncedIdentity) {
             self.announces
@@ -6968,6 +7178,54 @@ mod tests {
             panic!("expected runtime config reset success");
         };
         assert_eq!(entry.value, RuntimeConfigValue::Null);
+    }
+
+    #[cfg(feature = "iface-tcp")]
+    #[test]
+    fn runtime_config_lists_tcp_client_keys() {
+        let mut driver = new_test_driver();
+        register_test_tcp_client(&mut driver, "uplink");
+        let response = driver.handle_query(QueryRequest::ListRuntimeConfig);
+        let QueryResponse::RuntimeConfigList(entries) = response else {
+            panic!("expected runtime config list");
+        };
+        let keys: Vec<String> = entries.into_iter().map(|entry| entry.key).collect();
+        assert!(keys.contains(&"tcp_client.uplink.target_host".to_string()));
+        assert!(keys.contains(&"tcp_client.uplink.target_port".to_string()));
+        assert!(keys.contains(&"tcp_client.uplink.connect_timeout_secs".to_string()));
+    }
+
+    #[cfg(feature = "iface-tcp")]
+    #[test]
+    fn runtime_config_sets_tcp_client_values() {
+        let mut driver = new_test_driver();
+        register_test_tcp_client(&mut driver, "uplink");
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "tcp_client.uplink.target_host".into(),
+            value: RuntimeConfigValue::String("example.com".into()),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected runtime config set success");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::String("example.com".into()));
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "tcp_client.uplink.target_port".into(),
+            value: RuntimeConfigValue::Int(5150),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected runtime config set success");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Int(5150));
+
+        let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
+            key: "tcp_client.uplink.target_host".into(),
+        });
+        let QueryResponse::RuntimeConfigReset(Ok(entry)) = response else {
+            panic!("expected runtime config reset success");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::String("127.0.0.1".into()));
     }
 
     #[test]
