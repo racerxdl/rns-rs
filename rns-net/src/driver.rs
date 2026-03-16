@@ -22,7 +22,7 @@ use crate::event::{
     RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError, RuntimeConfigErrorCode,
     RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
 };
-#[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+#[cfg(feature = "iface-backbone")]
 use crate::interface::backbone::{BackboneClientRuntimeConfigHandle, BackboneRuntimeConfigHandle};
 #[cfg(all(feature = "iface-backbone", target_os = "linux", test))]
 use crate::interface::backbone::{BackboneAbuseConfig, BackboneClientRuntime, BackboneServerRuntime};
@@ -80,7 +80,7 @@ pub(crate) struct RuntimeConfigDefaults {
     pub(crate) direct_connect_policy: crate::event::HolePunchPolicy,
 }
 
-#[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+#[cfg(feature = "iface-backbone")]
 #[derive(Debug, Clone)]
 pub(crate) struct BackboneDiscoveryRuntime {
     pub(crate) discoverable: bool,
@@ -90,7 +90,7 @@ pub(crate) struct BackboneDiscoveryRuntime {
     pub(crate) ifac_netkey: Option<String>,
 }
 
-#[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+#[cfg(feature = "iface-backbone")]
 #[derive(Debug, Clone)]
 pub(crate) struct BackboneDiscoveryRuntimeHandle {
     pub(crate) interface_name: String,
@@ -397,13 +397,13 @@ pub struct Driver {
     /// Shared timer interval used by the node timer thread.
     pub(crate) tick_interval_ms: Arc<AtomicU64>,
     /// Runtime-config handles for backbone server interfaces, keyed by config name.
-    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+    #[cfg(feature = "iface-backbone")]
     pub(crate) backbone_runtime: HashMap<String, BackboneRuntimeConfigHandle>,
     /// Runtime-config handles for backbone client interfaces, keyed by config name.
-    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+    #[cfg(feature = "iface-backbone")]
     pub(crate) backbone_client_runtime: HashMap<String, BackboneClientRuntimeConfigHandle>,
     /// Runtime-config state for backbone discovery metadata, keyed by config name.
-    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+    #[cfg(feature = "iface-backbone")]
     pub(crate) backbone_discovery_runtime: HashMap<String, BackboneDiscoveryRuntimeHandle>,
     /// Runtime-config handles for TCP server interfaces, keyed by config name.
     #[cfg(feature = "iface-tcp")]
@@ -548,11 +548,11 @@ impl Driver {
             ),
             event_tx: tx,
             tick_interval_ms: Arc::new(AtomicU64::new(DEFAULT_TICK_INTERVAL_MS)),
-            #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+            #[cfg(feature = "iface-backbone")]
             backbone_runtime: HashMap::new(),
-            #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+            #[cfg(feature = "iface-backbone")]
             backbone_client_runtime: HashMap::new(),
-            #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+            #[cfg(feature = "iface-backbone")]
             backbone_discovery_runtime: HashMap::new(),
             #[cfg(feature = "iface-tcp")]
             tcp_server_runtime: HashMap::new(),
@@ -612,7 +612,7 @@ impl Driver {
         self.provider_bridge.is_some()
     }
 
-    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+    #[cfg(feature = "iface-backbone")]
     fn make_discoverable_interface(
         runtime: &BackboneDiscoveryRuntimeHandle,
     ) -> crate::discovery::DiscoverableInterface {
@@ -625,7 +625,7 @@ impl Driver {
         }
     }
 
-    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+    #[cfg(feature = "iface-backbone")]
     fn sync_backbone_discovery_runtime(
         &mut self,
         interface_name: &str,
@@ -731,7 +731,7 @@ impl Driver {
         self.tick_interval_ms = tick_interval_ms;
     }
 
-    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+    #[cfg(feature = "iface-backbone")]
     pub(crate) fn register_backbone_runtime(
         &mut self,
         handle: BackboneRuntimeConfigHandle,
@@ -740,7 +740,7 @@ impl Driver {
             .insert(handle.interface_name.clone(), handle);
     }
 
-    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+    #[cfg(feature = "iface-backbone")]
     pub(crate) fn register_backbone_client_runtime(
         &mut self,
         handle: BackboneClientRuntimeConfigHandle,
@@ -749,7 +749,7 @@ impl Driver {
             .insert(handle.interface_name.clone(), handle);
     }
 
-    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+    #[cfg(feature = "iface-backbone")]
     pub(crate) fn register_backbone_discovery_runtime(
         &mut self,
         handle: BackboneDiscoveryRuntimeHandle,
@@ -924,11 +924,11 @@ impl Driver {
                 "Policy for incoming direct-connect proposals.",
             )),
             _ => {
-                #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+                #[cfg(feature = "iface-backbone")]
                 if let Some(entry) = self.backbone_runtime_entry(key) {
                     return Some(entry);
                 }
-                #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+                #[cfg(feature = "iface-backbone")]
                 if let Some(entry) = self.backbone_client_runtime_entry(key) {
                     return Some(entry);
                 }
@@ -984,7 +984,7 @@ impl Driver {
         .filter_map(|key| self.runtime_config_entry(key))
         .collect();
 
-        #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+        #[cfg(feature = "iface-backbone")]
         {
             entries.extend(self.list_backbone_runtime_config());
             entries.extend(self.list_backbone_client_runtime_config());
@@ -1127,7 +1127,7 @@ impl Driver {
         }
     }
 
-    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+    #[cfg(feature = "iface-backbone")]
     fn split_backbone_runtime_key<'a>(
         &self,
         key: &'a str,
@@ -1142,7 +1142,7 @@ impl Driver {
         })
     }
 
-    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+    #[cfg(feature = "iface-backbone")]
     fn set_optional_duration(
         value: RuntimeConfigValue,
         key: &str,
@@ -1155,7 +1155,7 @@ impl Driver {
         }
     }
 
-    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+    #[cfg(feature = "iface-backbone")]
     fn set_optional_usize(
         value: RuntimeConfigValue,
         key: &str,
@@ -1168,7 +1168,7 @@ impl Driver {
         }
     }
 
-    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+    #[cfg(feature = "iface-backbone")]
     fn set_backbone_runtime_config(
         &mut self,
         key: &str,
@@ -1237,7 +1237,7 @@ impl Driver {
         }
     }
 
-    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+    #[cfg(feature = "iface-backbone")]
     fn split_backbone_discovery_runtime_key<'a>(
         &self,
         key: &'a str,
@@ -1252,7 +1252,7 @@ impl Driver {
         })
     }
 
-    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+    #[cfg(feature = "iface-backbone")]
     fn set_backbone_discovery_runtime_config(
         &mut self,
         key: &str,
@@ -1315,7 +1315,7 @@ impl Driver {
         self.sync_backbone_discovery_runtime(name)
     }
 
-    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+    #[cfg(feature = "iface-backbone")]
     fn reset_backbone_discovery_runtime_config(
         &mut self,
         key: &str,
@@ -1353,7 +1353,7 @@ impl Driver {
         self.sync_backbone_discovery_runtime(name)
     }
 
-    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+    #[cfg(feature = "iface-backbone")]
     fn reset_backbone_runtime_config(&mut self, key: &str) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_backbone_runtime_key(key)?;
         if matches!(
@@ -1395,7 +1395,7 @@ impl Driver {
         Ok(())
     }
 
-    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+    #[cfg(feature = "iface-backbone")]
     fn list_backbone_client_runtime_config(&self) -> Vec<RuntimeConfigEntry> {
         let mut entries = Vec::new();
         let mut names: Vec<&String> = self.backbone_client_runtime.keys().collect();
@@ -1415,7 +1415,7 @@ impl Driver {
         entries
     }
 
-    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+    #[cfg(feature = "iface-backbone")]
     fn backbone_client_runtime_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
         let rest = key.strip_prefix("backbone_client.")?;
         let (name, setting) = rest.split_once('.')?;
@@ -1458,7 +1458,7 @@ impl Driver {
         }
     }
 
-    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+    #[cfg(feature = "iface-backbone")]
     fn split_backbone_client_runtime_key<'a>(
         &self,
         key: &'a str,
@@ -1473,7 +1473,7 @@ impl Driver {
         })
     }
 
-    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+    #[cfg(feature = "iface-backbone")]
     fn set_backbone_client_runtime_config(
         &mut self,
         key: &str,
@@ -1511,7 +1511,7 @@ impl Driver {
         }
     }
 
-    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+    #[cfg(feature = "iface-backbone")]
     fn reset_backbone_client_runtime_config(
         &mut self,
         key: &str,
@@ -3168,7 +3168,7 @@ impl Driver {
         self.sync_tcp_server_discovery_runtime(name)
     }
 
-    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+    #[cfg(feature = "iface-backbone")]
     fn list_backbone_runtime_config(&self) -> Vec<RuntimeConfigEntry> {
         let mut entries = Vec::new();
         let mut names: Vec<&String> = self.backbone_runtime.keys().collect();
@@ -3209,7 +3209,7 @@ impl Driver {
         entries
     }
 
-    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+    #[cfg(feature = "iface-backbone")]
     fn backbone_runtime_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
         let rest = key.strip_prefix("backbone.")?;
         let (name, setting) = rest.split_once('.')?;
@@ -4906,10 +4906,10 @@ impl Driver {
                         self.holepunch_manager.set_policy(policy);
                         Ok(())
                     }
-                    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+                    #[cfg(feature = "iface-backbone")]
                     _ if key.starts_with("backbone.") => self
                         .set_backbone_runtime_config(&key, value),
-                    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+                    #[cfg(feature = "iface-backbone")]
                     _ if key.starts_with("backbone_client.") => {
                         self.set_backbone_client_runtime_config(&key, value)
                     }
@@ -4996,9 +4996,9 @@ impl Driver {
                             .set_policy(defaults.direct_connect_policy);
                         Ok(())
                     }
-                    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+                    #[cfg(feature = "iface-backbone")]
                     _ if key.starts_with("backbone.") => self.reset_backbone_runtime_config(&key),
-                    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+                    #[cfg(feature = "iface-backbone")]
                     _ if key.starts_with("backbone_client.") => {
                         self.reset_backbone_client_runtime_config(&key)
                     }
@@ -6792,7 +6792,7 @@ mod tests {
         driver
     }
 
-    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+    #[cfg(feature = "iface-backbone")]
     fn register_test_backbone(driver: &mut Driver, name: &str) {
         let startup = BackboneServerRuntime {
             max_connections: Some(8),
@@ -6814,7 +6814,7 @@ mod tests {
         });
     }
 
-    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+    #[cfg(feature = "iface-backbone")]
     fn register_test_backbone_client(driver: &mut Driver, name: &str) {
         let startup = BackboneClientRuntime {
             reconnect_wait: Duration::from_secs(5),
@@ -6828,7 +6828,7 @@ mod tests {
         });
     }
 
-    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+    #[cfg(feature = "iface-backbone")]
     fn register_test_backbone_discovery(driver: &mut Driver, name: &str, discoverable: bool) {
         let startup = BackboneDiscoveryRuntime {
             discoverable,
@@ -8613,7 +8613,7 @@ mod tests {
         assert_eq!(driver.rate_limiter_ttl_secs, DEFAULT_RATE_LIMITER_TTL_SECS);
     }
 
-    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+    #[cfg(feature = "iface-backbone")]
     #[test]
     fn runtime_config_lists_backbone_keys() {
         let mut driver = new_test_driver();
@@ -8638,7 +8638,7 @@ mod tests {
         assert!(keys.contains(&"backbone_client.uplink.max_reconnect_tries".to_string()));
     }
 
-    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+    #[cfg(feature = "iface-backbone")]
     #[test]
     fn runtime_config_sets_backbone_values() {
         let mut driver = new_test_driver();
@@ -8760,7 +8760,7 @@ mod tests {
         assert_eq!(entry.value, RuntimeConfigValue::Null);
     }
 
-    #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+    #[cfg(feature = "iface-backbone")]
     #[test]
     fn runtime_config_sets_backbone_client_values() {
         let mut driver = new_test_driver();
