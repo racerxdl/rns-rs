@@ -709,11 +709,36 @@ pub struct BackboneClientConfig {
     pub max_reconnect_tries: Option<u32>,
     pub connect_timeout: Duration,
     pub transport_identity: Option<String>,
+    pub runtime: Arc<Mutex<BackboneClientRuntime>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BackboneClientRuntime {
+    pub reconnect_wait: Duration,
+    pub max_reconnect_tries: Option<u32>,
+    pub connect_timeout: Duration,
+}
+
+impl BackboneClientRuntime {
+    pub fn from_config(config: &BackboneClientConfig) -> Self {
+        Self {
+            reconnect_wait: config.reconnect_wait,
+            max_reconnect_tries: config.max_reconnect_tries,
+            connect_timeout: config.connect_timeout,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BackboneClientRuntimeConfigHandle {
+    pub interface_name: String,
+    pub runtime: Arc<Mutex<BackboneClientRuntime>>,
+    pub startup: BackboneClientRuntime,
 }
 
 impl Default for BackboneClientConfig {
     fn default() -> Self {
-        BackboneClientConfig {
+        let mut config = BackboneClientConfig {
             name: String::new(),
             target_host: "127.0.0.1".into(),
             target_port: 4242,
@@ -722,7 +747,15 @@ impl Default for BackboneClientConfig {
             max_reconnect_tries: None,
             connect_timeout: Duration::from_secs(5),
             transport_identity: None,
-        }
+            runtime: Arc::new(Mutex::new(BackboneClientRuntime {
+                reconnect_wait: Duration::from_secs(5),
+                max_reconnect_tries: None,
+                connect_timeout: Duration::from_secs(5),
+            })),
+        };
+        let startup = BackboneClientRuntime::from_config(&config);
+        config.runtime = Arc::new(Mutex::new(startup));
+        config
     }
 }
 
@@ -739,13 +772,14 @@ impl Writer for BackboneClientWriter {
 
 /// Try to connect to the target host:port with timeout.
 fn try_connect_client(config: &BackboneClientConfig) -> io::Result<TcpStream> {
+    let runtime = config.runtime.lock().unwrap().clone();
     let addr_str = format!("{}:{}", config.target_host, config.target_port);
     let addr = addr_str
         .to_socket_addrs()?
         .next()
         .ok_or_else(|| io::Error::new(io::ErrorKind::AddrNotAvailable, "no addresses resolved"))?;
 
-    let stream = TcpStream::connect_timeout(&addr, config.connect_timeout)?;
+    let stream = TcpStream::connect_timeout(&addr, runtime.connect_timeout)?;
     stream.set_nodelay(true)?;
     set_tcp_keepalive(stream.as_raw_fd());
     Ok(stream)
@@ -840,10 +874,11 @@ fn client_reader_loop(mut stream: TcpStream, config: BackboneClientConfig, tx: E
 fn client_reconnect(config: &BackboneClientConfig, tx: &EventSender) -> Option<TcpStream> {
     let mut attempts = 0u32;
     loop {
-        thread::sleep(config.reconnect_wait);
+        let runtime = config.runtime.lock().unwrap().clone();
+        thread::sleep(runtime.reconnect_wait);
         attempts += 1;
 
-        if let Some(max) = config.max_reconnect_tries {
+        if let Some(max) = runtime.max_reconnect_tries {
             if attempts > max {
                 let _ = tx.send(Event::InterfaceDown(config.interface_id));
                 return None;
@@ -1046,6 +1081,19 @@ pub(crate) fn runtime_handle_from_mode(mode: &BackboneMode) -> Option<BackboneRu
             startup: BackboneServerRuntime::from_config(config),
         }),
         BackboneMode::Client(_) => None,
+    }
+}
+
+pub(crate) fn client_runtime_handle_from_mode(
+    mode: &BackboneMode,
+) -> Option<BackboneClientRuntimeConfigHandle> {
+    match mode {
+        BackboneMode::Client(config) => Some(BackboneClientRuntimeConfigHandle {
+            interface_name: config.name.clone(),
+            runtime: Arc::clone(&config.runtime),
+            startup: BackboneClientRuntime::from_config(config),
+        }),
+        BackboneMode::Server(_) => None,
     }
 }
 
@@ -1334,6 +1382,11 @@ mod tests {
             max_reconnect_tries: Some(2),
             connect_timeout: Duration::from_secs(2),
             transport_identity: None,
+            runtime: Arc::new(Mutex::new(BackboneClientRuntime {
+                reconnect_wait: Duration::from_millis(100),
+                max_reconnect_tries: Some(2),
+                connect_timeout: Duration::from_secs(2),
+            })),
         }
     }
 

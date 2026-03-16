@@ -23,9 +23,9 @@ use crate::event::{
     RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
 };
 #[cfg(feature = "iface-backbone")]
-use crate::interface::backbone::BackboneRuntimeConfigHandle;
+use crate::interface::backbone::{BackboneClientRuntimeConfigHandle, BackboneRuntimeConfigHandle};
 #[cfg(all(feature = "iface-backbone", test))]
-use crate::interface::backbone::{BackboneAbuseConfig, BackboneServerRuntime};
+use crate::interface::backbone::{BackboneAbuseConfig, BackboneClientRuntime, BackboneServerRuntime};
 #[cfg(feature = "iface-tcp")]
 use crate::interface::tcp::TcpClientRuntimeConfigHandle;
 #[cfg(feature = "iface-tcp")]
@@ -372,6 +372,9 @@ pub struct Driver {
     /// Runtime-config handles for backbone server interfaces, keyed by config name.
     #[cfg(feature = "iface-backbone")]
     pub(crate) backbone_runtime: HashMap<String, BackboneRuntimeConfigHandle>,
+    /// Runtime-config handles for backbone client interfaces, keyed by config name.
+    #[cfg(feature = "iface-backbone")]
+    pub(crate) backbone_client_runtime: HashMap<String, BackboneClientRuntimeConfigHandle>,
     /// Runtime-config state for backbone discovery metadata, keyed by config name.
     #[cfg(feature = "iface-backbone")]
     pub(crate) backbone_discovery_runtime: HashMap<String, BackboneDiscoveryRuntimeHandle>,
@@ -499,6 +502,8 @@ impl Driver {
             tick_interval_ms: Arc::new(AtomicU64::new(DEFAULT_TICK_INTERVAL_MS)),
             #[cfg(feature = "iface-backbone")]
             backbone_runtime: HashMap::new(),
+            #[cfg(feature = "iface-backbone")]
+            backbone_client_runtime: HashMap::new(),
             #[cfg(feature = "iface-backbone")]
             backbone_discovery_runtime: HashMap::new(),
             #[cfg(feature = "iface-tcp")]
@@ -675,6 +680,15 @@ impl Driver {
     }
 
     #[cfg(feature = "iface-backbone")]
+    pub(crate) fn register_backbone_client_runtime(
+        &mut self,
+        handle: BackboneClientRuntimeConfigHandle,
+    ) {
+        self.backbone_client_runtime
+            .insert(handle.interface_name.clone(), handle);
+    }
+
+    #[cfg(feature = "iface-backbone")]
     pub(crate) fn register_backbone_discovery_runtime(
         &mut self,
         handle: BackboneDiscoveryRuntimeHandle,
@@ -806,6 +820,10 @@ impl Driver {
                 if let Some(entry) = self.backbone_runtime_entry(key) {
                     return Some(entry);
                 }
+                #[cfg(feature = "iface-backbone")]
+                if let Some(entry) = self.backbone_client_runtime_entry(key) {
+                    return Some(entry);
+                }
                 #[cfg(feature = "iface-tcp")]
                 if let Some(entry) = self.tcp_server_runtime_entry(key) {
                     return Some(entry);
@@ -838,6 +856,7 @@ impl Driver {
         #[cfg(feature = "iface-backbone")]
         {
             entries.extend(self.list_backbone_runtime_config());
+            entries.extend(self.list_backbone_client_runtime_config());
         }
         #[cfg(feature = "iface-tcp")]
         {
@@ -1199,6 +1218,151 @@ impl Driver {
             "flap_blacklist_window_secs" => runtime.abuse.flap_window = startup.abuse.flap_window,
             "flap_max_connection_age_secs" => runtime.abuse.flap_max_connection_age = startup.abuse.flap_max_connection_age,
             "max_connections" => runtime.max_connections = startup.max_connections,
+            _ => {
+                return Err(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::UnknownKey,
+                    message: format!("unknown runtime-config key '{}'", key),
+                })
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    fn list_backbone_client_runtime_config(&self) -> Vec<RuntimeConfigEntry> {
+        let mut entries = Vec::new();
+        let mut names: Vec<&String> = self.backbone_client_runtime.keys().collect();
+        names.sort();
+        for name in names {
+            for suffix in [
+                "connect_timeout_secs",
+                "reconnect_wait_secs",
+                "max_reconnect_tries",
+            ] {
+                let key = format!("backbone_client.{}.{}", name, suffix);
+                if let Some(entry) = self.backbone_client_runtime_entry(&key) {
+                    entries.push(entry);
+                }
+            }
+        }
+        entries
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    fn backbone_client_runtime_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
+        let rest = key.strip_prefix("backbone_client.")?;
+        let (name, setting) = rest.split_once('.')?;
+        let handle = self.backbone_client_runtime.get(name)?;
+        let current = handle.runtime.lock().unwrap().clone();
+        let startup = handle.startup.clone();
+        let make_entry = |value: RuntimeConfigValue,
+                          default: RuntimeConfigValue,
+                          description: &str| -> RuntimeConfigEntry {
+            RuntimeConfigEntry {
+                key: key.to_string(),
+                source: if value == default {
+                    RuntimeConfigSource::Startup
+                } else {
+                    RuntimeConfigSource::RuntimeOverride
+                },
+                value,
+                default,
+                apply_mode: RuntimeConfigApplyMode::NextReconnect,
+                description: Some(description.to_string()),
+            }
+        };
+        match setting {
+            "connect_timeout_secs" => Some(make_entry(
+                RuntimeConfigValue::Float(current.connect_timeout.as_secs_f64()),
+                RuntimeConfigValue::Float(startup.connect_timeout.as_secs_f64()),
+                "Backbone client connect timeout in seconds; applies on the next reconnect.",
+            )),
+            "reconnect_wait_secs" => Some(make_entry(
+                RuntimeConfigValue::Float(current.reconnect_wait.as_secs_f64()),
+                RuntimeConfigValue::Float(startup.reconnect_wait.as_secs_f64()),
+                "Delay between backbone client reconnect attempts in seconds.",
+            )),
+            "max_reconnect_tries" => Some(make_entry(
+                RuntimeConfigValue::Int(current.max_reconnect_tries.unwrap_or(0) as i64),
+                RuntimeConfigValue::Int(startup.max_reconnect_tries.unwrap_or(0) as i64),
+                "Maximum backbone client reconnect attempts; 0 disables the cap.",
+            )),
+            _ => None,
+        }
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    fn split_backbone_client_runtime_key<'a>(
+        &self,
+        key: &'a str,
+    ) -> Result<(&'a str, &'a str), RuntimeConfigError> {
+        let rest = key.strip_prefix("backbone_client.").ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::UnknownKey,
+            message: format!("unknown runtime-config key '{}'", key),
+        })?;
+        rest.split_once('.').ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::UnknownKey,
+            message: format!("unknown runtime-config key '{}'", key),
+        })
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    fn set_backbone_client_runtime_config(
+        &mut self,
+        key: &str,
+        value: RuntimeConfigValue,
+    ) -> Result<(), RuntimeConfigError> {
+        let (name, setting) = self.split_backbone_client_runtime_key(key)?;
+        let handle = self
+            .backbone_client_runtime
+            .get(name)
+            .ok_or(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::NotFound,
+                message: format!("backbone client interface '{}' not found", name),
+            })?;
+        let mut runtime = handle.runtime.lock().unwrap();
+        match setting {
+            "connect_timeout_secs" => {
+                runtime.connect_timeout = Duration::from_secs_f64(Self::expect_f64(value, key)?);
+                Ok(())
+            }
+            "reconnect_wait_secs" => {
+                runtime.reconnect_wait = Duration::from_secs_f64(Self::expect_f64(value, key)?);
+                Ok(())
+            }
+            "max_reconnect_tries" => {
+                runtime.max_reconnect_tries = match Self::expect_u64(value, key)? {
+                    0 => None,
+                    raw => Some(raw as u32),
+                };
+                Ok(())
+            }
+            _ => Err(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::UnknownKey,
+                message: format!("unknown runtime-config key '{}'", key),
+            }),
+        }
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    fn reset_backbone_client_runtime_config(
+        &mut self,
+        key: &str,
+    ) -> Result<(), RuntimeConfigError> {
+        let (name, setting) = self.split_backbone_client_runtime_key(key)?;
+        let handle = self
+            .backbone_client_runtime
+            .get(name)
+            .ok_or(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::NotFound,
+                message: format!("backbone client interface '{}' not found", name),
+            })?;
+        let mut runtime = handle.runtime.lock().unwrap();
+        let startup = handle.startup.clone();
+        match setting {
+            "connect_timeout_secs" => runtime.connect_timeout = startup.connect_timeout,
+            "reconnect_wait_secs" => runtime.reconnect_wait = startup.reconnect_wait,
+            "max_reconnect_tries" => runtime.max_reconnect_tries = startup.max_reconnect_tries,
             _ => {
                 return Err(RuntimeConfigError {
                     code: RuntimeConfigErrorCode::UnknownKey,
@@ -3423,6 +3587,10 @@ impl Driver {
                     #[cfg(feature = "iface-backbone")]
                     _ if key.starts_with("backbone.") => self
                         .set_backbone_runtime_config(&key, value),
+                    #[cfg(feature = "iface-backbone")]
+                    _ if key.starts_with("backbone_client.") => {
+                        self.set_backbone_client_runtime_config(&key, value)
+                    }
                     #[cfg(feature = "iface-tcp")]
                     _ if key.starts_with("tcp_server.") => {
                         self.set_tcp_server_runtime_config(&key, value)
@@ -3495,6 +3663,10 @@ impl Driver {
                     }
                     #[cfg(feature = "iface-backbone")]
                     _ if key.starts_with("backbone.") => self.reset_backbone_runtime_config(&key),
+                    #[cfg(feature = "iface-backbone")]
+                    _ if key.starts_with("backbone_client.") => {
+                        self.reset_backbone_client_runtime_config(&key)
+                    }
                     #[cfg(feature = "iface-tcp")]
                     _ if key.starts_with("tcp_server.") => {
                         self.reset_tcp_server_runtime_config(&key)
@@ -5289,6 +5461,20 @@ mod tests {
     }
 
     #[cfg(feature = "iface-backbone")]
+    fn register_test_backbone_client(driver: &mut Driver, name: &str) {
+        let startup = BackboneClientRuntime {
+            reconnect_wait: Duration::from_secs(5),
+            max_reconnect_tries: Some(3),
+            connect_timeout: Duration::from_secs(5),
+        };
+        driver.register_backbone_client_runtime(BackboneClientRuntimeConfigHandle {
+            interface_name: name.to_string(),
+            runtime: Arc::new(std::sync::Mutex::new(startup.clone())),
+            startup,
+        });
+    }
+
+    #[cfg(feature = "iface-backbone")]
     fn register_test_backbone_discovery(driver: &mut Driver, name: &str, discoverable: bool) {
         let startup = BackboneDiscoveryRuntime {
             discoverable,
@@ -6963,6 +7149,7 @@ mod tests {
     fn runtime_config_lists_backbone_keys() {
         let mut driver = new_test_driver();
         register_test_backbone(&mut driver, "public");
+        register_test_backbone_client(&mut driver, "uplink");
         register_test_backbone_discovery(&mut driver, "public", false);
         let response = driver.handle_query(QueryRequest::ListRuntimeConfig);
         let QueryResponse::RuntimeConfigList(entries) = response else {
@@ -6976,6 +7163,9 @@ mod tests {
         assert!(keys.contains(&"backbone.public.latitude".to_string()));
         assert!(keys.contains(&"backbone.public.longitude".to_string()));
         assert!(keys.contains(&"backbone.public.height".to_string()));
+        assert!(keys.contains(&"backbone_client.uplink.connect_timeout_secs".to_string()));
+        assert!(keys.contains(&"backbone_client.uplink.reconnect_wait_secs".to_string()));
+        assert!(keys.contains(&"backbone_client.uplink.max_reconnect_tries".to_string()));
     }
 
     #[cfg(feature = "iface-backbone")]
@@ -7081,6 +7271,39 @@ mod tests {
             panic!("expected runtime config reset success");
         };
         assert_eq!(entry.value, RuntimeConfigValue::Null);
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    #[test]
+    fn runtime_config_sets_backbone_client_values() {
+        let mut driver = new_test_driver();
+        register_test_backbone_client(&mut driver, "uplink");
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "backbone_client.uplink.connect_timeout_secs".into(),
+            value: RuntimeConfigValue::Float(2.5),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected runtime config set success");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Float(2.5));
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "backbone_client.uplink.max_reconnect_tries".into(),
+            value: RuntimeConfigValue::Int(0),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected runtime config set success");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Int(0));
+
+        let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
+            key: "backbone_client.uplink.connect_timeout_secs".into(),
+        });
+        let QueryResponse::RuntimeConfigReset(Ok(entry)) = response else {
+            panic!("expected runtime config reset success");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Float(5.0));
     }
 
     #[cfg(feature = "iface-tcp")]
