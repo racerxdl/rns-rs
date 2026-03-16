@@ -13,7 +13,7 @@ use std::io::{self, Read, Write};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -51,11 +51,32 @@ pub struct I2pConfig {
     pub connectable: bool,
     /// Directory for key persistence (typically `{config_dir}/storage`).
     pub storage_dir: PathBuf,
+    pub runtime: Arc<Mutex<I2pRuntime>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct I2pRuntime {
+    pub reconnect_wait: Duration,
+}
+
+impl I2pRuntime {
+    pub fn from_config(_config: &I2pConfig) -> Self {
+        Self {
+            reconnect_wait: RECONNECT_WAIT,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct I2pRuntimeConfigHandle {
+    pub interface_name: String,
+    pub runtime: Arc<Mutex<I2pRuntime>>,
+    pub startup: I2pRuntime,
 }
 
 impl Default for I2pConfig {
     fn default() -> Self {
-        I2pConfig {
+        let mut config = I2pConfig {
             name: String::new(),
             interface_id: InterfaceId(0),
             sam_host: "127.0.0.1".into(),
@@ -63,7 +84,13 @@ impl Default for I2pConfig {
             peers: Vec::new(),
             connectable: false,
             storage_dir: PathBuf::from("."),
-        }
+            runtime: Arc::new(Mutex::new(I2pRuntime {
+                reconnect_wait: RECONNECT_WAIT,
+            })),
+        };
+        let startup = I2pRuntime::from_config(&config);
+        config.runtime = Arc::new(Mutex::new(startup));
+        config
     }
 }
 
@@ -208,6 +235,7 @@ fn coordinator(
         let sam_addr2 = sam_addr;
         let session_id2 = session_id.clone();
         let iface_name = config.name.clone();
+        let runtime = Arc::clone(&config.runtime);
 
         thread::Builder::new()
             .name(format!("i2p-out-{}", peer_addr))
@@ -219,6 +247,7 @@ fn coordinator(
                     &iface_name,
                     tx2,
                     next_id2,
+                    runtime,
                 );
             })
             .ok();
@@ -257,6 +286,7 @@ fn outbound_peer_loop(
     iface_name: &str,
     tx: EventSender,
     next_id: Arc<AtomicU64>,
+    runtime: Arc<Mutex<I2pRuntime>>,
 ) {
     loop {
         log::info!("[{}] connecting to I2P peer {}", iface_name, peer_addr);
@@ -267,7 +297,7 @@ fn outbound_peer_loop(
                 Ok(dest) => dest.to_i2p_base64(),
                 Err(e) => {
                     log::warn!("[{}] failed to resolve {}: {}", iface_name, peer_addr, e);
-                    thread::sleep(RECONNECT_WAIT);
+                    thread::sleep(runtime.lock().unwrap().reconnect_wait);
                     continue;
                 }
             }
@@ -292,8 +322,8 @@ fn outbound_peer_loop(
                 let writer_stream = match stream.try_clone() {
                     Ok(s) => s,
                     Err(e) => {
-                        log::warn!("[{}] failed to clone stream: {}", iface_name, e);
-                        thread::sleep(RECONNECT_WAIT);
+                    log::warn!("[{}] failed to clone stream: {}", iface_name, e);
+                        thread::sleep(runtime.lock().unwrap().reconnect_wait);
                         continue;
                     }
                 };
@@ -339,7 +369,7 @@ fn outbound_peer_loop(
                     "[{}] I2P peer {} disconnected, reconnecting in {}s",
                     iface_name,
                     peer_addr,
-                    RECONNECT_WAIT.as_secs()
+                    runtime.lock().unwrap().reconnect_wait.as_secs()
                 );
             }
             Err(e) => {
@@ -352,7 +382,7 @@ fn outbound_peer_loop(
             }
         }
 
-        thread::sleep(RECONNECT_WAIT);
+        thread::sleep(runtime.lock().unwrap().reconnect_wait);
     }
 }
 
@@ -532,6 +562,9 @@ impl InterfaceFactory for I2pFactory {
             connectable,
             peers,
             storage_dir,
+            runtime: Arc::new(Mutex::new(I2pRuntime {
+                reconnect_wait: RECONNECT_WAIT,
+            })),
         }))
     }
 
@@ -546,5 +579,13 @@ impl InterfaceFactory for I2pFactory {
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "wrong config type"))?;
         start(cfg, ctx.tx, ctx.next_dynamic_id)?;
         Ok(StartResult::Listener)
+    }
+}
+
+pub(crate) fn i2p_runtime_handle_from_config(config: &I2pConfig) -> I2pRuntimeConfigHandle {
+    I2pRuntimeConfigHandle {
+        interface_name: config.name.clone(),
+        runtime: Arc::clone(&config.runtime),
+        startup: I2pRuntime::from_config(config),
     }
 }
