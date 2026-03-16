@@ -96,6 +96,10 @@ impl Writer for UdpWriter {
 /// Returns a writer if forward_ip/port are set.
 pub fn start(config: UdpConfig, tx: EventSender) -> io::Result<Option<Box<dyn Writer>>> {
     let id = config.interface_id;
+    {
+        let startup = UdpRuntime::from_config(&config);
+        *config.runtime.lock().unwrap() = startup;
+    }
     let send_socket = UdpSocket::bind("0.0.0.0:0")?;
     send_socket.set_broadcast(true)?;
     let writer: Option<Box<dyn Writer>> = Some(Box::new(UdpWriter {

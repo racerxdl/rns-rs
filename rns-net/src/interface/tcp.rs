@@ -185,7 +185,7 @@ fn set_socket_options(stream: &TcpStream) -> io::Result<()> {
 /// Try to connect to the target host:port with timeout.
 fn try_connect(config: &TcpClientConfig) -> io::Result<TcpStream> {
     let runtime = config.runtime.lock().unwrap().clone();
-    let addr_str = format!("{}:{}", runtime.target_host, runtime.target_port);
+    let addr_str = format!("{}:{}", config.target_host, config.target_port);
     let addr = addr_str
         .to_socket_addrs()?
         .next()
@@ -201,6 +201,37 @@ fn try_connect(config: &TcpClientConfig) -> io::Result<TcpStream> {
     let stream = TcpStream::connect_timeout(&addr, runtime.connect_timeout)?;
     set_socket_options(&stream)?;
     Ok(stream)
+}
+
+fn connect_with_retry(config: &TcpClientConfig) -> io::Result<TcpStream> {
+    match try_connect(config) {
+        Ok(stream) => return Ok(stream),
+        Err(initial_err) => {
+            let mut last_err = initial_err;
+            let mut attempts = 0u32;
+
+            loop {
+                let runtime = config.runtime.lock().unwrap().clone();
+                if let Some(max) = runtime.max_reconnect_tries {
+                    if attempts >= max {
+                        return Err(last_err);
+                    }
+                }
+
+                thread::sleep(runtime.reconnect_wait);
+                attempts += 1;
+                log::info!("[{}] initial connect retry {} ...", config.name, attempts);
+
+                match try_connect(config) {
+                    Ok(stream) => return Ok(stream),
+                    Err(err) => {
+                        log::warn!("[{}] initial connect failed: {}", config.name, err);
+                        last_err = err;
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Create a TCP socket, bind it to a network device, then connect with timeout.
@@ -327,7 +358,7 @@ fn socket_addr_to_raw(addr: &std::net::SocketAddr) -> (libc::sockaddr_storage, l
 
 /// Connect and start the reader thread. Returns the writer for the driver.
 pub fn start(config: TcpClientConfig, tx: EventSender) -> io::Result<Box<dyn Writer>> {
-    let stream = try_connect(&config)?;
+    let stream = connect_with_retry(&config)?;
     let reader_stream = stream.try_clone()?;
     let writer_stream = stream.try_clone()?;
 
@@ -783,6 +814,13 @@ mod tests {
             max_reconnect_tries: Some(0),
             connect_timeout: Duration::from_millis(500),
             device: None,
+            runtime: Arc::new(Mutex::new(TcpClientRuntime {
+                target_host: "192.0.2.1".into(),
+                target_port: 12345,
+                reconnect_wait: Duration::from_millis(100),
+                max_reconnect_tries: Some(0),
+                connect_timeout: Duration::from_millis(500),
+            })),
             ..TcpClientConfig::default()
         };
 

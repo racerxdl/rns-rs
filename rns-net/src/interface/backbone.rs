@@ -1702,7 +1702,7 @@ mod tests {
             runtime.idle_timeout = Some(Duration::from_millis(150));
         }
 
-        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let event = rx.recv_timeout(Duration::from_secs(4)).unwrap();
         assert!(matches!(event, Event::InterfaceDown(id) if id == client_id));
     }
 

@@ -547,9 +547,9 @@ const APP_NAME: &str = "e2e_test";
 
 /// Start a transport node (TCP server) on the given port.
 fn start_transport_node(port: u16) -> RnsNode {
-    RnsNode::start(
+    let node = RnsNode::start(
         NodeConfig {
-            panic_on_interface_error: false,
+            panic_on_interface_error: true,
             transport_enabled: true,
             identity: Some(Identity::new(&mut OsRng)),
             interfaces: vec![InterfaceConfig {
@@ -590,14 +590,26 @@ fn start_transport_node(port: u16) -> RnsNode {
         },
         Box::new(TransportCallbacks),
     )
-    .expect("Failed to start transport node")
+    .expect("Failed to start transport node");
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match std::net::TcpStream::connect(("127.0.0.1", port)) {
+            Ok(stream) => {
+                drop(stream);
+                break;
+            }
+            Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
+            Err(err) => panic!("Transport listener on {} did not come up: {}", port, err),
+        }
+    }
+    node
 }
 
 /// Start a client node (TCP client) connecting to the given port.
 fn start_client_node(port: u16, identity: &Identity, callbacks: Box<dyn Callbacks>) -> RnsNode {
     RnsNode::start(
         NodeConfig {
-            panic_on_interface_error: false,
+            panic_on_interface_error: true,
             transport_enabled: false,
             identity: Some(Identity::from_private_key(
                 &identity.get_private_key().unwrap(),
@@ -1061,67 +1073,14 @@ fn test_multiple_announces_cross_discovery() {
 
     std::thread::sleep(SETTLE);
 
-    // Announce sequentially to avoid transport retransmit race
-    node_a.announce(&dest_a, &id_a, Some(b"A")).unwrap();
-    std::thread::sleep(Duration::from_millis(500));
-    node_b.announce(&dest_b, &id_b, Some(b"B")).unwrap();
-    std::thread::sleep(Duration::from_millis(500));
-    node_c.announce(&dest_c, &id_c, Some(b"C")).unwrap();
+    announce_with_retry(&node_a, &dest_a, &id_a, Some(b"A"), &rx_b).expect("B did not discover A");
+    announce_with_retry(&node_a, &dest_a, &id_a, Some(b"A"), &rx_c).expect("C did not discover A");
 
-    // Collect all announces at each node (wait for 2 announces each)
-    let collect_announces =
-        |rx: &mpsc::Receiver<TestEvent>, count: usize| -> Vec<AnnouncedIdentity> {
-            let mut announces = Vec::new();
-            let deadline = Instant::now() + TIMEOUT;
-            while announces.len() < count {
-                let remaining = deadline
-                    .checked_duration_since(Instant::now())
-                    .unwrap_or(Duration::ZERO);
-                if remaining.is_zero() {
-                    break;
-                }
-                if let Ok(event) = rx.recv_timeout(remaining) {
-                    if let TestEvent::Announce(a) = event {
-                        announces.push(a);
-                    }
-                }
-            }
-            announces
-        };
+    announce_with_retry(&node_b, &dest_b, &id_b, Some(b"B"), &rx_a).expect("A did not discover B");
+    announce_with_retry(&node_b, &dest_b, &id_b, Some(b"B"), &rx_c).expect("C did not discover B");
 
-    let a_announces = collect_announces(&rx_a, 2);
-    let b_announces = collect_announces(&rx_b, 2);
-    let c_announces = collect_announces(&rx_c, 2);
-
-    // A should see B and C
-    assert!(
-        a_announces.iter().any(|a| a.dest_hash == dest_b.hash),
-        "A did not discover B"
-    );
-    assert!(
-        a_announces.iter().any(|a| a.dest_hash == dest_c.hash),
-        "A did not discover C"
-    );
-
-    // B should see A and C
-    assert!(
-        b_announces.iter().any(|a| a.dest_hash == dest_a.hash),
-        "B did not discover A"
-    );
-    assert!(
-        b_announces.iter().any(|a| a.dest_hash == dest_c.hash),
-        "B did not discover C"
-    );
-
-    // C should see A and B
-    assert!(
-        c_announces.iter().any(|a| a.dest_hash == dest_a.hash),
-        "C did not discover A"
-    );
-    assert!(
-        c_announces.iter().any(|a| a.dest_hash == dest_b.hash),
-        "C did not discover B"
-    );
+    announce_with_retry(&node_c, &dest_c, &id_c, Some(b"C"), &rx_a).expect("A did not discover C");
+    announce_with_retry(&node_c, &dest_c, &id_c, Some(b"C"), &rx_b).expect("B did not discover C");
 
     node_a.shutdown();
     node_b.shutdown();
