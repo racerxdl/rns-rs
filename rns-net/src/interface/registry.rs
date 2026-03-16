@@ -52,7 +52,7 @@ impl InterfaceRegistry {
             reg.register(Box::new(super::local::LocalServerFactory));
             reg.register(Box::new(super::local::LocalClientFactory));
         }
-        #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
+        #[cfg(feature = "iface-backbone")]
         reg.register(Box::new(super::backbone::BackboneInterfaceFactory));
         #[cfg(feature = "iface-auto")]
         reg.register(Box::new(super::auto::AutoFactory));

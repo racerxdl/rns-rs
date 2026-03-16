@@ -1,7 +1,7 @@
-//! Backbone TCP mesh interface using Linux epoll.
+//! Backbone TCP mesh interface using cross-platform polling.
 //!
 //! Server mode: listens on a TCP port, accepts peer connections, spawns
-//! dynamic per-peer interfaces. Uses a single epoll thread to multiplex
+//! dynamic per-peer interfaces. Uses a single poll thread to multiplex
 //! all client sockets. HDLC framing for packet boundaries.
 //!
 //! Client mode: connects to a remote backbone server, single TCP connection
@@ -12,11 +12,13 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, TcpListener, TcpStream, ToSocketAddrs};
-use std::os::unix::io::{AsRawFd, RawFd};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
+
+use polling::{Event as PollEvent, Events, Poller};
+use socket2::{SockRef, TcpKeepalive};
 
 use rns_core::constants;
 use rns_core::transport::types::{InterfaceId, InterfaceInfo};
@@ -100,46 +102,18 @@ impl Default for BackboneConfig {
     }
 }
 
-/// Writer that sends HDLC-framed data directly via socket write.
+/// Writer that sends HDLC-framed data over a cloned TCP stream (server mode).
 struct BackboneWriter {
-    fd: RawFd,
+    stream: TcpStream,
 }
 
 impl Writer for BackboneWriter {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
-        let framed = hdlc::frame(data);
-        let mut offset = 0;
-        while offset < framed.len() {
-            let n = unsafe {
-                libc::send(
-                    self.fd,
-                    framed[offset..].as_ptr() as *const libc::c_void,
-                    framed.len() - offset,
-                    libc::MSG_NOSIGNAL,
-                )
-            };
-            if n < 0 {
-                return Err(io::Error::last_os_error());
-            }
-            offset += n as usize;
-        }
-        Ok(())
+        self.stream.write_all(&hdlc::frame(data))
     }
 }
 
-// BackboneWriter's fd is a dup'd copy — we own it
-impl Drop for BackboneWriter {
-    fn drop(&mut self) {
-        unsafe {
-            libc::close(self.fd);
-        }
-    }
-}
-
-/// Safety: the fd is only accessed via send/close which are thread-safe.
-unsafe impl Send for BackboneWriter {}
-
-/// Start a backbone interface. Binds TCP listener, spawns epoll thread.
+/// Start a backbone interface. Binds TCP listener, spawns poll thread.
 pub fn start(config: BackboneConfig, tx: EventSender, next_id: Arc<AtomicU64>) -> io::Result<()> {
     let addr = format!("{}:{}", config.listen_ip, config.listen_port);
     let listener = TcpListener::bind(&addr)?;
@@ -154,10 +128,10 @@ pub fn start(config: BackboneConfig, tx: EventSender, next_id: Arc<AtomicU64>) -
     let name = config.name.clone();
     let runtime = Arc::clone(&config.runtime);
     thread::Builder::new()
-        .name(format!("backbone-epoll-{}", config.interface_id.0))
+        .name(format!("backbone-poll-{}", config.interface_id.0))
         .spawn(move || {
-            if let Err(e) = epoll_loop(listener, name, tx, next_id, runtime) {
-                log::error!("backbone epoll loop error: {}", e);
+            if let Err(e) = poll_loop(listener, name, tx, next_id, runtime) {
+                log::error!("backbone poll loop error: {}", e);
             }
         })?;
 
@@ -168,6 +142,7 @@ pub fn start(config: BackboneConfig, tx: EventSender, next_id: Arc<AtomicU64>) -
 struct ClientState {
     id: InterfaceId,
     peer_ip: IpAddr,
+    stream: TcpStream,
     decoder: hdlc::Decoder,
     connected_at: Instant,
     has_received_data: bool,
@@ -229,33 +204,25 @@ enum DisconnectReason {
     IdleTimeout,
 }
 
-/// Main epoll event loop.
-fn epoll_loop(
+/// Main poll event loop.
+fn poll_loop(
     listener: TcpListener,
     name: String,
     tx: EventSender,
     next_id: Arc<AtomicU64>,
     runtime: Arc<Mutex<BackboneServerRuntime>>,
 ) -> io::Result<()> {
-    let epfd = unsafe { libc::epoll_create1(0) };
-    if epfd < 0 {
-        return Err(io::Error::last_os_error());
-    }
+    let poller = Poller::new()?;
 
-    // Register listener
-    let listener_fd = listener.as_raw_fd();
-    let mut ev = libc::epoll_event {
-        events: libc::EPOLLIN as u32,
-        u64: listener_fd as u64,
-    };
-    if unsafe { libc::epoll_ctl(epfd, libc::EPOLL_CTL_ADD, listener_fd, &mut ev) } < 0 {
-        unsafe { libc::close(epfd) };
-        return Err(io::Error::last_os_error());
-    }
+    const LISTENER_KEY: usize = 0;
 
-    let mut clients: HashMap<RawFd, ClientState> = HashMap::new();
+    // SAFETY: listener outlives its registration in the poller.
+    unsafe { poller.add(&listener, PollEvent::readable(LISTENER_KEY))? };
+
+    let mut clients: HashMap<usize, ClientState> = HashMap::new();
     let mut peers: HashMap<IpAddr, PeerBehaviorState> = HashMap::new();
-    let mut events = vec![libc::epoll_event { events: 0, u64: 0 }; 64];
+    let mut events = Events::new();
+    let mut next_key: usize = 1;
 
     loop {
         let runtime_snapshot = runtime.lock().unwrap().clone();
@@ -263,31 +230,13 @@ fn epoll_loop(
         let idle_timeout = runtime_snapshot.idle_timeout;
         let abuse = runtime_snapshot.abuse.clone();
         cleanup_peer_state(&mut peers, &abuse);
-        let nfds =
-            unsafe { libc::epoll_wait(epfd, events.as_mut_ptr(), events.len() as i32, 1000) };
 
-        if nfds < 0 {
-            let err = io::Error::last_os_error();
-            if err.kind() == io::ErrorKind::Interrupted {
-                continue;
-            }
-            // Clean up
-            for (&fd, _) in &clients {
-                unsafe {
-                    libc::epoll_ctl(epfd, libc::EPOLL_CTL_DEL, fd, std::ptr::null_mut());
-                    libc::close(fd);
-                }
-            }
-            unsafe { libc::close(epfd) };
-            return Err(err);
-        }
+        events.clear();
+        poller.wait(&mut events, Some(Duration::from_secs(1)))?;
 
-        for i in 0..nfds as usize {
-            let ev = &events[i];
-            let fd = ev.u64 as RawFd;
-
-            if fd == listener_fd {
-                // Accept new connection
+        for ev in events.iter() {
+            if ev.key == LISTENER_KEY {
+                // Accept new connections
                 loop {
                     match listener.accept() {
                         Ok((stream, peer_addr)) => {
@@ -316,15 +265,19 @@ fn epoll_loop(
                                 }
                             }
 
-                            let client_fd = stream.as_raw_fd();
-
-                            // Set non-blocking
                             stream.set_nonblocking(true).ok();
                             stream.set_nodelay(true).ok();
+                            set_tcp_keepalive(&stream).ok();
 
-                            // Set SO_KEEPALIVE and TCP options
-                            set_tcp_keepalive(client_fd);
+                            // Prevent SIGPIPE on macOS when writing to broken pipes
+                            #[cfg(target_os = "macos")]
+                            {
+                                let sock = SockRef::from(&stream);
+                                sock.set_nosigpipe(true).ok();
+                            }
 
+                            let key = next_key;
+                            next_key += 1;
                             let client_id = InterfaceId(next_id.fetch_add(1, Ordering::Relaxed));
 
                             log::info!(
@@ -334,51 +287,41 @@ fn epoll_loop(
                                 client_id.0
                             );
 
-                            // Register client fd with epoll
-                            let mut cev = libc::epoll_event {
-                                events: libc::EPOLLIN as u32,
-                                u64: client_fd as u64,
-                            };
-                            if unsafe {
-                                libc::epoll_ctl(epfd, libc::EPOLL_CTL_ADD, client_fd, &mut cev)
-                            } < 0
+                            // Register client with poller
+                            // SAFETY: stream is stored in ClientState and outlives registration.
+                            if let Err(e) =
+                                unsafe { poller.add(&stream, PollEvent::readable(key)) }
                             {
                                 log::warn!(
-                                    "[{}] failed to add client to epoll: {}",
+                                    "[{}] failed to add client to poller: {}",
                                     name,
-                                    io::Error::last_os_error()
+                                    e
                                 );
-                                // stream drops here, closing client_fd — correct
-                                continue;
+                                continue; // stream drops, closing socket
                             }
 
-                            // Prevent TcpStream from closing the fd on drop.
-                            // From here on, we own client_fd via epoll.
-                            std::mem::forget(stream);
-
-                            // Create writer (dup the fd so writer has independent ownership)
-                            let writer_fd = unsafe { libc::dup(client_fd) };
-                            if writer_fd < 0 {
-                                log::warn!("[{}] failed to dup client fd", name);
-                                unsafe {
-                                    libc::epoll_ctl(
-                                        epfd,
-                                        libc::EPOLL_CTL_DEL,
-                                        client_fd,
-                                        std::ptr::null_mut(),
+                            // Create writer via try_clone (cross-platform dup)
+                            let writer_stream = match stream.try_clone() {
+                                Ok(s) => s,
+                                Err(e) => {
+                                    log::warn!(
+                                        "[{}] failed to clone client stream: {}",
+                                        name,
+                                        e
                                     );
-                                    libc::close(client_fd);
+                                    let _ = poller.delete(&stream);
+                                    continue; // stream drops
                                 }
-                                continue;
-                            }
+                            };
                             let writer: Box<dyn Writer> =
-                                Box::new(BackboneWriter { fd: writer_fd });
+                                Box::new(BackboneWriter { stream: writer_stream });
 
                             clients.insert(
-                                client_fd,
+                                key,
                                 ClientState {
                                     id: client_id,
                                     peer_ip,
+                                    stream,
                                     decoder: hdlc::Decoder::new(),
                                     connected_at: Instant::now(),
                                     has_received_data: false,
@@ -387,7 +330,7 @@ fn epoll_loop(
 
                             let info = InterfaceInfo {
                                 id: client_id,
-                                name: format!("BackboneInterface/{}", client_fd),
+                                name: format!("BackboneInterface/{}", client_id.0),
                                 mode: constants::MODE_FULL,
                                 out_capable: true,
                                 in_capable: true,
@@ -410,7 +353,7 @@ fn epoll_loop(
                                 .is_err()
                             {
                                 // Driver shut down
-                                cleanup(epfd, &clients, listener_fd);
+                                cleanup(&poller, &clients, &listener);
                                 return Ok(());
                             }
                         }
@@ -421,26 +364,31 @@ fn epoll_loop(
                         }
                     }
                 }
-            } else if clients.contains_key(&fd) {
-                // Client event
+                // Re-arm listener (oneshot semantics)
+                poller.modify(&listener, PollEvent::readable(LISTENER_KEY))?;
+            } else if clients.contains_key(&ev.key) {
+                let key = ev.key;
                 let mut should_remove = false;
                 let mut client_id = InterfaceId(0);
 
-                if ev.events & libc::EPOLLIN as u32 != 0 {
-                    let mut buf = [0u8; 4096];
-                    let n = unsafe {
-                        libc::recv(fd, buf.as_mut_ptr() as *mut libc::c_void, buf.len(), 0)
-                    };
+                let mut buf = [0u8; 4096];
+                let read_result = {
+                    let client = clients.get_mut(&key).unwrap();
+                    client.stream.read(&mut buf)
+                };
 
-                    if n <= 0 {
-                        if let Some(c) = clients.get(&fd) {
+                match read_result {
+                    Ok(0) | Err(_) => {
+                        if let Some(c) = clients.get(&key) {
                             client_id = c.id;
                         }
                         should_remove = true;
-                    } else if let Some(client) = clients.get_mut(&fd) {
+                    }
+                    Ok(n) => {
+                        let client = clients.get_mut(&key).unwrap();
                         client_id = client.id;
                         client.has_received_data = true;
-                        for frame in client.decoder.feed(&buf[..n as usize]) {
+                        for frame in client.decoder.feed(&buf[..n]) {
                             if tx
                                 .send(Event::Frame {
                                     interface_id: client_id,
@@ -448,59 +396,55 @@ fn epoll_loop(
                                 })
                                 .is_err()
                             {
-                                cleanup(epfd, &clients, listener_fd);
+                                cleanup(&poller, &clients, &listener);
                                 return Ok(());
                             }
                         }
                     }
                 }
 
-                if ev.events & (libc::EPOLLHUP | libc::EPOLLERR) as u32 != 0 {
-                    if let Some(c) = clients.get(&fd) {
-                        client_id = c.id;
-                    }
-                    should_remove = true;
-                }
-
                 if should_remove {
                     disconnect_client(
-                        epfd,
+                        &poller,
                         &mut clients,
                         &mut peers,
                         &abuse,
                         &name,
                         &tx,
-                        fd,
+                        key,
                         client_id,
                         DisconnectReason::RemoteClosed,
                     );
+                } else if let Some(client) = clients.get(&key) {
+                    // Re-arm client (oneshot semantics)
+                    poller.modify(&client.stream, PollEvent::readable(key))?;
                 }
             }
         }
 
         if let Some(timeout) = idle_timeout {
             let now = Instant::now();
-            let timed_out: Vec<(RawFd, InterfaceId)> = clients
+            let timed_out: Vec<(usize, InterfaceId)> = clients
                 .iter()
-                .filter_map(|(&fd, client)| {
+                .filter_map(|(&key, client)| {
                     if client.has_received_data || now.duration_since(client.connected_at) < timeout
                     {
                         None
                     } else {
-                        Some((fd, client.id))
+                        Some((key, client.id))
                     }
                 })
                 .collect();
 
-            for (fd, client_id) in timed_out {
+            for (key, client_id) in timed_out {
                 disconnect_client(
-                    epfd,
+                    &poller,
                     &mut clients,
                     &mut peers,
                     &abuse,
                     &name,
                     &tx,
-                    fd,
+                    key,
                     client_id,
                     DisconnectReason::IdleTimeout,
                 );
@@ -543,17 +487,17 @@ fn is_ip_blacklisted(peers: &mut HashMap<IpAddr, PeerBehaviorState>, peer_ip: Ip
 }
 
 fn disconnect_client(
-    epfd: RawFd,
-    clients: &mut HashMap<RawFd, ClientState>,
+    poller: &Poller,
+    clients: &mut HashMap<usize, ClientState>,
     peers: &mut HashMap<IpAddr, PeerBehaviorState>,
     abuse: &BackboneAbuseConfig,
     name: &str,
     tx: &EventSender,
-    fd: RawFd,
+    key: usize,
     client_id: InterfaceId,
     reason: DisconnectReason,
 ) {
-    let Some(client) = clients.remove(&fd) else {
+    let Some(client) = clients.remove(&key) else {
         return;
     };
 
@@ -570,10 +514,8 @@ fn disconnect_client(
         }
     }
 
-    unsafe {
-        libc::epoll_ctl(epfd, libc::EPOLL_CTL_DEL, fd, std::ptr::null_mut());
-        libc::close(fd);
-    }
+    let _ = poller.delete(&client.stream);
+    // client.stream closes on drop
 
     record_peer_behavior(peers, abuse, name, &client, reason);
     let _ = tx.send(Event::InterfaceDown(client_id));
@@ -644,54 +586,23 @@ fn blacklist_ip(
     );
 }
 
-fn set_tcp_keepalive(fd: RawFd) {
-    unsafe {
-        let one: libc::c_int = 1;
-        libc::setsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            libc::SO_KEEPALIVE,
-            &one as *const _ as *const libc::c_void,
-            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-        );
-        let idle: libc::c_int = 5;
-        libc::setsockopt(
-            fd,
-            libc::IPPROTO_TCP,
-            libc::TCP_KEEPIDLE,
-            &idle as *const _ as *const libc::c_void,
-            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-        );
-        let interval: libc::c_int = 2;
-        libc::setsockopt(
-            fd,
-            libc::IPPROTO_TCP,
-            libc::TCP_KEEPINTVL,
-            &interval as *const _ as *const libc::c_void,
-            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-        );
-        let cnt: libc::c_int = 12;
-        libc::setsockopt(
-            fd,
-            libc::IPPROTO_TCP,
-            libc::TCP_KEEPCNT,
-            &cnt as *const _ as *const libc::c_void,
-            std::mem::size_of::<libc::c_int>() as libc::socklen_t,
-        );
+fn set_tcp_keepalive(stream: &TcpStream) -> io::Result<()> {
+    let sock = SockRef::from(stream);
+    let mut keepalive = TcpKeepalive::new()
+        .with_time(Duration::from_secs(5))
+        .with_interval(Duration::from_secs(2));
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        keepalive = keepalive.with_retries(12);
     }
+    sock.set_tcp_keepalive(&keepalive)
 }
 
-fn cleanup(epfd: RawFd, clients: &HashMap<RawFd, ClientState>, listener_fd: RawFd) {
-    for (&fd, _) in clients {
-        unsafe {
-            libc::epoll_ctl(epfd, libc::EPOLL_CTL_DEL, fd, std::ptr::null_mut());
-            libc::close(fd);
-        }
+fn cleanup(poller: &Poller, clients: &HashMap<usize, ClientState>, listener: &TcpListener) {
+    for (_, client) in clients {
+        let _ = poller.delete(&client.stream);
     }
-    unsafe {
-        libc::epoll_ctl(epfd, libc::EPOLL_CTL_DEL, listener_fd, std::ptr::null_mut());
-        libc::close(epfd);
-    }
+    let _ = poller.delete(listener);
 }
 
 // ---------------------------------------------------------------------------
@@ -781,7 +692,15 @@ fn try_connect_client(config: &BackboneClientConfig) -> io::Result<TcpStream> {
 
     let stream = TcpStream::connect_timeout(&addr, runtime.connect_timeout)?;
     stream.set_nodelay(true)?;
-    set_tcp_keepalive(stream.as_raw_fd());
+    set_tcp_keepalive(&stream).ok();
+
+    // Prevent SIGPIPE on macOS when writing to broken pipes
+    #[cfg(target_os = "macos")]
+    {
+        let sock = SockRef::from(&stream);
+        sock.set_nosigpipe(true).ok();
+    }
+
     Ok(stream)
 }
 

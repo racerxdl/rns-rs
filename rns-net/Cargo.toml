@@ -29,6 +29,7 @@ log = "0.4"
 rayon = "1"
 libc = "0.2"
 socket2 = { version = "0.5", features = ["all"] }
+polling = "3"
 bzip2 = "0.5"
 serde = { version = "1", features = ["derive"], optional = true }
 bincode = { version = "1", optional = true }
