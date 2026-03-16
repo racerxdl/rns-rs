@@ -1198,6 +1198,10 @@ impl Driver {
                 runtime.idle_timeout = Self::set_optional_duration(value, key)?;
                 Ok(())
             }
+            "write_stall_timeout_secs" => {
+                runtime.write_stall_timeout = Self::set_optional_duration(value, key)?;
+                Ok(())
+            }
             "blacklist_duration_secs" => {
                 runtime.abuse.blacklist_duration = Self::set_optional_duration(value, key)?;
                 Ok(())
@@ -1373,6 +1377,7 @@ impl Driver {
         let startup = handle.startup.clone();
         match setting {
             "idle_timeout_secs" => runtime.idle_timeout = startup.idle_timeout,
+            "write_stall_timeout_secs" => runtime.write_stall_timeout = startup.write_stall_timeout,
             "blacklist_duration_secs" => runtime.abuse.blacklist_duration = startup.abuse.blacklist_duration,
             "idle_timeout_blacklist_threshold" => runtime.abuse.idle_timeout_threshold = startup.abuse.idle_timeout_threshold,
             "idle_timeout_blacklist_window_secs" => runtime.abuse.idle_timeout_window = startup.abuse.idle_timeout_window,
@@ -3171,6 +3176,7 @@ impl Driver {
         for name in names {
             for suffix in [
                 "idle_timeout_secs",
+                "write_stall_timeout_secs",
                 "blacklist_duration_secs",
                 "idle_timeout_blacklist_threshold",
                 "idle_timeout_blacklist_window_secs",
@@ -3334,6 +3340,12 @@ impl Driver {
                     RuntimeConfigValue::Float(startup.idle_timeout.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
                     RuntimeConfigApplyMode::Immediate,
                     "Disconnect silent inbound peers after this many seconds; 0 disables the timeout.",
+                )),
+                "write_stall_timeout_secs" => Some(make_entry(
+                    RuntimeConfigValue::Float(current.write_stall_timeout.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
+                    RuntimeConfigValue::Float(startup.write_stall_timeout.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Disconnect peers whose send buffer remains unwritable for this many seconds; 0 disables the timeout.",
                 )),
                 "blacklist_duration_secs" => Some(make_entry(
                     RuntimeConfigValue::Float(current.abuse.blacklist_duration.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
@@ -6785,6 +6797,7 @@ mod tests {
         let startup = BackboneServerRuntime {
             max_connections: Some(8),
             idle_timeout: Some(Duration::from_secs(10)),
+            write_stall_timeout: Some(Duration::from_secs(30)),
             abuse: BackboneAbuseConfig {
                 blacklist_duration: Some(Duration::from_secs(120)),
                 idle_timeout_threshold: Some(4),
@@ -8613,6 +8626,7 @@ mod tests {
         };
         let keys: Vec<String> = entries.into_iter().map(|entry| entry.key).collect();
         assert!(keys.contains(&"backbone.public.idle_timeout_secs".to_string()));
+        assert!(keys.contains(&"backbone.public.write_stall_timeout_secs".to_string()));
         assert!(keys.contains(&"backbone.public.max_connections".to_string()));
         assert!(keys.contains(&"backbone.public.discoverable".to_string()));
         assert!(keys.contains(&"backbone.public.discovery_name".to_string()));
@@ -8642,6 +8656,15 @@ mod tests {
         assert_eq!(entry.value, RuntimeConfigValue::Float(2.5));
 
         let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "backbone.public.write_stall_timeout_secs".into(),
+            value: RuntimeConfigValue::Float(15.0),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected runtime config set success");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Float(15.0));
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
             key: "backbone.public.max_connections".into(),
             value: RuntimeConfigValue::Int(0),
         });
@@ -8657,6 +8680,14 @@ mod tests {
             panic!("expected runtime config reset success");
         };
         assert_eq!(entry.value, RuntimeConfigValue::Int(8));
+
+        let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
+            key: "backbone.public.write_stall_timeout_secs".into(),
+        });
+        let QueryResponse::RuntimeConfigReset(Ok(entry)) = response else {
+            panic!("expected runtime config reset success");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Float(30.0));
 
         let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
             key: "backbone.public.discoverable".into(),

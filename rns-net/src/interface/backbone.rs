@@ -11,7 +11,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, Read, Write};
-use std::net::{IpAddr, TcpListener, TcpStream, ToSocketAddrs};
+use std::net::{IpAddr, Shutdown, TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -40,6 +40,7 @@ pub struct BackboneConfig {
     pub interface_id: InterfaceId,
     pub max_connections: Option<usize>,
     pub idle_timeout: Option<Duration>,
+    pub write_stall_timeout: Option<Duration>,
     pub abuse: BackboneAbuseConfig,
     pub runtime: Arc<Mutex<BackboneServerRuntime>>,
 }
@@ -60,6 +61,7 @@ pub struct BackboneAbuseConfig {
 pub struct BackboneServerRuntime {
     pub max_connections: Option<usize>,
     pub idle_timeout: Option<Duration>,
+    pub write_stall_timeout: Option<Duration>,
     pub abuse: BackboneAbuseConfig,
 }
 
@@ -68,6 +70,7 @@ impl BackboneServerRuntime {
         Self {
             max_connections: config.max_connections,
             idle_timeout: config.idle_timeout,
+            write_stall_timeout: config.write_stall_timeout,
             abuse: config.abuse.clone(),
         }
     }
@@ -89,10 +92,12 @@ impl Default for BackboneConfig {
             interface_id: InterfaceId(0),
             max_connections: None,
             idle_timeout: None,
+            write_stall_timeout: None,
             abuse: BackboneAbuseConfig::default(),
             runtime: Arc::new(Mutex::new(BackboneServerRuntime {
                 max_connections: None,
                 idle_timeout: None,
+                write_stall_timeout: None,
                 abuse: BackboneAbuseConfig::default(),
             })),
         };
@@ -105,11 +110,101 @@ impl Default for BackboneConfig {
 /// Writer that sends HDLC-framed data over a cloned TCP stream (server mode).
 struct BackboneWriter {
     stream: TcpStream,
+    runtime: Arc<Mutex<BackboneServerRuntime>>,
+    interface_name: String,
+    interface_id: InterfaceId,
+    event_tx: EventSender,
+    pending: Vec<u8>,
+    stall_started: Option<Instant>,
+    disconnect_notified: bool,
 }
 
 impl Writer for BackboneWriter {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
-        self.stream.write_all(&hdlc::frame(data))
+        let write_stall_timeout = self.runtime.lock().unwrap().write_stall_timeout;
+        if !self.pending.is_empty() {
+            self.flush_pending(write_stall_timeout)?;
+            if !self.pending.is_empty() {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "backbone writer still stalled",
+                ));
+            }
+        }
+
+        let frame = hdlc::frame(data);
+        self.write_buffer(&frame, write_stall_timeout)
+    }
+}
+
+impl BackboneWriter {
+    fn write_buffer(
+        &mut self,
+        data: &[u8],
+        write_stall_timeout: Option<Duration>,
+    ) -> io::Result<()> {
+        let mut written = 0usize;
+        while written < data.len() {
+            match self.stream.write(&data[written..]) {
+                Ok(0) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WriteZero,
+                        "backbone writer wrote zero bytes",
+                    ))
+                }
+                Ok(n) => {
+                    written += n;
+                    self.stall_started = None;
+                }
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    let now = Instant::now();
+                    let started = self.stall_started.get_or_insert(now);
+                    if let Some(timeout) = write_stall_timeout {
+                        if now.duration_since(*started) >= timeout {
+                            return Err(self.disconnect_for_write_stall(timeout));
+                        }
+                    }
+                    self.pending.extend_from_slice(&data[written..]);
+                    return Err(io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "backbone writer would block",
+                    ));
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
+    }
+
+    fn flush_pending(&mut self, write_stall_timeout: Option<Duration>) -> io::Result<()> {
+        if self.pending.is_empty() {
+            return Ok(());
+        }
+
+        let pending = std::mem::take(&mut self.pending);
+        match self.write_buffer(&pending, write_stall_timeout) {
+            Ok(()) => Ok(()),
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn disconnect_for_write_stall(&mut self, timeout: Duration) -> io::Error {
+        if !self.disconnect_notified {
+            log::warn!(
+                "[{}] backbone client {} disconnected due to write stall timeout ({:?})",
+                self.interface_name,
+                self.interface_id.0,
+                timeout
+            );
+            let _ = self.stream.shutdown(Shutdown::Both);
+            let _ = self.event_tx.send(Event::InterfaceDown(self.interface_id));
+            self.disconnect_notified = true;
+        }
+        io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!("backbone writer stalled for {:?}", timeout),
+        )
     }
 }
 
@@ -314,7 +409,16 @@ fn poll_loop(
                                 }
                             };
                             let writer: Box<dyn Writer> =
-                                Box::new(BackboneWriter { stream: writer_stream });
+                                Box::new(BackboneWriter {
+                                    stream: writer_stream,
+                                    runtime: Arc::clone(&runtime),
+                                    interface_name: name.clone(),
+                                    interface_id: client_id,
+                                    event_tx: tx.clone(),
+                                    pending: Vec::new(),
+                                    stall_started: None,
+                                    disconnect_notified: false,
+                                });
 
                             clients.insert(
                                 key,
@@ -903,6 +1007,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                 .get("max_connections")
                 .and_then(|v| v.parse().ok());
             let idle_timeout = parse_positive_duration_secs(params, "idle_timeout");
+            let write_stall_timeout = parse_positive_duration_secs(params, "write_stall_timeout");
             let abuse = BackboneAbuseConfig {
                 blacklist_duration: parse_positive_duration_secs(params, "blacklist_duration"),
                 idle_timeout_threshold: params
@@ -928,10 +1033,12 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                 interface_id: id,
                 max_connections,
                 idle_timeout,
+                write_stall_timeout,
                 abuse,
                 runtime: Arc::new(Mutex::new(BackboneServerRuntime {
                     max_connections: None,
                     idle_timeout: None,
+                    write_stall_timeout: None,
                     abuse: BackboneAbuseConfig::default(),
                 })),
             };
@@ -1035,6 +1142,7 @@ mod tests {
         interface_id: u64,
         max_connections: Option<usize>,
         idle_timeout: Option<Duration>,
+        write_stall_timeout: Option<Duration>,
         abuse: BackboneAbuseConfig,
     ) -> BackboneConfig {
         let mut config = BackboneConfig {
@@ -1044,10 +1152,12 @@ mod tests {
             interface_id: InterfaceId(interface_id),
             max_connections,
             idle_timeout,
+            write_stall_timeout,
             abuse,
             runtime: Arc::new(Mutex::new(BackboneServerRuntime {
                 max_connections: None,
                 idle_timeout: None,
+                write_stall_timeout: None,
                 abuse: BackboneAbuseConfig::default(),
             })),
         };
@@ -1062,7 +1172,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(8000));
 
-        let config = make_server_config(port, 80, None, None, BackboneAbuseConfig::default());
+        let config = make_server_config(port, 80, None, None, None, BackboneAbuseConfig::default());
 
         start(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -1089,7 +1199,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(8100));
 
-        let config = make_server_config(port, 81, None, None, BackboneAbuseConfig::default());
+        let config = make_server_config(port, 81, None, None, None, BackboneAbuseConfig::default());
 
         start(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -1119,7 +1229,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(8200));
 
-        let config = make_server_config(port, 82, None, None, BackboneAbuseConfig::default());
+        let config = make_server_config(port, 82, None, None, None, BackboneAbuseConfig::default());
 
         start(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -1153,7 +1263,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(8300));
 
-        let config = make_server_config(port, 83, None, None, BackboneAbuseConfig::default());
+        let config = make_server_config(port, 83, None, None, None, BackboneAbuseConfig::default());
 
         start(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -1180,7 +1290,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(8400));
 
-        let config = make_server_config(port, 84, None, None, BackboneAbuseConfig::default());
+        let config = make_server_config(port, 84, None, None, None, BackboneAbuseConfig::default());
 
         start(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -1208,7 +1318,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(8500));
 
-        let config = make_server_config(port, 85, None, None, BackboneAbuseConfig::default());
+        let config = make_server_config(port, 85, None, None, None, BackboneAbuseConfig::default());
 
         start(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -1245,7 +1355,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(8600));
 
-        let config = make_server_config(port, 86, None, None, BackboneAbuseConfig::default());
+        let config = make_server_config(port, 86, None, None, None, BackboneAbuseConfig::default());
 
         // Should not error
         start(config, tx, next_id).unwrap();
@@ -1257,7 +1367,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(8700));
 
-        let config = make_server_config(port, 87, None, None, BackboneAbuseConfig::default());
+        let config = make_server_config(port, 87, None, None, None, BackboneAbuseConfig::default());
 
         start(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -1381,7 +1491,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(8800));
 
-        let config = make_server_config(port, 88, Some(2), None, BackboneAbuseConfig::default());
+        let config = make_server_config(port, 88, Some(2), None, None, BackboneAbuseConfig::default());
 
         start(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -1420,7 +1530,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(8900));
 
-        let config = make_server_config(port, 89, Some(1), None, BackboneAbuseConfig::default());
+        let config = make_server_config(port, 89, Some(1), None, None, BackboneAbuseConfig::default());
 
         start(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
@@ -1488,6 +1598,7 @@ mod tests {
             94,
             None,
             Some(Duration::from_millis(150)),
+            None,
             BackboneAbuseConfig::default(),
         );
 
@@ -1517,6 +1628,7 @@ mod tests {
             95,
             None,
             Some(Duration::from_millis(200)),
+            None,
             BackboneAbuseConfig::default(),
         );
 
@@ -1561,6 +1673,7 @@ mod tests {
             96,
             None,
             Some(Duration::from_millis(100)),
+            None,
             BackboneAbuseConfig {
                 blacklist_duration: Some(Duration::from_millis(600)),
                 idle_timeout_threshold: Some(2),
@@ -1603,7 +1716,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(9650));
 
-        let config = make_server_config(port, 97, None, None, BackboneAbuseConfig::default());
+        let config = make_server_config(port, 97, None, None, None, BackboneAbuseConfig::default());
         let runtime = Arc::clone(&config.runtime);
 
         start(config, tx, next_id).unwrap();
@@ -1626,12 +1739,64 @@ mod tests {
     }
 
     #[test]
+    fn backbone_write_stall_timeout_disconnects_unwritable_client() {
+        let port = find_free_port();
+        let (tx, rx) = mpsc::channel();
+        let next_id = Arc::new(AtomicU64::new(9660));
+
+        let config = make_server_config(
+            port,
+            98,
+            None,
+            None,
+            Some(Duration::from_millis(50)),
+            BackboneAbuseConfig::default(),
+        );
+
+        start(config, tx, next_id).unwrap();
+        thread::sleep(Duration::from_millis(50));
+
+        let client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        client.set_read_timeout(Some(Duration::from_millis(100))).unwrap();
+        let sock = SockRef::from(&client);
+        sock.set_recv_buffer_size(4096).ok();
+
+        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let (client_id, mut writer) = match event {
+            Event::InterfaceUp(id, Some(writer), _) => (id, writer),
+            other => panic!("expected InterfaceUp with writer, got {:?}", other),
+        };
+
+        let payload = vec![0x55; 512 * 1024];
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut stalled = false;
+        while Instant::now() < deadline {
+            match writer.send_frame(&payload) {
+                Ok(()) => {}
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(ref e) if e.kind() == io::ErrorKind::TimedOut => {
+                    stalled = true;
+                    break;
+                }
+                Err(e) => panic!("unexpected send error: {}", e),
+            }
+        }
+
+        assert!(stalled, "expected writer to time out on persistent stall");
+        let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(matches!(event, Event::InterfaceDown(id) if id == client_id));
+    }
+
+    #[test]
     fn backbone_parse_config_reads_abuse_settings() {
         let factory = BackboneInterfaceFactory;
         let mut params = HashMap::new();
         params.insert("listen_ip".into(), "127.0.0.1".into());
         params.insert("listen_port".into(), "4242".into());
         params.insert("idle_timeout".into(), "15".into());
+        params.insert("write_stall_timeout".into(), "45".into());
         params.insert("blacklist_duration".into(), "120".into());
         params.insert("idle_timeout_blacklist_threshold".into(), "4".into());
         params.insert("idle_timeout_blacklist_window".into(), "300".into());
@@ -1649,6 +1814,7 @@ mod tests {
                 assert_eq!(config.listen_ip, "127.0.0.1");
                 assert_eq!(config.listen_port, 4242);
                 assert_eq!(config.idle_timeout, Some(Duration::from_secs(15)));
+                assert_eq!(config.write_stall_timeout, Some(Duration::from_secs(45)));
                 assert_eq!(config.abuse.blacklist_duration, Some(Duration::from_secs(120)));
                 assert_eq!(config.abuse.idle_timeout_threshold, Some(4));
                 assert_eq!(
