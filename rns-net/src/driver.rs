@@ -58,6 +58,24 @@ pub(crate) struct RuntimeConfigDefaults {
     pub(crate) direct_connect_policy: crate::event::HolePunchPolicy,
 }
 
+#[cfg(feature = "iface-backbone")]
+#[derive(Debug, Clone)]
+pub(crate) struct BackboneDiscoveryRuntime {
+    pub(crate) discoverable: bool,
+    pub(crate) config: crate::discovery::DiscoveryConfig,
+    pub(crate) transport_enabled: bool,
+    pub(crate) ifac_netname: Option<String>,
+    pub(crate) ifac_netkey: Option<String>,
+}
+
+#[cfg(feature = "iface-backbone")]
+#[derive(Debug, Clone)]
+pub(crate) struct BackboneDiscoveryRuntimeHandle {
+    pub(crate) interface_name: String,
+    pub(crate) current: BackboneDiscoveryRuntime,
+    pub(crate) startup: BackboneDiscoveryRuntime,
+}
+
 /// Thin wrapper providing `EngineAccess` for a `TransportEngine` + Driver interfaces.
 #[cfg(feature = "rns-hooks")]
 struct EngineRef<'a> {
@@ -334,6 +352,9 @@ pub struct Driver {
     /// Runtime-config handles for backbone server interfaces, keyed by config name.
     #[cfg(feature = "iface-backbone")]
     pub(crate) backbone_runtime: HashMap<String, BackboneRuntimeConfigHandle>,
+    /// Runtime-config state for backbone discovery metadata, keyed by config name.
+    #[cfg(feature = "iface-backbone")]
+    pub(crate) backbone_discovery_runtime: HashMap<String, BackboneDiscoveryRuntimeHandle>,
     /// Runtime-config handles for TCP server interfaces, keyed by config name.
     #[cfg(feature = "iface-tcp")]
     pub(crate) tcp_server_runtime: HashMap<String, TcpServerRuntimeConfigHandle>,
@@ -452,6 +473,8 @@ impl Driver {
             tick_interval_ms: Arc::new(AtomicU64::new(DEFAULT_TICK_INTERVAL_MS)),
             #[cfg(feature = "iface-backbone")]
             backbone_runtime: HashMap::new(),
+            #[cfg(feature = "iface-backbone")]
+            backbone_discovery_runtime: HashMap::new(),
             #[cfg(feature = "iface-tcp")]
             tcp_server_runtime: HashMap::new(),
             discovered_interfaces: crate::discovery::DiscoveredInterfaceStorage::new(
@@ -493,6 +516,53 @@ impl Driver {
         self.provider_bridge.is_some()
     }
 
+    #[cfg(feature = "iface-backbone")]
+    fn make_discoverable_interface(
+        runtime: &BackboneDiscoveryRuntimeHandle,
+    ) -> crate::discovery::DiscoverableInterface {
+        crate::discovery::DiscoverableInterface {
+            interface_name: runtime.interface_name.clone(),
+            config: runtime.current.config.clone(),
+            transport_enabled: runtime.current.transport_enabled,
+            ifac_netname: runtime.current.ifac_netname.clone(),
+            ifac_netkey: runtime.current.ifac_netkey.clone(),
+        }
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    fn sync_backbone_discovery_runtime(
+        &mut self,
+        interface_name: &str,
+    ) -> Result<(), RuntimeConfigError> {
+        let handle = self
+            .backbone_discovery_runtime
+            .get(interface_name)
+            .ok_or(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::NotFound,
+                message: format!("backbone interface '{}' not found", interface_name),
+            })?
+            .clone();
+
+        if handle.current.discoverable {
+            let iface = Self::make_discoverable_interface(&handle);
+            if let Some(announcer) = self.interface_announcer.as_mut() {
+                announcer.upsert_interface(iface);
+            } else if let Some(identity) = self.transport_identity.as_ref() {
+                self.interface_announcer = Some(crate::discovery::InterfaceAnnouncer::new(
+                    *identity.hash(),
+                    vec![iface],
+                ));
+            }
+        } else if let Some(announcer) = self.interface_announcer.as_mut() {
+            announcer.remove_interface(interface_name);
+            if announcer.is_empty() {
+                self.interface_announcer = None;
+            }
+        }
+
+        Ok(())
+    }
+
     #[cfg(feature = "rns-hooks")]
     fn update_hook_program<F>(
         &mut self,
@@ -524,6 +594,15 @@ impl Driver {
         handle: BackboneRuntimeConfigHandle,
     ) {
         self.backbone_runtime
+            .insert(handle.interface_name.clone(), handle);
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    pub(crate) fn register_backbone_discovery_runtime(
+        &mut self,
+        handle: BackboneDiscoveryRuntimeHandle,
+    ) {
+        self.backbone_discovery_runtime
             .insert(handle.interface_name.clone(), handle);
     }
 
@@ -718,6 +797,55 @@ impl Driver {
         }
     }
 
+    fn expect_bool(value: RuntimeConfigValue, key: &str) -> Result<bool, RuntimeConfigError> {
+        match value {
+            RuntimeConfigValue::Bool(v) => Ok(v),
+            _ => Err(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::InvalidType,
+                message: format!("{} expects a boolean", key),
+            }),
+        }
+    }
+
+    fn expect_string(value: RuntimeConfigValue, key: &str) -> Result<String, RuntimeConfigError> {
+        match value {
+            RuntimeConfigValue::String(v) => Ok(v),
+            _ => Err(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::InvalidType,
+                message: format!("{} expects a string", key),
+            }),
+        }
+    }
+
+    fn expect_optional_f64(
+        value: RuntimeConfigValue,
+        key: &str,
+    ) -> Result<Option<f64>, RuntimeConfigError> {
+        match value {
+            RuntimeConfigValue::Null => Ok(None),
+            RuntimeConfigValue::Float(v) => Ok(Some(v)),
+            RuntimeConfigValue::Int(v) => Ok(Some(v as f64)),
+            _ => Err(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::InvalidType,
+                message: format!("{} expects a numeric value or null", key),
+            }),
+        }
+    }
+
+    fn expect_optional_string(
+        value: RuntimeConfigValue,
+        key: &str,
+    ) -> Result<Option<String>, RuntimeConfigError> {
+        match value {
+            RuntimeConfigValue::Null => Ok(None),
+            RuntimeConfigValue::String(v) => Ok(Some(v)),
+            _ => Err(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::InvalidType,
+                message: format!("{} expects a string or null", key),
+            }),
+        }
+    }
+
     #[cfg(feature = "iface-backbone")]
     fn split_backbone_runtime_key<'a>(
         &self,
@@ -766,6 +894,19 @@ impl Driver {
         value: RuntimeConfigValue,
     ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_backbone_runtime_key(key)?;
+        if matches!(
+            setting,
+            "discoverable"
+                | "discovery_name"
+                | "announce_interval_secs"
+                | "reachable_on"
+                | "stamp_value"
+                | "latitude"
+                | "longitude"
+                | "height"
+        ) {
+            return self.set_backbone_discovery_runtime_config(key, value);
+        }
         let handle = self.backbone_runtime.get(name).ok_or(RuntimeConfigError {
             code: RuntimeConfigErrorCode::NotFound,
             message: format!("backbone interface '{}' not found", name),
@@ -812,8 +953,137 @@ impl Driver {
     }
 
     #[cfg(feature = "iface-backbone")]
+    fn split_backbone_discovery_runtime_key<'a>(
+        &self,
+        key: &'a str,
+    ) -> Result<(&'a str, &'a str), RuntimeConfigError> {
+        let rest = key.strip_prefix("backbone.").ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::UnknownKey,
+            message: format!("unknown runtime-config key '{}'", key),
+        })?;
+        rest.split_once('.').ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::UnknownKey,
+            message: format!("unknown runtime-config key '{}'", key),
+        })
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    fn set_backbone_discovery_runtime_config(
+        &mut self,
+        key: &str,
+        value: RuntimeConfigValue,
+    ) -> Result<(), RuntimeConfigError> {
+        let (name, setting) = self.split_backbone_discovery_runtime_key(key)?;
+        let handle = self
+            .backbone_discovery_runtime
+            .get_mut(name)
+            .ok_or(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::NotFound,
+                message: format!("backbone interface '{}' not found", name),
+            })?;
+        match setting {
+            "discoverable" => {
+                handle.current.discoverable = Self::expect_bool(value, key)?;
+            }
+            "discovery_name" => {
+                handle.current.config.discovery_name = Self::expect_string(value, key)?;
+            }
+            "announce_interval_secs" => {
+                let secs = Self::expect_u64(value, key)?;
+                if secs < 300 {
+                    return Err(RuntimeConfigError {
+                        code: RuntimeConfigErrorCode::InvalidValue,
+                        message: format!("{} must be >= 300", key),
+                    });
+                }
+                handle.current.config.announce_interval = secs;
+            }
+            "reachable_on" => {
+                handle.current.config.reachable_on = Self::expect_optional_string(value, key)?;
+            }
+            "stamp_value" => {
+                let raw = Self::expect_u64(value, key)?;
+                if raw > u8::MAX as u64 {
+                    return Err(RuntimeConfigError {
+                        code: RuntimeConfigErrorCode::InvalidValue,
+                        message: format!("{} must be <= {}", key, u8::MAX),
+                    });
+                }
+                handle.current.config.stamp_value = raw as u8;
+            }
+            "latitude" => {
+                handle.current.config.latitude = Self::expect_optional_f64(value, key)?;
+            }
+            "longitude" => {
+                handle.current.config.longitude = Self::expect_optional_f64(value, key)?;
+            }
+            "height" => {
+                handle.current.config.height = Self::expect_optional_f64(value, key)?;
+            }
+            _ => {
+                return Err(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::UnknownKey,
+                    message: format!("unknown runtime-config key '{}'", key),
+                });
+            }
+        }
+        self.sync_backbone_discovery_runtime(name)
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    fn reset_backbone_discovery_runtime_config(
+        &mut self,
+        key: &str,
+    ) -> Result<(), RuntimeConfigError> {
+        let (name, setting) = self.split_backbone_discovery_runtime_key(key)?;
+        let handle = self
+            .backbone_discovery_runtime
+            .get_mut(name)
+            .ok_or(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::NotFound,
+                message: format!("backbone interface '{}' not found", name),
+            })?;
+        match setting {
+            "discoverable" => handle.current.discoverable = handle.startup.discoverable,
+            "discovery_name" => {
+                handle.current.config.discovery_name = handle.startup.config.discovery_name.clone()
+            }
+            "announce_interval_secs" => {
+                handle.current.config.announce_interval = handle.startup.config.announce_interval
+            }
+            "reachable_on" => {
+                handle.current.config.reachable_on = handle.startup.config.reachable_on.clone()
+            }
+            "stamp_value" => handle.current.config.stamp_value = handle.startup.config.stamp_value,
+            "latitude" => handle.current.config.latitude = handle.startup.config.latitude,
+            "longitude" => handle.current.config.longitude = handle.startup.config.longitude,
+            "height" => handle.current.config.height = handle.startup.config.height,
+            _ => {
+                return Err(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::UnknownKey,
+                    message: format!("unknown runtime-config key '{}'", key),
+                });
+            }
+        }
+        self.sync_backbone_discovery_runtime(name)
+    }
+
+    #[cfg(feature = "iface-backbone")]
     fn reset_backbone_runtime_config(&mut self, key: &str) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_backbone_runtime_key(key)?;
+        if matches!(
+            setting,
+            "discoverable"
+                | "discovery_name"
+                | "announce_interval_secs"
+                | "reachable_on"
+                | "stamp_value"
+                | "latitude"
+                | "longitude"
+                | "height"
+        ) {
+            return self.reset_backbone_discovery_runtime_config(key);
+        }
         let handle = self.backbone_runtime.get(name).ok_or(RuntimeConfigError {
             code: RuntimeConfigErrorCode::NotFound,
             message: format!("backbone interface '{}' not found", name),
@@ -961,6 +1231,21 @@ impl Driver {
                     entries.push(entry);
                 }
             }
+            for suffix in [
+                "discoverable",
+                "discovery_name",
+                "announce_interval_secs",
+                "reachable_on",
+                "stamp_value",
+                "latitude",
+                "longitude",
+                "height",
+            ] {
+                let key = format!("backbone.{}.{}", name, suffix);
+                if let Some(entry) = self.backbone_runtime_entry(&key) {
+                    entries.push(entry);
+                }
+            }
         }
         entries
     }
@@ -969,9 +1254,6 @@ impl Driver {
     fn backbone_runtime_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
         let rest = key.strip_prefix("backbone.")?;
         let (name, setting) = rest.split_once('.')?;
-        let handle = self.backbone_runtime.get(name)?;
-        let current = handle.runtime.lock().unwrap().clone();
-        let startup = handle.startup.clone();
 
         let make_entry = |value: RuntimeConfigValue,
                           default: RuntimeConfigValue,
@@ -989,57 +1271,164 @@ impl Driver {
             description: Some(description.to_string()),
         };
 
-        match setting {
-            "idle_timeout_secs" => Some(make_entry(
-                RuntimeConfigValue::Float(current.idle_timeout.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
-                RuntimeConfigValue::Float(startup.idle_timeout.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
-                RuntimeConfigApplyMode::Immediate,
-                "Disconnect silent inbound peers after this many seconds; 0 disables the timeout.",
-            )),
-            "blacklist_duration_secs" => Some(make_entry(
-                RuntimeConfigValue::Float(current.abuse.blacklist_duration.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
-                RuntimeConfigValue::Float(startup.abuse.blacklist_duration.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
-                RuntimeConfigApplyMode::Immediate,
-                "Temporary blacklist duration for abusive peers; 0 disables blacklisting.",
-            )),
-            "idle_timeout_blacklist_threshold" => Some(make_entry(
-                RuntimeConfigValue::Int(current.abuse.idle_timeout_threshold.unwrap_or(0) as i64),
-                RuntimeConfigValue::Int(startup.abuse.idle_timeout_threshold.unwrap_or(0) as i64),
-                RuntimeConfigApplyMode::Immediate,
-                "Repeated idle-timeout count needed before temporary blacklisting; 0 disables.",
-            )),
-            "idle_timeout_blacklist_window_secs" => Some(make_entry(
-                RuntimeConfigValue::Float(current.abuse.idle_timeout_window.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
-                RuntimeConfigValue::Float(startup.abuse.idle_timeout_window.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
-                RuntimeConfigApplyMode::Immediate,
-                "Window for counting repeated idle timeouts; 0 disables.",
-            )),
-            "flap_blacklist_threshold" => Some(make_entry(
-                RuntimeConfigValue::Int(current.abuse.flap_threshold.unwrap_or(0) as i64),
-                RuntimeConfigValue::Int(startup.abuse.flap_threshold.unwrap_or(0) as i64),
-                RuntimeConfigApplyMode::Immediate,
-                "Rapid silent reconnect count needed before temporary blacklisting; 0 disables.",
-            )),
-            "flap_blacklist_window_secs" => Some(make_entry(
-                RuntimeConfigValue::Float(current.abuse.flap_window.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
-                RuntimeConfigValue::Float(startup.abuse.flap_window.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
-                RuntimeConfigApplyMode::Immediate,
-                "Window for counting rapid silent reconnect churn; 0 disables.",
-            )),
-            "flap_max_connection_age_secs" => Some(make_entry(
-                RuntimeConfigValue::Float(current.abuse.flap_max_connection_age.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
-                RuntimeConfigValue::Float(startup.abuse.flap_max_connection_age.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
-                RuntimeConfigApplyMode::Immediate,
-                "Only connections shorter than this count as flap events; 0 disables.",
-            )),
-            "max_connections" => Some(make_entry(
-                RuntimeConfigValue::Int(current.max_connections.unwrap_or(0) as i64),
-                RuntimeConfigValue::Int(startup.max_connections.unwrap_or(0) as i64),
-                RuntimeConfigApplyMode::NewConnectionsOnly,
-                "Maximum simultaneous inbound backbone connections; 0 disables the cap.",
-            )),
-            _ => None,
+        if matches!(
+            setting,
+            "discoverable"
+                | "discovery_name"
+                | "announce_interval_secs"
+                | "reachable_on"
+                | "stamp_value"
+                | "latitude"
+                | "longitude"
+                | "height"
+        ) {
+            let handle = self.backbone_discovery_runtime.get(name)?;
+            let current = &handle.current;
+            let startup = &handle.startup;
+            return match setting {
+                "discoverable" => Some(make_entry(
+                    RuntimeConfigValue::Bool(current.discoverable),
+                    RuntimeConfigValue::Bool(startup.discoverable),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Whether this backbone interface is advertised through interface discovery.",
+                )),
+                "discovery_name" => Some(make_entry(
+                    RuntimeConfigValue::String(current.config.discovery_name.clone()),
+                    RuntimeConfigValue::String(startup.config.discovery_name.clone()),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Human-readable discovery name advertised for this backbone interface.",
+                )),
+                "announce_interval_secs" => Some(make_entry(
+                    RuntimeConfigValue::Int(current.config.announce_interval as i64),
+                    RuntimeConfigValue::Int(startup.config.announce_interval as i64),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Discovery announce interval for this backbone interface in seconds.",
+                )),
+                "reachable_on" => Some(make_entry(
+                    current
+                        .config
+                        .reachable_on
+                        .clone()
+                        .map(RuntimeConfigValue::String)
+                        .unwrap_or(RuntimeConfigValue::Null),
+                    startup
+                        .config
+                        .reachable_on
+                        .clone()
+                        .map(RuntimeConfigValue::String)
+                        .unwrap_or(RuntimeConfigValue::Null),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Reachable hostname or IP advertised for this backbone interface; null clears it.",
+                )),
+                "stamp_value" => Some(make_entry(
+                    RuntimeConfigValue::Int(current.config.stamp_value as i64),
+                    RuntimeConfigValue::Int(startup.config.stamp_value as i64),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Discovery proof-of-work stamp cost for this backbone interface.",
+                )),
+                "latitude" => Some(make_entry(
+                    current
+                        .config
+                        .latitude
+                        .map(RuntimeConfigValue::Float)
+                        .unwrap_or(RuntimeConfigValue::Null),
+                    startup
+                        .config
+                        .latitude
+                        .map(RuntimeConfigValue::Float)
+                        .unwrap_or(RuntimeConfigValue::Null),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Latitude advertised for this backbone interface; null clears it.",
+                )),
+                "longitude" => Some(make_entry(
+                    current
+                        .config
+                        .longitude
+                        .map(RuntimeConfigValue::Float)
+                        .unwrap_or(RuntimeConfigValue::Null),
+                    startup
+                        .config
+                        .longitude
+                        .map(RuntimeConfigValue::Float)
+                        .unwrap_or(RuntimeConfigValue::Null),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Longitude advertised for this backbone interface; null clears it.",
+                )),
+                "height" => Some(make_entry(
+                    current
+                        .config
+                        .height
+                        .map(RuntimeConfigValue::Float)
+                        .unwrap_or(RuntimeConfigValue::Null),
+                    startup
+                        .config
+                        .height
+                        .map(RuntimeConfigValue::Float)
+                        .unwrap_or(RuntimeConfigValue::Null),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Height advertised for this backbone interface; null clears it.",
+                )),
+                _ => None,
+            };
         }
+
+        if let Some(handle) = self.backbone_runtime.get(name) {
+            let current = handle.runtime.lock().unwrap().clone();
+            let startup = handle.startup.clone();
+            return match setting {
+                "idle_timeout_secs" => Some(make_entry(
+                    RuntimeConfigValue::Float(current.idle_timeout.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
+                    RuntimeConfigValue::Float(startup.idle_timeout.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Disconnect silent inbound peers after this many seconds; 0 disables the timeout.",
+                )),
+                "blacklist_duration_secs" => Some(make_entry(
+                    RuntimeConfigValue::Float(current.abuse.blacklist_duration.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
+                    RuntimeConfigValue::Float(startup.abuse.blacklist_duration.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Temporary blacklist duration for abusive peers; 0 disables blacklisting.",
+                )),
+                "idle_timeout_blacklist_threshold" => Some(make_entry(
+                    RuntimeConfigValue::Int(current.abuse.idle_timeout_threshold.unwrap_or(0) as i64),
+                    RuntimeConfigValue::Int(startup.abuse.idle_timeout_threshold.unwrap_or(0) as i64),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Repeated idle-timeout count needed before temporary blacklisting; 0 disables.",
+                )),
+                "idle_timeout_blacklist_window_secs" => Some(make_entry(
+                    RuntimeConfigValue::Float(current.abuse.idle_timeout_window.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
+                    RuntimeConfigValue::Float(startup.abuse.idle_timeout_window.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Window for counting repeated idle timeouts; 0 disables.",
+                )),
+                "flap_blacklist_threshold" => Some(make_entry(
+                    RuntimeConfigValue::Int(current.abuse.flap_threshold.unwrap_or(0) as i64),
+                    RuntimeConfigValue::Int(startup.abuse.flap_threshold.unwrap_or(0) as i64),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Rapid silent reconnect count needed before temporary blacklisting; 0 disables.",
+                )),
+                "flap_blacklist_window_secs" => Some(make_entry(
+                    RuntimeConfigValue::Float(current.abuse.flap_window.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
+                    RuntimeConfigValue::Float(startup.abuse.flap_window.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Window for counting rapid silent reconnect churn; 0 disables.",
+                )),
+                "flap_max_connection_age_secs" => Some(make_entry(
+                    RuntimeConfigValue::Float(current.abuse.flap_max_connection_age.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
+                    RuntimeConfigValue::Float(startup.abuse.flap_max_connection_age.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Only connections shorter than this count as flap events; 0 disables.",
+                )),
+                "max_connections" => Some(make_entry(
+                    RuntimeConfigValue::Int(current.max_connections.unwrap_or(0) as i64),
+                    RuntimeConfigValue::Int(startup.max_connections.unwrap_or(0) as i64),
+                    RuntimeConfigApplyMode::NewConnectionsOnly,
+                    "Maximum simultaneous inbound backbone connections; 0 disables the cap.",
+                )),
+                _ => None,
+            };
+        }
+
+        None
     }
 
     #[cfg(feature = "rns-hooks")]
@@ -3996,6 +4385,14 @@ impl Driver {
             None => return,
         };
 
+        if !announcer.contains_interface(&stamp_result.interface_name) {
+            log::debug!(
+                "Discovery: dropping completed stamp for removed interface '{}'",
+                stamp_result.interface_name
+            );
+            return;
+        }
+
         let identity = match self.transport_identity.as_ref() {
             Some(id) => id,
             None => {
@@ -4060,8 +4457,8 @@ impl Driver {
             now,
         );
         log::debug!(
-            "Discovery announce sent for interface #{} ({} actions, dest={:02x?})",
-            stamp_result.index,
+            "Discovery announce sent for interface '{}' ({} actions, dest={:02x?})",
+            stamp_result.interface_name,
             outbound_actions.len(),
             &disc_dest[..4],
         );
@@ -4392,6 +4789,32 @@ mod tests {
         driver.register_backbone_runtime(BackboneRuntimeConfigHandle {
             interface_name: name.to_string(),
             runtime: Arc::new(std::sync::Mutex::new(startup.clone())),
+            startup,
+        });
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    fn register_test_backbone_discovery(driver: &mut Driver, name: &str, discoverable: bool) {
+        let startup = BackboneDiscoveryRuntime {
+            discoverable,
+            config: crate::discovery::DiscoveryConfig {
+                discovery_name: name.to_string(),
+                announce_interval: 3600,
+                stamp_value: crate::discovery::DEFAULT_STAMP_VALUE,
+                reachable_on: None,
+                interface_type: "BackboneInterface".to_string(),
+                listen_port: Some(4242),
+                latitude: None,
+                longitude: None,
+                height: None,
+            },
+            transport_enabled: true,
+            ifac_netname: None,
+            ifac_netkey: None,
+        };
+        driver.register_backbone_discovery_runtime(BackboneDiscoveryRuntimeHandle {
+            interface_name: name.to_string(),
+            current: startup.clone(),
             startup,
         });
     }
@@ -6003,6 +6426,7 @@ mod tests {
     fn runtime_config_lists_backbone_keys() {
         let mut driver = new_test_driver();
         register_test_backbone(&mut driver, "public");
+        register_test_backbone_discovery(&mut driver, "public", false);
         let response = driver.handle_query(QueryRequest::ListRuntimeConfig);
         let QueryResponse::RuntimeConfigList(entries) = response else {
             panic!("expected runtime config list");
@@ -6010,6 +6434,11 @@ mod tests {
         let keys: Vec<String> = entries.into_iter().map(|entry| entry.key).collect();
         assert!(keys.contains(&"backbone.public.idle_timeout_secs".to_string()));
         assert!(keys.contains(&"backbone.public.max_connections".to_string()));
+        assert!(keys.contains(&"backbone.public.discoverable".to_string()));
+        assert!(keys.contains(&"backbone.public.discovery_name".to_string()));
+        assert!(keys.contains(&"backbone.public.latitude".to_string()));
+        assert!(keys.contains(&"backbone.public.longitude".to_string()));
+        assert!(keys.contains(&"backbone.public.height".to_string()));
     }
 
     #[cfg(feature = "iface-backbone")]
@@ -6017,6 +6446,8 @@ mod tests {
     fn runtime_config_sets_backbone_values() {
         let mut driver = new_test_driver();
         register_test_backbone(&mut driver, "public");
+        register_test_backbone_discovery(&mut driver, "public", false);
+        driver.transport_identity = Some(rns_crypto::identity::Identity::new(&mut OsRng));
 
         let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
             key: "backbone.public.idle_timeout_secs".into(),
@@ -6043,6 +6474,76 @@ mod tests {
             panic!("expected runtime config reset success");
         };
         assert_eq!(entry.value, RuntimeConfigValue::Int(8));
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "backbone.public.discoverable".into(),
+            value: RuntimeConfigValue::Bool(true),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected runtime config set success");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Bool(true));
+        assert!(driver
+            .interface_announcer
+            .as_ref()
+            .map(|announcer| announcer.contains_interface("public"))
+            .unwrap_or(false));
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "backbone.public.discovery_name".into(),
+            value: RuntimeConfigValue::String("Public Backbone".into()),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected runtime config set success");
+        };
+        assert_eq!(
+            entry.value,
+            RuntimeConfigValue::String("Public Backbone".into())
+        );
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "backbone.public.latitude".into(),
+            value: RuntimeConfigValue::Float(45.4642),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected runtime config set success");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Float(45.4642));
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "backbone.public.longitude".into(),
+            value: RuntimeConfigValue::Float(9.19),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected runtime config set success");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Float(9.19));
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "backbone.public.height".into(),
+            value: RuntimeConfigValue::Int(120),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected runtime config set success");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Float(120.0));
+
+        let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
+            key: "backbone.public.discoverable".into(),
+        });
+        let QueryResponse::RuntimeConfigReset(Ok(entry)) = response else {
+            panic!("expected runtime config reset success");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Bool(false));
+        assert!(driver.interface_announcer.is_none());
+
+        let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
+            key: "backbone.public.latitude".into(),
+        });
+        let QueryResponse::RuntimeConfigReset(Ok(entry)) = response else {
+            panic!("expected runtime config reset success");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Null);
     }
 
     #[cfg(feature = "iface-tcp")]

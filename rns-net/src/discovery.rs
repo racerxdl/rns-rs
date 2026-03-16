@@ -385,6 +385,8 @@ pub fn generate_discovery_stamp(packed_data: &[u8], stamp_cost: u8) -> ([u8; STA
 /// Info about a single discoverable interface, ready for announcing.
 #[derive(Debug, Clone)]
 pub struct DiscoverableInterface {
+    /// Configured interface name used for runtime targeting.
+    pub interface_name: String,
     pub config: DiscoveryConfig,
     /// Whether the node has transport enabled.
     pub transport_enabled: bool,
@@ -396,8 +398,8 @@ pub struct DiscoverableInterface {
 
 /// Result of a completed background stamp generation.
 pub struct StampResult {
-    /// Index of the interface this stamp is for.
-    pub index: usize,
+    /// Configured interface name this stamp was generated for.
+    pub interface_name: String,
     /// The complete app_data: [flags][packed][stamp].
     pub app_data: Vec<u8>,
 }
@@ -457,6 +459,7 @@ impl InterfaceAnnouncer {
             let packed = self.pack_interface_info(idx);
             let stamp_cost = self.interfaces[idx].config.stamp_value;
             let name = self.interfaces[idx].config.discovery_name.clone();
+            let interface_name = self.interfaces[idx].interface_name.clone();
             let tx = self.stamp_tx.clone();
 
             log::info!(
@@ -479,7 +482,7 @@ impl InterfaceAnnouncer {
                 app_data.extend_from_slice(&stamp);
 
                 let _ = tx.send(StampResult {
-                    index: idx,
+                    interface_name,
                     app_data,
                 });
             });
@@ -496,6 +499,47 @@ impl InterfaceAnnouncer {
             }
             Err(_) => None,
         }
+    }
+
+    /// Returns true if the announcer currently tracks a discoverable interface by name.
+    pub fn contains_interface(&self, interface_name: &str) -> bool {
+        self.interfaces
+            .iter()
+            .any(|iface| iface.interface_name == interface_name)
+    }
+
+    /// Insert or update a discoverable interface by configured name.
+    pub fn upsert_interface(&mut self, iface: DiscoverableInterface) {
+        if let Some(index) = self
+            .interfaces
+            .iter()
+            .position(|existing| existing.interface_name == iface.interface_name)
+        {
+            self.interfaces[index] = iface;
+            return;
+        }
+        self.interfaces.push(iface);
+        self.last_announced.push(0.0);
+    }
+
+    /// Remove a discoverable interface by configured name.
+    pub fn remove_interface(&mut self, interface_name: &str) -> bool {
+        if let Some(index) = self
+            .interfaces
+            .iter()
+            .position(|iface| iface.interface_name == interface_name)
+        {
+            self.interfaces.remove(index);
+            self.last_announced.remove(index);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Returns true if no discoverable interfaces remain.
+    pub fn is_empty(&self) -> bool {
+        self.interfaces.is_empty()
     }
 
     /// Pack interface metadata as msgpack map with integer keys.

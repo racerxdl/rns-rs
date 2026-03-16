@@ -208,6 +208,8 @@ fn rpc_call(client: &mut RpcClient, request: PickleValue) -> PickleValue {
 
 fn parse_scalar_value(raw: &str) -> PickleValue {
     match raw {
+        raw if raw.eq_ignore_ascii_case("null") => PickleValue::None,
+        raw if raw.eq_ignore_ascii_case("none") => PickleValue::None,
         raw if raw.eq_ignore_ascii_case("true") => PickleValue::Bool(true),
         raw if raw.eq_ignore_ascii_case("false") => PickleValue::Bool(false),
         _ => {
@@ -406,6 +408,12 @@ mod tests {
     fn parse_scalar_value_handles_case_insensitive_bools() {
         assert_eq!(parse_scalar_value("TRUE"), PickleValue::Bool(true));
         assert_eq!(parse_scalar_value("False"), PickleValue::Bool(false));
+    }
+
+    #[test]
+    fn parse_scalar_value_handles_null_aliases() {
+        assert_eq!(parse_scalar_value("null"), PickleValue::None);
+        assert_eq!(parse_scalar_value("NONE"), PickleValue::None);
     }
 
     #[test]

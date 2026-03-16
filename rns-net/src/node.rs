@@ -138,6 +138,45 @@ fn extract_discovery_config(
     })
 }
 
+#[cfg(feature = "iface-backbone")]
+fn backbone_discovery_runtime_from_interface(
+    interface_name: &str,
+    mode: &BackboneMode,
+    discovery: Option<&crate::discovery::DiscoveryConfig>,
+    transport_enabled: bool,
+    ifac: Option<&IfacConfig>,
+) -> Option<crate::driver::BackboneDiscoveryRuntimeHandle> {
+    let config = match mode {
+        BackboneMode::Server(config) => config,
+        BackboneMode::Client(_) => return None,
+    };
+
+    let startup_config = discovery.cloned().unwrap_or(crate::discovery::DiscoveryConfig {
+        discovery_name: interface_name.to_string(),
+        announce_interval: 21600,
+        stamp_value: crate::discovery::DEFAULT_STAMP_VALUE,
+        reachable_on: None,
+        interface_type: "BackboneInterface".to_string(),
+        listen_port: Some(config.listen_port),
+        latitude: None,
+        longitude: None,
+        height: None,
+    });
+    let startup = crate::driver::BackboneDiscoveryRuntime {
+        discoverable: discovery.is_some(),
+        config: startup_config,
+        transport_enabled,
+        ifac_netname: ifac.and_then(|cfg| cfg.netname.clone()),
+        ifac_netkey: ifac.and_then(|cfg| cfg.netkey.clone()),
+    };
+
+    Some(crate::driver::BackboneDiscoveryRuntimeHandle {
+        interface_name: config.name.clone(),
+        current: startup.clone(),
+        startup,
+    })
+}
+
 /// Top-level node configuration.
 pub struct NodeConfig {
     pub transport_enabled: bool,
@@ -628,6 +667,15 @@ impl RnsNode {
                     if let Some(handle) = runtime_handle_from_mode(mode) {
                         driver.register_backbone_runtime(handle);
                     }
+                    if let Some(handle) = backbone_discovery_runtime_from_interface(
+                        &iface_config.name,
+                        mode,
+                        iface_config.discovery.as_ref(),
+                        config.transport_enabled,
+                        iface_config.ifac.as_ref(),
+                    ) {
+                        driver.register_backbone_discovery_runtime(handle);
+                    }
                 }
             }
             #[cfg(feature = "iface-tcp")]
@@ -688,6 +736,7 @@ impl RnsNode {
 
             if let Some(ref disc) = iface_config.discovery {
                 discoverable_interfaces.push(crate::discovery::DiscoverableInterface {
+                    interface_name: iface_config.name.clone(),
                     config: disc.clone(),
                     transport_enabled: config.transport_enabled,
                     ifac_netname: iface_config.ifac.as_ref().and_then(|ic| ic.netname.clone()),

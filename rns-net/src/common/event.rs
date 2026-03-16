@@ -29,6 +29,7 @@ pub enum RuntimeConfigValue {
     Float(f64),
     Bool(bool),
     String(String),
+    Null,
 }
 
 /// Source of a runtime-config value.

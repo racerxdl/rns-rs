@@ -1197,6 +1197,7 @@ fn runtime_config_value_to_pickle(value: &RuntimeConfigValue) -> PickleValue {
         RuntimeConfigValue::Float(v) => PickleValue::Float(*v),
         RuntimeConfigValue::Bool(v) => PickleValue::Bool(*v),
         RuntimeConfigValue::String(v) => PickleValue::String(v.clone()),
+        RuntimeConfigValue::Null => PickleValue::None,
     }
 }
 
@@ -1206,6 +1207,7 @@ fn runtime_config_value_from_pickle(value: &PickleValue) -> Option<RuntimeConfig
         PickleValue::Float(v) => Some(RuntimeConfigValue::Float(*v)),
         PickleValue::Bool(v) => Some(RuntimeConfigValue::Bool(*v)),
         PickleValue::String(v) => Some(RuntimeConfigValue::String(v.clone())),
+        PickleValue::None => Some(RuntimeConfigValue::Null),
         _ => None,
     }
 }
