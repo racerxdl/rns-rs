@@ -26,6 +26,10 @@ use crate::event::{
 use crate::interface::backbone::{BackboneClientRuntimeConfigHandle, BackboneRuntimeConfigHandle};
 #[cfg(all(feature = "iface-backbone", target_os = "linux", test))]
 use crate::interface::backbone::{BackboneAbuseConfig, BackboneClientRuntime, BackboneServerRuntime};
+#[cfg(feature = "iface-auto")]
+use crate::interface::auto::AutoRuntimeConfigHandle;
+#[cfg(all(feature = "iface-auto", test))]
+use crate::interface::auto::AutoRuntime;
 #[cfg(feature = "iface-tcp")]
 use crate::interface::tcp::TcpClientRuntimeConfigHandle;
 #[cfg(feature = "iface-tcp")]
@@ -394,6 +398,9 @@ pub struct Driver {
     /// Runtime-config handles for UDP interfaces, keyed by config name.
     #[cfg(feature = "iface-udp")]
     pub(crate) udp_runtime: HashMap<String, UdpRuntimeConfigHandle>,
+    /// Runtime-config handles for Auto interfaces, keyed by config name.
+    #[cfg(feature = "iface-auto")]
+    pub(crate) auto_runtime: HashMap<String, AutoRuntimeConfigHandle>,
     /// Storage for discovered interfaces.
     pub(crate) discovered_interfaces: crate::discovery::DiscoveredInterfaceStorage,
     /// Required stamp value for accepting discovered interfaces.
@@ -521,6 +528,8 @@ impl Driver {
             tcp_server_discovery_runtime: HashMap::new(),
             #[cfg(feature = "iface-udp")]
             udp_runtime: HashMap::new(),
+            #[cfg(feature = "iface-auto")]
+            auto_runtime: HashMap::new(),
             discovered_interfaces: crate::discovery::DiscoveredInterfaceStorage::new(
                 std::env::temp_dir().join("rns-discovered-interfaces"),
             ),
@@ -738,6 +747,11 @@ impl Driver {
         self.udp_runtime.insert(handle.interface_name.clone(), handle);
     }
 
+    #[cfg(feature = "iface-auto")]
+    pub(crate) fn register_auto_runtime(&mut self, handle: AutoRuntimeConfigHandle) {
+        self.auto_runtime.insert(handle.interface_name.clone(), handle);
+    }
+
     fn runtime_config_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
         let defaults = self.runtime_config_defaults;
         let make_entry = |key: &str,
@@ -850,6 +864,10 @@ impl Driver {
                 if let Some(entry) = self.udp_runtime_entry(key) {
                     return Some(entry);
                 }
+                #[cfg(feature = "iface-auto")]
+                if let Some(entry) = self.auto_runtime_entry(key) {
+                    return Some(entry);
+                }
                 None
             }
         }
@@ -884,6 +902,10 @@ impl Driver {
         #[cfg(feature = "iface-udp")]
         {
             entries.extend(self.list_udp_runtime_config());
+        }
+        #[cfg(feature = "iface-auto")]
+        {
+            entries.extend(self.list_auto_runtime_config());
         }
 
         entries
@@ -1688,6 +1710,137 @@ impl Driver {
                     code: RuntimeConfigErrorCode::UnknownKey,
                     message: format!("unknown runtime-config key '{}'", key),
                 })
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "iface-auto")]
+    fn list_auto_runtime_config(&self) -> Vec<RuntimeConfigEntry> {
+        let mut entries = Vec::new();
+        let mut names: Vec<&String> = self.auto_runtime.keys().collect();
+        names.sort();
+        for name in names {
+            for suffix in [
+                "announce_interval_secs",
+                "peer_timeout_secs",
+                "peer_job_interval_secs",
+            ] {
+                let key = format!("auto.{}.{}", name, suffix);
+                if let Some(entry) = self.auto_runtime_entry(&key) {
+                    entries.push(entry);
+                }
+            }
+        }
+        entries
+    }
+
+    #[cfg(feature = "iface-auto")]
+    fn auto_runtime_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
+        let rest = key.strip_prefix("auto.")?;
+        let (name, setting) = rest.split_once('.')?;
+        let handle = self.auto_runtime.get(name)?;
+        let current = handle.runtime.lock().unwrap().clone();
+        let startup = handle.startup.clone();
+        let make_entry = |value: RuntimeConfigValue,
+                          default: RuntimeConfigValue,
+                          description: &str| -> RuntimeConfigEntry {
+            RuntimeConfigEntry {
+                key: key.to_string(),
+                source: if value == default {
+                    RuntimeConfigSource::Startup
+                } else {
+                    RuntimeConfigSource::RuntimeOverride
+                },
+                value,
+                default,
+                apply_mode: RuntimeConfigApplyMode::Immediate,
+                description: Some(description.to_string()),
+            }
+        };
+        match setting {
+            "announce_interval_secs" => Some(make_entry(
+                RuntimeConfigValue::Float(current.announce_interval_secs),
+                RuntimeConfigValue::Float(startup.announce_interval_secs),
+                "Interval between multicast discovery announces in seconds.",
+            )),
+            "peer_timeout_secs" => Some(make_entry(
+                RuntimeConfigValue::Float(current.peer_timeout_secs),
+                RuntimeConfigValue::Float(startup.peer_timeout_secs),
+                "How long an Auto peer may stay quiet before being culled.",
+            )),
+            "peer_job_interval_secs" => Some(make_entry(
+                RuntimeConfigValue::Float(current.peer_job_interval_secs),
+                RuntimeConfigValue::Float(startup.peer_job_interval_secs),
+                "Interval between Auto peer maintenance passes.",
+            )),
+            _ => None,
+        }
+    }
+
+    #[cfg(feature = "iface-auto")]
+    fn split_auto_runtime_key<'a>(
+        &self,
+        key: &'a str,
+    ) -> Result<(&'a str, &'a str), RuntimeConfigError> {
+        let rest = key.strip_prefix("auto.").ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::UnknownKey,
+            message: format!("unknown runtime-config key '{}'", key),
+        })?;
+        rest.split_once('.').ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::UnknownKey,
+            message: format!("unknown runtime-config key '{}'", key),
+        })
+    }
+
+    #[cfg(feature = "iface-auto")]
+    fn set_auto_runtime_config(
+        &mut self,
+        key: &str,
+        value: RuntimeConfigValue,
+    ) -> Result<(), RuntimeConfigError> {
+        let (name, setting) = self.split_auto_runtime_key(key)?;
+        let handle = self.auto_runtime.get(name).ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::NotFound,
+            message: format!("auto interface '{}' not found", name),
+        })?;
+        let mut runtime = handle.runtime.lock().unwrap();
+        match setting {
+            "announce_interval_secs" => {
+                runtime.announce_interval_secs = Self::expect_f64(value, key)?.max(0.1)
+            }
+            "peer_timeout_secs" => runtime.peer_timeout_secs = Self::expect_f64(value, key)?.max(0.1),
+            "peer_job_interval_secs" => {
+                runtime.peer_job_interval_secs = Self::expect_f64(value, key)?.max(0.1)
+            }
+            _ => {
+                return Err(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::UnknownKey,
+                    message: format!("unknown runtime-config key '{}'", key),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "iface-auto")]
+    fn reset_auto_runtime_config(&mut self, key: &str) -> Result<(), RuntimeConfigError> {
+        let (name, setting) = self.split_auto_runtime_key(key)?;
+        let handle = self.auto_runtime.get(name).ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::NotFound,
+            message: format!("auto interface '{}' not found", name),
+        })?;
+        let mut runtime = handle.runtime.lock().unwrap();
+        let startup = handle.startup.clone();
+        match setting {
+            "announce_interval_secs" => runtime.announce_interval_secs = startup.announce_interval_secs,
+            "peer_timeout_secs" => runtime.peer_timeout_secs = startup.peer_timeout_secs,
+            "peer_job_interval_secs" => runtime.peer_job_interval_secs = startup.peer_job_interval_secs,
+            _ => {
+                return Err(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::UnknownKey,
+                    message: format!("unknown runtime-config key '{}'", key),
+                });
             }
         }
         Ok(())
@@ -3759,6 +3912,8 @@ impl Driver {
                     }
                     #[cfg(feature = "iface-udp")]
                     _ if key.starts_with("udp.") => self.set_udp_runtime_config(&key, value),
+                    #[cfg(feature = "iface-auto")]
+                    _ if key.starts_with("auto.") => self.set_auto_runtime_config(&key, value),
                     _ => {
                         return QueryResponse::RuntimeConfigSet(Err(RuntimeConfigError {
                             code: RuntimeConfigErrorCode::UnknownKey,
@@ -3837,6 +3992,8 @@ impl Driver {
                     }
                     #[cfg(feature = "iface-udp")]
                     _ if key.starts_with("udp.") => self.reset_udp_runtime_config(&key),
+                    #[cfg(feature = "iface-auto")]
+                    _ if key.starts_with("auto.") => self.reset_auto_runtime_config(&key),
                     _ => {
                         return QueryResponse::RuntimeConfigReset(Err(RuntimeConfigError {
                             code: RuntimeConfigErrorCode::UnknownKey,
@@ -5723,6 +5880,20 @@ mod tests {
             forward_port: Some(4242),
         };
         driver.register_udp_runtime(UdpRuntimeConfigHandle {
+            interface_name: name.to_string(),
+            runtime: Arc::new(std::sync::Mutex::new(startup.clone())),
+            startup,
+        });
+    }
+
+    #[cfg(feature = "iface-auto")]
+    fn register_test_auto(driver: &mut Driver, name: &str) {
+        let startup = AutoRuntime {
+            announce_interval_secs: 1.6,
+            peer_timeout_secs: 22.0,
+            peer_job_interval_secs: 4.0,
+        };
+        driver.register_auto_runtime(AutoRuntimeConfigHandle {
             interface_name: name.to_string(),
             runtime: Arc::new(std::sync::Mutex::new(startup.clone())),
             startup,
@@ -7645,6 +7816,54 @@ mod tests {
             panic!("expected reset ok");
         };
         assert_eq!(entry.value, RuntimeConfigValue::Int(4242));
+    }
+
+    #[cfg(feature = "iface-auto")]
+    #[test]
+    fn runtime_config_lists_auto_keys() {
+        let mut driver = new_test_driver();
+        register_test_auto(&mut driver, "lan");
+        let response = driver.handle_query(QueryRequest::ListRuntimeConfig);
+        let QueryResponse::RuntimeConfigList(entries) = response else {
+            panic!("expected runtime config list");
+        };
+        let keys: Vec<String> = entries.into_iter().map(|entry| entry.key).collect();
+        assert!(keys.contains(&"auto.lan.announce_interval_secs".to_string()));
+        assert!(keys.contains(&"auto.lan.peer_timeout_secs".to_string()));
+        assert!(keys.contains(&"auto.lan.peer_job_interval_secs".to_string()));
+    }
+
+    #[cfg(feature = "iface-auto")]
+    #[test]
+    fn runtime_config_sets_auto_values() {
+        let mut driver = new_test_driver();
+        register_test_auto(&mut driver, "lan");
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "auto.lan.announce_interval_secs".into(),
+            value: RuntimeConfigValue::Float(2.5),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected set ok");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Float(2.5));
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "auto.lan.peer_timeout_secs".into(),
+            value: RuntimeConfigValue::Float(30.0),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected set ok");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Float(30.0));
+
+        let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
+            key: "auto.lan.peer_job_interval_secs".into(),
+        });
+        let QueryResponse::RuntimeConfigReset(Ok(entry)) = response else {
+            panic!("expected reset ok");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Float(4.0));
     }
 
     #[test]

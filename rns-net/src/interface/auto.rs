@@ -100,11 +100,36 @@ pub struct AutoConfig {
     pub configured_bitrate: u64,
     /// Base interface ID. Per-peer IDs will be assigned dynamically.
     pub interface_id: InterfaceId,
+    pub runtime: Arc<Mutex<AutoRuntime>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AutoRuntime {
+    pub announce_interval_secs: f64,
+    pub peer_timeout_secs: f64,
+    pub peer_job_interval_secs: f64,
+}
+
+impl AutoRuntime {
+    pub fn from_config(_config: &AutoConfig) -> Self {
+        Self {
+            announce_interval_secs: ANNOUNCE_INTERVAL,
+            peer_timeout_secs: PEERING_TIMEOUT,
+            peer_job_interval_secs: PEER_JOB_INTERVAL,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AutoRuntimeConfigHandle {
+    pub interface_name: String,
+    pub runtime: Arc<Mutex<AutoRuntime>>,
+    pub startup: AutoRuntime,
 }
 
 impl Default for AutoConfig {
     fn default() -> Self {
-        AutoConfig {
+        let mut config = AutoConfig {
             name: String::new(),
             group_id: DEFAULT_GROUP_ID.to_vec(),
             discovery_scope: SCOPE_LINK.to_string(),
@@ -115,7 +140,15 @@ impl Default for AutoConfig {
             ignored_interfaces: Vec::new(),
             configured_bitrate: BITRATE_GUESS,
             interface_id: InterfaceId(0),
-        }
+            runtime: Arc::new(Mutex::new(AutoRuntime {
+                announce_interval_secs: ANNOUNCE_INTERVAL,
+                peer_timeout_secs: PEERING_TIMEOUT,
+                peer_job_interval_secs: PEER_JOB_INTERVAL,
+            })),
+        };
+        let startup = AutoRuntime::from_config(&config);
+        config.runtime = Arc::new(Mutex::new(startup));
+        config
     }
 }
 
@@ -377,8 +410,12 @@ pub fn start(
     let unicast_discovery_port = config.discovery_port + 1;
     let data_port = config.data_port;
     let name = config.name.clone();
-    let announce_interval = ANNOUNCE_INTERVAL;
     let configured_bitrate = config.configured_bitrate;
+    {
+        let startup = AutoRuntime::from_config(&config);
+        *config.runtime.lock().unwrap() = startup;
+    }
+    let runtime = Arc::clone(&config.runtime);
 
     let shared = Arc::new(Mutex::new(SharedState::new(next_dynamic_id)));
     let running = Arc::new(AtomicBool::new(true));
@@ -419,6 +456,7 @@ pub fn start(
             let link_local = link_local.clone();
             let running = running.clone();
             let name = name.clone();
+            let runtime = runtime.clone();
 
             thread::Builder::new()
                 .name(format!("auto-disc-tx-{}", ifname))
@@ -429,7 +467,7 @@ pub fn start(
                         &mcast_ip,
                         discovery_port,
                         if_index,
-                        announce_interval,
+                        runtime,
                         &running,
                         &name,
                     );
@@ -443,6 +481,7 @@ pub fn start(
             let tx = tx.clone();
             let running = running.clone();
             let name = name.clone();
+            let runtime = runtime.clone();
 
             thread::Builder::new()
                 .name(format!("auto-disc-rx-{}", ifname))
@@ -456,6 +495,7 @@ pub fn start(
                         &name,
                         data_port,
                         configured_bitrate,
+                        runtime,
                     );
                 })?;
         }
@@ -467,6 +507,7 @@ pub fn start(
             let tx = tx.clone();
             let running = running.clone();
             let name = name.clone();
+            let runtime = runtime.clone();
 
             thread::Builder::new()
                 .name(format!("auto-udisc-rx-{}", ifname))
@@ -480,6 +521,7 @@ pub fn start(
                         &name,
                         data_port,
                         configured_bitrate,
+                        runtime,
                     );
                 })?;
         }
@@ -508,15 +550,17 @@ pub fn start(
         let tx = tx.clone();
         let running = running.clone();
         let name = name.clone();
+        let runtime = runtime.clone();
 
         thread::Builder::new()
             .name(format!("auto-peer-jobs-{}", name))
             .spawn(move || {
-                peer_jobs_loop(shared, tx, &running, &name);
+                peer_jobs_loop(shared, tx, runtime, &running, &name);
             })?;
     }
 
     // Wait for initial peering
+    let announce_interval = runtime.lock().unwrap().announce_interval_secs;
     let peering_wait = Duration::from_secs_f64(announce_interval * 1.2);
     thread::sleep(peering_wait);
 
@@ -618,12 +662,11 @@ fn discovery_sender_loop(
     mcast_ip: &Ipv6Addr,
     discovery_port: u16,
     if_index: u32,
-    interval: f64,
+    runtime: Arc<Mutex<AutoRuntime>>,
     running: &AtomicBool,
     name: &str,
 ) {
     let token = compute_discovery_token(group_id, link_local_addr);
-    let sleep_dur = Duration::from_secs_f64(interval);
 
     while running.load(Ordering::Relaxed) {
         // Create a fresh socket for each send (matches Python)
@@ -646,6 +689,8 @@ fn discovery_sender_loop(
             }
         }
 
+        let sleep_dur =
+            Duration::from_secs_f64(runtime.lock().unwrap().announce_interval_secs.max(0.1));
         thread::sleep(sleep_dur);
     }
 }
@@ -660,6 +705,7 @@ fn discovery_receiver_loop(
     name: &str,
     data_port: u16,
     configured_bitrate: u64,
+    runtime: Arc<Mutex<AutoRuntime>>,
 ) {
     let mut buf = [0u8; 1024];
 
@@ -710,7 +756,15 @@ fn discovery_receiver_loop(
                 drop(state);
 
                 // New peer! Create a data writer to send to them.
-                add_peer(&shared, &tx, &src_ip, data_port, name, configured_bitrate);
+                add_peer(
+                    &shared,
+                    &tx,
+                    &src_ip,
+                    data_port,
+                    name,
+                    configured_bitrate,
+                    &runtime,
+                );
             }
             Err(ref e)
                 if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut =>
@@ -737,6 +791,7 @@ fn add_peer(
     data_port: u16,
     name: &str,
     configured_bitrate: u64,
+    _runtime: &Arc<Mutex<AutoRuntime>>,
 ) {
     let peer_ip: Ipv6Addr = match peer_addr.parse() {
         Ok(ip) => ip,
@@ -904,21 +959,23 @@ fn data_receiver_loop(
 fn peer_jobs_loop(
     shared: Arc<Mutex<SharedState>>,
     tx: EventSender,
+    runtime: Arc<Mutex<AutoRuntime>>,
     running: &AtomicBool,
     name: &str,
 ) {
-    let interval = Duration::from_secs_f64(PEER_JOB_INTERVAL);
-
     while running.load(Ordering::Relaxed) {
+        let interval =
+            Duration::from_secs_f64(runtime.lock().unwrap().peer_job_interval_secs.max(0.1));
         thread::sleep(interval);
 
         let now = crate::time::now();
         let mut timed_out = Vec::new();
+        let peer_timeout_secs = runtime.lock().unwrap().peer_timeout_secs;
 
         {
             let state = shared.lock().unwrap();
             for (addr, peer) in &state.peers {
-                if now > peer.last_heard + PEERING_TIMEOUT {
+                if now > peer.last_heard + peer_timeout_secs {
                     timed_out.push((addr.clone(), peer.interface_id));
                 }
             }
@@ -1040,6 +1097,11 @@ impl InterfaceFactory for AutoFactory {
             ignored_interfaces,
             configured_bitrate,
             interface_id: id,
+            runtime: Arc::new(Mutex::new(AutoRuntime {
+                announce_interval_secs: ANNOUNCE_INTERVAL,
+                peer_timeout_secs: PEERING_TIMEOUT,
+                peer_job_interval_secs: PEER_JOB_INTERVAL,
+            })),
         }))
     }
 
@@ -1054,6 +1116,14 @@ impl InterfaceFactory for AutoFactory {
 
         start(auto_config, ctx.tx, ctx.next_dynamic_id)?;
         Ok(StartResult::Listener)
+    }
+}
+
+pub(crate) fn auto_runtime_handle_from_config(config: &AutoConfig) -> AutoRuntimeConfigHandle {
+    AutoRuntimeConfigHandle {
+        interface_name: config.name.clone(),
+        runtime: Arc::clone(&config.runtime),
+        startup: AutoRuntime::from_config(config),
     }
 }
 

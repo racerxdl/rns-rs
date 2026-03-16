@@ -24,6 +24,8 @@ use crate::interface::{InterfaceEntry, InterfaceStats};
 use crate::interface::backbone::{
     client_runtime_handle_from_mode, runtime_handle_from_mode, BackboneMode,
 };
+#[cfg(feature = "iface-auto")]
+use crate::interface::auto::{auto_runtime_handle_from_config, AutoConfig};
 #[cfg(feature = "iface-tcp")]
 use crate::interface::tcp::{tcp_client_runtime_handle_from_config, TcpClientConfig};
 #[cfg(feature = "iface-tcp")]
@@ -760,6 +762,16 @@ impl RnsNode {
                     .downcast_ref::<UdpConfig>()
                 {
                     driver.register_udp_runtime(udp_runtime_handle_from_config(udp_config));
+                }
+            }
+            #[cfg(feature = "iface-auto")]
+            if iface_config.type_name == "AutoInterface" {
+                if let Some(auto_config) = iface_config
+                    .config_data
+                    .as_any()
+                    .downcast_ref::<AutoConfig>()
+                {
+                    driver.register_auto_runtime(auto_runtime_handle_from_config(auto_config));
                 }
             }
 
