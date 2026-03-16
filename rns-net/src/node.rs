@@ -22,7 +22,8 @@ use crate::interface::local::LocalServerConfig;
 use crate::interface::{InterfaceEntry, InterfaceStats};
 #[cfg(feature = "iface-backbone")]
 use crate::interface::backbone::{
-    client_runtime_handle_from_mode, runtime_handle_from_mode, BackboneMode,
+    client_runtime_handle_from_mode, peer_state_handle_from_mode, runtime_handle_from_mode,
+    BackboneMode,
 };
 #[cfg(feature = "iface-auto")]
 use crate::interface::auto::{auto_runtime_handle_from_config, AutoConfig};
@@ -714,6 +715,9 @@ impl RnsNode {
                 {
                     if let Some(handle) = runtime_handle_from_mode(mode) {
                         driver.register_backbone_runtime(handle);
+                    }
+                    if let Some(handle) = peer_state_handle_from_mode(mode) {
+                        driver.register_backbone_peer_state(handle);
                     }
                     if let Some(handle) = client_runtime_handle_from_mode(mode) {
                         driver.register_backbone_client_runtime(handle);

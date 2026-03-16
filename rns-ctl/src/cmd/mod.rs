@@ -1,3 +1,4 @@
+pub mod backbone;
 pub mod config;
 pub mod daemon;
 pub mod hook;

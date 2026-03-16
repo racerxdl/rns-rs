@@ -26,6 +26,7 @@ use rns_core::transport::types::{InterfaceId, InterfaceInfo};
 use crate::event::{Event, EventSender};
 use crate::hdlc;
 use crate::interface::{InterfaceConfigData, InterfaceFactory, StartContext, StartResult, Writer};
+use crate::BackbonePeerStateEntry;
 
 /// HW_MTU: 1 MB (matches Python BackboneInterface.HW_MTU)
 #[allow(dead_code)]
@@ -43,6 +44,7 @@ pub struct BackboneConfig {
     pub write_stall_timeout: Option<Duration>,
     pub abuse: BackboneAbuseConfig,
     pub runtime: Arc<Mutex<BackboneServerRuntime>>,
+    pub peer_state: Arc<Mutex<BackbonePeerMonitor>>,
 }
 
 /// Configurable behavior-based abuse detection for inbound peers.
@@ -83,6 +85,12 @@ pub struct BackboneRuntimeConfigHandle {
     pub startup: BackboneServerRuntime,
 }
 
+#[derive(Debug, Clone)]
+pub struct BackbonePeerStateHandle {
+    pub interface_name: String,
+    pub peer_state: Arc<Mutex<BackbonePeerMonitor>>,
+}
+
 impl Default for BackboneConfig {
     fn default() -> Self {
         let mut config = BackboneConfig {
@@ -100,6 +108,7 @@ impl Default for BackboneConfig {
                 write_stall_timeout: None,
                 abuse: BackboneAbuseConfig::default(),
             })),
+            peer_state: Arc::new(Mutex::new(BackbonePeerMonitor::new())),
         };
         let startup = BackboneServerRuntime::from_config(&config);
         config.runtime = Arc::new(Mutex::new(startup));
@@ -222,10 +231,11 @@ pub fn start(config: BackboneConfig, tx: EventSender, next_id: Arc<AtomicU64>) -
 
     let name = config.name.clone();
     let runtime = Arc::clone(&config.runtime);
+    let peer_state = Arc::clone(&config.peer_state);
     thread::Builder::new()
         .name(format!("backbone-poll-{}", config.interface_id.0))
         .spawn(move || {
-            if let Err(e) = poll_loop(listener, name, tx, next_id, runtime) {
+            if let Err(e) = poll_loop(listener, name, tx, next_id, runtime, peer_state) {
                 log::error!("backbone poll loop error: {}", e);
             }
         })?;
@@ -281,6 +291,9 @@ struct PeerBehaviorState {
     idle_timeouts: PeerEventWindow,
     flaps: PeerEventWindow,
     blacklisted_until: Option<Instant>,
+    blacklist_reason: Option<String>,
+    reject_count: u64,
+    connected_count: usize,
 }
 
 impl PeerBehaviorState {
@@ -289,7 +302,71 @@ impl PeerBehaviorState {
             idle_timeouts: PeerEventWindow::new(),
             flaps: PeerEventWindow::new(),
             blacklisted_until: None,
+            blacklist_reason: None,
+            reject_count: 0,
+            connected_count: 0,
         }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct BackbonePeerMonitor {
+    peers: HashMap<IpAddr, PeerBehaviorState>,
+}
+
+impl BackbonePeerMonitor {
+    pub fn new() -> Self {
+        Self {
+            peers: HashMap::new(),
+        }
+    }
+
+    fn upsert_snapshot(&mut self, peers: &HashMap<IpAddr, PeerBehaviorState>) {
+        self.peers = peers.clone();
+    }
+
+    pub fn list(&self, interface_name: &str) -> Vec<BackbonePeerStateEntry> {
+        let now = Instant::now();
+        let mut entries: Vec<BackbonePeerStateEntry> = self
+            .peers
+            .iter()
+            .map(|(peer_ip, state)| BackbonePeerStateEntry {
+                interface_name: interface_name.to_string(),
+                peer_ip: *peer_ip,
+                connected_count: state.connected_count,
+                idle_timeout_events: state.idle_timeouts.events.len(),
+                flap_events: state.flaps.events.len(),
+                blacklisted_remaining_secs: state.blacklisted_until.and_then(|until| {
+                    (until > now).then(|| (until - now).as_secs_f64())
+                }),
+                blacklist_reason: state.blacklist_reason.clone(),
+                reject_count: state.reject_count,
+            })
+            .collect();
+        entries.sort_by(|a, b| a.peer_ip.cmp(&b.peer_ip));
+        entries
+    }
+
+    pub fn clear(&mut self, peer_ip: IpAddr) -> bool {
+        self.peers.remove(&peer_ip).is_some()
+    }
+
+    #[cfg(test)]
+    pub fn seed_entry(&mut self, entry: BackbonePeerStateEntry) {
+        let mut state = PeerBehaviorState::new();
+        state.connected_count = entry.connected_count;
+        state.reject_count = entry.reject_count;
+        state.blacklist_reason = entry.blacklist_reason;
+        if let Some(remaining) = entry.blacklisted_remaining_secs {
+            state.blacklisted_until = Some(Instant::now() + Duration::from_secs_f64(remaining));
+        }
+        state.idle_timeouts.events = std::iter::repeat_with(Instant::now)
+            .take(entry.idle_timeout_events)
+            .collect();
+        state.flaps.events = std::iter::repeat_with(Instant::now)
+            .take(entry.flap_events)
+            .collect();
+        self.peers.insert(entry.peer_ip, state);
     }
 }
 
@@ -306,6 +383,7 @@ fn poll_loop(
     tx: EventSender,
     next_id: Arc<AtomicU64>,
     runtime: Arc<Mutex<BackboneServerRuntime>>,
+    peer_state: Arc<Mutex<BackbonePeerMonitor>>,
 ) -> io::Result<()> {
     let poller = Poller::new()?;
 
@@ -325,6 +403,7 @@ fn poll_loop(
         let idle_timeout = runtime_snapshot.idle_timeout;
         let abuse = runtime_snapshot.abuse.clone();
         cleanup_peer_state(&mut peers, &abuse);
+        peer_state.lock().unwrap().upsert_snapshot(&peers);
 
         events.clear();
         poller.wait(&mut events, Some(Duration::from_secs(1)))?;
@@ -338,6 +417,10 @@ fn poll_loop(
                             let peer_ip = peer_addr.ip();
 
                             if is_ip_blacklisted(&mut peers, peer_ip) {
+                                if let Some(state) = peers.get_mut(&peer_ip) {
+                                    state.reject_count = state.reject_count.saturating_add(1);
+                                }
+                                peer_state.lock().unwrap().upsert_snapshot(&peers);
                                 log::warn!(
                                     "[{}] rejecting blacklisted peer {}",
                                     name,
@@ -431,6 +514,11 @@ fn poll_loop(
                                     has_received_data: false,
                                 },
                             );
+                            peers
+                                .entry(peer_ip)
+                                .or_insert_with(PeerBehaviorState::new)
+                                .connected_count += 1;
+                            peer_state.lock().unwrap().upsert_snapshot(&peers);
 
                             let info = InterfaceInfo {
                                 id: client_id,
@@ -508,16 +596,17 @@ fn poll_loop(
                 }
 
                 if should_remove {
-                    disconnect_client(
-                        &poller,
-                        &mut clients,
-                        &mut peers,
-                        &abuse,
-                        &name,
-                        &tx,
-                        key,
-                        client_id,
-                        DisconnectReason::RemoteClosed,
+                disconnect_client(
+                    &poller,
+                    &mut clients,
+                    &mut peers,
+                    &abuse,
+                    &name,
+                    &tx,
+                    &peer_state,
+                    key,
+                    client_id,
+                    DisconnectReason::RemoteClosed,
                     );
                 } else if let Some(client) = clients.get(&key) {
                     // Re-arm client (oneshot semantics)
@@ -548,6 +637,7 @@ fn poll_loop(
                     &abuse,
                     &name,
                     &tx,
+                    &peer_state,
                     key,
                     client_id,
                     DisconnectReason::IdleTimeout,
@@ -570,8 +660,10 @@ fn cleanup_peer_state(peers: &mut HashMap<IpAddr, PeerBehaviorState>, abuse: &Ba
         }
         if matches!(state.blacklisted_until, Some(until) if now >= until) {
             state.blacklisted_until = None;
+            state.blacklist_reason = None;
         }
         state.blacklisted_until.is_some()
+            || state.connected_count > 0
             || !state.idle_timeouts.is_empty()
             || !state.flaps.is_empty()
     });
@@ -597,6 +689,7 @@ fn disconnect_client(
     abuse: &BackboneAbuseConfig,
     name: &str,
     tx: &EventSender,
+    peer_state: &Arc<Mutex<BackbonePeerMonitor>>,
     key: usize,
     client_id: InterfaceId,
     reason: DisconnectReason,
@@ -621,7 +714,11 @@ fn disconnect_client(
     let _ = poller.delete(&client.stream);
     // client.stream closes on drop
 
+    if let Some(state) = peers.get_mut(&client.peer_ip) {
+        state.connected_count = state.connected_count.saturating_sub(1);
+    }
     record_peer_behavior(peers, abuse, name, &client, reason);
+    peer_state.lock().unwrap().upsert_snapshot(peers);
     let _ = tx.send(Event::InterfaceDown(client_id));
 }
 
@@ -679,6 +776,7 @@ fn blacklist_ip(
 ) {
     let until = Instant::now() + duration;
     state.blacklisted_until = Some(until);
+    state.blacklist_reason = Some(reason.to_string());
     state.idle_timeouts.events.clear();
     state.flaps.events.clear();
     log::warn!(
@@ -1041,6 +1139,7 @@ impl InterfaceFactory for BackboneInterfaceFactory {
                     write_stall_timeout: None,
                     abuse: BackboneAbuseConfig::default(),
                 })),
+                peer_state: Arc::new(Mutex::new(BackbonePeerMonitor::new())),
             };
             let startup = BackboneServerRuntime::from_config(&config);
             config.runtime = Arc::new(Mutex::new(startup));
@@ -1110,6 +1209,16 @@ pub(crate) fn runtime_handle_from_mode(mode: &BackboneMode) -> Option<BackboneRu
     }
 }
 
+pub(crate) fn peer_state_handle_from_mode(mode: &BackboneMode) -> Option<BackbonePeerStateHandle> {
+    match mode {
+        BackboneMode::Server(config) => Some(BackbonePeerStateHandle {
+            interface_name: config.name.clone(),
+            peer_state: Arc::clone(&config.peer_state),
+        }),
+        BackboneMode::Client(_) => None,
+    }
+}
+
 pub(crate) fn client_runtime_handle_from_mode(
     mode: &BackboneMode,
 ) -> Option<BackboneClientRuntimeConfigHandle> {
@@ -1160,6 +1269,7 @@ mod tests {
                 write_stall_timeout: None,
                 abuse: BackboneAbuseConfig::default(),
             })),
+            peer_state: Arc::new(Mutex::new(BackbonePeerMonitor::new())),
         };
         let startup = BackboneServerRuntime::from_config(&config);
         config.runtime = Arc::new(Mutex::new(startup));

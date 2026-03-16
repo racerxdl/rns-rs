@@ -16,6 +16,7 @@ fn main() {
 
     match args.positional.first().map(|s| s.as_str()) {
         Some("config") => cmd::config::run(strip_subcommand(args)),
+        Some("backbone") => cmd::backbone::run(strip_subcommand(args)),
         Some("http") => cmd::http::run(strip_subcommand(args)),
         Some("status") => cmd::status::run(strip_subcommand(args)),
         Some("probe") => cmd::probe::run(strip_subcommand(args)),
@@ -48,6 +49,7 @@ USAGE:
 
 COMMANDS:
     config      Inspect and update runtime configuration
+    backbone    Inspect backbone peer state and blacklist
     http        Start HTTP/WebSocket control server
     status      Display interface status
     probe       Probe path reachability

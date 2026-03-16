@@ -1,6 +1,7 @@
 //! Event types for the driver loop — generic over the writer type.
 
 use std::fmt;
+use std::net::IpAddr;
 use std::sync::mpsc;
 
 use rns_core::transport::types::{InterfaceId, InterfaceInfo};
@@ -251,6 +252,19 @@ pub struct HookInfo {
     pub consecutive_traps: u32,
 }
 
+/// Live behavioral state for a backbone peer IP.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BackbonePeerStateEntry {
+    pub interface_name: String,
+    pub peer_ip: IpAddr,
+    pub connected_count: usize,
+    pub idle_timeout_events: usize,
+    pub flap_events: usize,
+    pub blacklisted_remaining_secs: Option<f64>,
+    pub blacklist_reason: Option<String>,
+    pub reject_count: u64,
+}
+
 /// Queries that can be sent to the driver.
 #[derive(Debug)]
 pub enum QueryRequest {
@@ -334,6 +348,10 @@ pub enum QueryRequest {
     SetRuntimeConfig { key: String, value: RuntimeConfigValue },
     /// Reset a runtime-config value to its startup/default value.
     ResetRuntimeConfig { key: String },
+    /// List live backbone peer state, optionally filtered to one interface.
+    BackbonePeerState { interface_name: Option<String> },
+    /// Clear live backbone peer state for one interface/IP pair.
+    ClearBackbonePeerState { interface_name: String, peer_ip: IpAddr },
 }
 
 /// Responses to queries.
@@ -374,6 +392,10 @@ pub enum QueryResponse {
     RuntimeConfigSet(Result<RuntimeConfigEntry, RuntimeConfigError>),
     /// Result of resetting a runtime-config value.
     RuntimeConfigReset(Result<RuntimeConfigEntry, RuntimeConfigError>),
+    /// Live backbone peer state entries.
+    BackbonePeerState(Vec<BackbonePeerStateEntry>),
+    /// Result of clearing one backbone peer state entry.
+    ClearBackbonePeerState(bool),
 }
 
 /// Interface statistics response.

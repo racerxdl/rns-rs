@@ -36,10 +36,11 @@ pub use config::RnsConfig;
 pub use destination::{AnnouncedIdentity, Destination, GroupKeyError};
 pub use driver::Callbacks;
 pub use event::{
-    BlackholeInfo, Event, HookInfo, InterfaceStatsResponse, LinkInfoEntry, LocalDestinationEntry,
-    NextHopResponse, PathTableEntry, QueryRequest, QueryResponse, RateTableEntry,
-    ResourceInfoEntry, RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError,
-    RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
+    BackbonePeerStateEntry, BlackholeInfo, Event, HookInfo, InterfaceStatsResponse,
+    LinkInfoEntry, LocalDestinationEntry, NextHopResponse, PathTableEntry, QueryRequest,
+    QueryResponse, RateTableEntry, ResourceInfoEntry, RuntimeConfigApplyMode,
+    RuntimeConfigEntry, RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource,
+    RuntimeConfigValue, SingleInterfaceStat,
 };
 pub use ifac::IfacState;
 #[cfg(feature = "iface-auto")]

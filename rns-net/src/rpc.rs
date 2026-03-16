@@ -21,10 +21,10 @@ use rns_crypto::hmac::hmac_sha256;
 use rns_crypto::sha256::sha256;
 
 use crate::event::{
-    BlackholeInfo, Event, EventSender, HookInfo, InterfaceStatsResponse, PathTableEntry,
-    QueryRequest, QueryResponse, RateTableEntry, RuntimeConfigApplyMode, RuntimeConfigEntry,
-    RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource, RuntimeConfigValue,
-    SingleInterfaceStat,
+    BackbonePeerStateEntry, BlackholeInfo, Event, EventSender, HookInfo, InterfaceStatsResponse,
+    PathTableEntry, QueryRequest, QueryResponse, RateTableEntry, RuntimeConfigApplyMode,
+    RuntimeConfigEntry, RuntimeConfigError, RuntimeConfigErrorCode, RuntimeConfigSource,
+    RuntimeConfigValue, SingleInterfaceStat,
 };
 use crate::md5::hmac_md5;
 use crate::pickle::{self, PickleValue};
@@ -395,6 +395,18 @@ fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Resu
                         Ok(PickleValue::None)
                     }
                 }
+                "backbone_peer_state" => {
+                    let interface_name = request
+                        .get("interface")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    let resp = send_query(event_tx, QueryRequest::BackbonePeerState { interface_name })?;
+                    if let QueryResponse::BackbonePeerState(entries) = resp {
+                        Ok(backbone_peer_state_to_pickle(&entries))
+                    } else {
+                        Ok(PickleValue::None)
+                    }
+                }
                 _ => Ok(PickleValue::None),
             };
         }
@@ -435,6 +447,28 @@ fn handle_rpc_request(request: &PickleValue, event_tx: &EventSender) -> io::Resu
             let resp = send_query(event_tx, QueryRequest::ResetRuntimeConfig { key })?;
             return if let QueryResponse::RuntimeConfigReset(result) = resp {
                 Ok(runtime_config_result_to_pickle(result))
+            } else {
+                Ok(PickleValue::None)
+            };
+        }
+    }
+
+    if let Some(clear_val) = request.get("clear").and_then(|v| v.as_str()) {
+        if clear_val == "backbone_peer_state" {
+            let interface_name = required_string(request, "interface")?;
+            let peer_ip = required_string(request, "ip")?;
+            let peer_ip = peer_ip.parse().map_err(|_| {
+                io::Error::new(io::ErrorKind::InvalidInput, "invalid peer IP")
+            })?;
+            let resp = send_query(
+                event_tx,
+                QueryRequest::ClearBackbonePeerState {
+                    interface_name,
+                    peer_ip,
+                },
+            )?;
+            return if let QueryResponse::ClearBackbonePeerState(ok) = resp {
+                Ok(PickleValue::Bool(ok))
             } else {
                 Ok(PickleValue::None)
             };
@@ -1184,6 +1218,55 @@ fn hooks_to_pickle(hooks: &[HookInfo]) -> PickleValue {
                     (
                         PickleValue::String("consecutive_traps".into()),
                         PickleValue::Int(hook.consecutive_traps as i64),
+                    ),
+                ])
+            })
+            .collect(),
+    )
+}
+
+fn backbone_peer_state_to_pickle(entries: &[BackbonePeerStateEntry]) -> PickleValue {
+    PickleValue::List(
+        entries
+            .iter()
+            .map(|entry| {
+                PickleValue::Dict(vec![
+                    (
+                        PickleValue::String("interface".into()),
+                        PickleValue::String(entry.interface_name.clone()),
+                    ),
+                    (
+                        PickleValue::String("ip".into()),
+                        PickleValue::String(entry.peer_ip.to_string()),
+                    ),
+                    (
+                        PickleValue::String("connected_count".into()),
+                        PickleValue::Int(entry.connected_count as i64),
+                    ),
+                    (
+                        PickleValue::String("idle_timeout_events".into()),
+                        PickleValue::Int(entry.idle_timeout_events as i64),
+                    ),
+                    (
+                        PickleValue::String("flap_events".into()),
+                        PickleValue::Int(entry.flap_events as i64),
+                    ),
+                    (
+                        PickleValue::String("blacklisted_remaining_secs".into()),
+                        entry.blacklisted_remaining_secs
+                            .map(PickleValue::Float)
+                            .unwrap_or(PickleValue::None),
+                    ),
+                    (
+                        PickleValue::String("blacklist_reason".into()),
+                        entry.blacklist_reason
+                            .as_ref()
+                            .map(|v: &String| PickleValue::String(v.clone()))
+                            .unwrap_or(PickleValue::None),
+                    ),
+                    (
+                        PickleValue::String("reject_count".into()),
+                        PickleValue::Int(entry.reject_count as i64),
                     ),
                 ])
             })

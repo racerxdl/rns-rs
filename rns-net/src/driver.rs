@@ -17,13 +17,15 @@ use crate::provider_bridge::ProviderBridge;
 use rns_hooks::{create_hook_slots, EngineAccess, HookContext, HookManager, HookPoint, HookSlot};
 
 use crate::event::{
-    BlackholeInfo, Event, EventReceiver, InterfaceStatsResponse, LocalDestinationEntry,
-    NextHopResponse, PathTableEntry, QueryRequest, QueryResponse, RateTableEntry,
+    BackbonePeerStateEntry, BlackholeInfo, Event, EventReceiver, InterfaceStatsResponse,
+    LocalDestinationEntry, NextHopResponse, PathTableEntry, QueryRequest, QueryResponse, RateTableEntry,
     RuntimeConfigApplyMode, RuntimeConfigEntry, RuntimeConfigError, RuntimeConfigErrorCode,
     RuntimeConfigSource, RuntimeConfigValue, SingleInterfaceStat,
 };
 #[cfg(feature = "iface-backbone")]
-use crate::interface::backbone::{BackboneClientRuntimeConfigHandle, BackboneRuntimeConfigHandle};
+use crate::interface::backbone::{
+    BackboneClientRuntimeConfigHandle, BackbonePeerStateHandle, BackboneRuntimeConfigHandle,
+};
 #[cfg(all(feature = "iface-backbone", target_os = "linux", test))]
 use crate::interface::backbone::{BackboneAbuseConfig, BackboneClientRuntime, BackboneServerRuntime};
 #[cfg(feature = "iface-auto")]
@@ -399,6 +401,9 @@ pub struct Driver {
     /// Runtime-config handles for backbone server interfaces, keyed by config name.
     #[cfg(feature = "iface-backbone")]
     pub(crate) backbone_runtime: HashMap<String, BackboneRuntimeConfigHandle>,
+    /// Live peer-state handles for backbone server interfaces, keyed by config name.
+    #[cfg(feature = "iface-backbone")]
+    pub(crate) backbone_peer_state: HashMap<String, BackbonePeerStateHandle>,
     /// Runtime-config handles for backbone client interfaces, keyed by config name.
     #[cfg(feature = "iface-backbone")]
     pub(crate) backbone_client_runtime: HashMap<String, BackboneClientRuntimeConfigHandle>,
@@ -550,6 +555,8 @@ impl Driver {
             tick_interval_ms: Arc::new(AtomicU64::new(DEFAULT_TICK_INTERVAL_MS)),
             #[cfg(feature = "iface-backbone")]
             backbone_runtime: HashMap::new(),
+            #[cfg(feature = "iface-backbone")]
+            backbone_peer_state: HashMap::new(),
             #[cfg(feature = "iface-backbone")]
             backbone_client_runtime: HashMap::new(),
             #[cfg(feature = "iface-backbone")]
@@ -741,6 +748,15 @@ impl Driver {
     }
 
     #[cfg(feature = "iface-backbone")]
+    pub(crate) fn register_backbone_peer_state(
+        &mut self,
+        handle: BackbonePeerStateHandle,
+    ) {
+        self.backbone_peer_state
+            .insert(handle.interface_name.clone(), handle);
+    }
+
+    #[cfg(feature = "iface-backbone")]
     pub(crate) fn register_backbone_client_runtime(
         &mut self,
         handle: BackboneClientRuntimeConfigHandle,
@@ -756,6 +772,47 @@ impl Driver {
     ) {
         self.backbone_discovery_runtime
             .insert(handle.interface_name.clone(), handle);
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    fn list_backbone_peer_state(
+        &self,
+        interface_name: Option<&str>,
+    ) -> Vec<BackbonePeerStateEntry> {
+        let mut names: Vec<&String> = match interface_name {
+            Some(name) => self
+                .backbone_peer_state
+                .keys()
+                .filter(|candidate| candidate.as_str() == name)
+                .collect(),
+            None => self.backbone_peer_state.keys().collect(),
+        };
+        names.sort();
+
+        let mut entries = Vec::new();
+        for name in names {
+            if let Some(handle) = self.backbone_peer_state.get(name) {
+                entries.extend(handle.peer_state.lock().unwrap().list(name));
+            }
+        }
+        entries.sort_by(|a, b| {
+            a.interface_name
+                .cmp(&b.interface_name)
+                .then_with(|| a.peer_ip.cmp(&b.peer_ip))
+        });
+        entries
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    fn clear_backbone_peer_state(
+        &mut self,
+        interface_name: &str,
+        peer_ip: std::net::IpAddr,
+    ) -> bool {
+        self.backbone_peer_state
+            .get(interface_name)
+            .map(|handle| handle.peer_state.lock().unwrap().clear(peer_ip))
+            .unwrap_or(false)
     }
 
     #[cfg(feature = "iface-tcp")]
@@ -4620,6 +4677,9 @@ impl Driver {
             QueryRequest::GetRuntimeConfig { key } => {
                 QueryResponse::RuntimeConfigEntry(self.runtime_config_entry(&key))
             }
+            QueryRequest::BackbonePeerState { interface_name } => {
+                QueryResponse::BackbonePeerState(self.list_backbone_peer_state(interface_name.as_deref()))
+            }
             // Mutating queries handled by handle_query_mut
             QueryRequest::SendProbe { .. } => QueryResponse::SendProbe(None),
             QueryRequest::CheckProof { .. } => QueryResponse::CheckProof(None),
@@ -4635,6 +4695,9 @@ impl Driver {
                     message: "mutating runtime config is handled separately".to_string(),
                 },
             )),
+            QueryRequest::ClearBackbonePeerState { .. } => {
+                QueryResponse::ClearBackbonePeerState(false)
+            }
         }
     }
 
@@ -4665,6 +4728,12 @@ impl Driver {
                 self.engine.drop_announce_queues();
                 QueryResponse::DropAnnounceQueues
             }
+            QueryRequest::ClearBackbonePeerState {
+                interface_name,
+                peer_ip,
+            } => QueryResponse::ClearBackbonePeerState(
+                self.clear_backbone_peer_state(&interface_name, peer_ip),
+            ),
             QueryRequest::InjectPath {
                 dest_hash,
                 next_hop,
@@ -6807,10 +6876,17 @@ mod tests {
                 flap_max_connection_age: Some(Duration::from_secs(5)),
             },
         };
+        let peer_state = Arc::new(std::sync::Mutex::new(
+            crate::interface::backbone::BackbonePeerMonitor::new(),
+        ));
         driver.register_backbone_runtime(BackboneRuntimeConfigHandle {
             interface_name: name.to_string(),
             runtime: Arc::new(std::sync::Mutex::new(startup.clone())),
             startup,
+        });
+        driver.register_backbone_peer_state(BackbonePeerStateHandle {
+            interface_name: name.to_string(),
+            peer_state,
         });
     }
 
@@ -8791,6 +8867,87 @@ mod tests {
             panic!("expected runtime config reset success");
         };
         assert_eq!(entry.value, RuntimeConfigValue::Float(5.0));
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    #[test]
+    fn backbone_peer_state_query_lists_entries() {
+        let mut driver = new_test_driver();
+        register_test_backbone(&mut driver, "public");
+        driver
+            .backbone_peer_state
+            .get("public")
+            .unwrap()
+            .peer_state
+            .lock()
+            .unwrap()
+            .seed_entry(BackbonePeerStateEntry {
+                interface_name: "public".into(),
+                peer_ip: "203.0.113.10".parse().unwrap(),
+                connected_count: 1,
+                idle_timeout_events: 3,
+                flap_events: 0,
+                blacklisted_remaining_secs: Some(120.0),
+                blacklist_reason: Some("repeated idle timeouts".into()),
+                reject_count: 7,
+            });
+
+        let response = driver.handle_query(QueryRequest::BackbonePeerState {
+            interface_name: Some("public".into()),
+        });
+        let QueryResponse::BackbonePeerState(entries) = response else {
+            panic!("expected backbone peer state list");
+        };
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].peer_ip.to_string(), "203.0.113.10");
+        assert_eq!(entries[0].connected_count, 1);
+        assert_eq!(entries[0].idle_timeout_events, 3);
+        assert_eq!(entries[0].reject_count, 7);
+        assert_eq!(
+            entries[0].blacklist_reason.as_deref(),
+            Some("repeated idle timeouts")
+        );
+        assert!(entries[0].blacklisted_remaining_secs.unwrap() > 0.0);
+    }
+
+    #[cfg(feature = "iface-backbone")]
+    #[test]
+    fn backbone_peer_state_clear_removes_entry() {
+        let mut driver = new_test_driver();
+        register_test_backbone(&mut driver, "public");
+        driver
+            .backbone_peer_state
+            .get("public")
+            .unwrap()
+            .peer_state
+            .lock()
+            .unwrap()
+            .seed_entry(BackbonePeerStateEntry {
+                interface_name: "public".into(),
+                peer_ip: "203.0.113.11".parse().unwrap(),
+                connected_count: 0,
+                idle_timeout_events: 1,
+                flap_events: 0,
+                blacklisted_remaining_secs: None,
+                blacklist_reason: None,
+                reject_count: 0,
+            });
+
+        let response = driver.handle_query_mut(QueryRequest::ClearBackbonePeerState {
+            interface_name: "public".into(),
+            peer_ip: "203.0.113.11".parse().unwrap(),
+        });
+        let QueryResponse::ClearBackbonePeerState(true) = response else {
+            panic!("expected successful peer-state clear");
+        };
+
+        let response = driver.handle_query(QueryRequest::BackbonePeerState {
+            interface_name: Some("public".into()),
+        });
+        let QueryResponse::BackbonePeerState(entries) = response else {
+            panic!("expected backbone peer state list");
+        };
+        assert!(entries.is_empty());
     }
 
     #[cfg(feature = "iface-tcp")]
