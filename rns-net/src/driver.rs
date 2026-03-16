@@ -422,6 +422,8 @@ pub struct Driver {
     /// Runtime-config handles for RNode interfaces, keyed by config name.
     #[cfg(feature = "iface-rnode")]
     pub(crate) rnode_runtime: HashMap<String, RNodeRuntimeConfigHandle>,
+    /// Startup/default interface metadata for generic cross-cutting runtime config.
+    pub(crate) interface_runtime_defaults: HashMap<String, rns_core::transport::types::InterfaceInfo>,
     /// Storage for discovered interfaces.
     pub(crate) discovered_interfaces: crate::discovery::DiscoveredInterfaceStorage,
     /// Required stamp value for accepting discovered interfaces.
@@ -557,6 +559,7 @@ impl Driver {
             pipe_runtime: HashMap::new(),
             #[cfg(feature = "iface-rnode")]
             rnode_runtime: HashMap::new(),
+            interface_runtime_defaults: HashMap::new(),
             discovered_interfaces: crate::discovery::DiscoveredInterfaceStorage::new(
                 std::env::temp_dir().join("rns-discovered-interfaces"),
             ),
@@ -794,6 +797,15 @@ impl Driver {
         self.rnode_runtime.insert(handle.interface_name.clone(), handle);
     }
 
+    pub(crate) fn register_interface_runtime_defaults(
+        &mut self,
+        info: &rns_core::transport::types::InterfaceInfo,
+    ) {
+        self.interface_runtime_defaults
+            .entry(info.name.clone())
+            .or_insert_with(|| info.clone());
+    }
+
     fn runtime_config_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
         let defaults = self.runtime_config_defaults;
         let make_entry = |key: &str,
@@ -922,6 +934,9 @@ impl Driver {
                 if let Some(entry) = self.rnode_runtime_entry(key) {
                     return Some(entry);
                 }
+                if let Some(entry) = self.generic_interface_runtime_entry(key) {
+                    return Some(entry);
+                }
                 None
             }
         }
@@ -973,6 +988,7 @@ impl Driver {
         {
             entries.extend(self.list_rnode_runtime_config());
         }
+        entries.extend(self.list_generic_interface_runtime_config());
 
         entries
     }
@@ -2335,6 +2351,250 @@ impl Driver {
         Ok(())
     }
 
+    fn list_generic_interface_runtime_config(&self) -> Vec<RuntimeConfigEntry> {
+        let mut entries = Vec::new();
+        let mut names: Vec<String> = self
+            .interfaces
+            .values()
+            .map(|entry| entry.info.name.clone())
+            .collect();
+        names.sort();
+        names.dedup();
+        for name in names {
+            for suffix in [
+                "mode",
+                "announce_rate_target",
+                "announce_rate_grace",
+                "announce_rate_penalty",
+                "announce_cap",
+                "ingress_control",
+            ] {
+                let key = format!("interface.{}.{}", name, suffix);
+                if let Some(entry) = self.generic_interface_runtime_entry(&key) {
+                    entries.push(entry);
+                }
+            }
+        }
+        entries
+    }
+
+    fn generic_interface_runtime_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
+        let rest = key.strip_prefix("interface.")?;
+        let (name, setting) = rest.rsplit_once('.')?;
+        let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+        let make_entry = |value: RuntimeConfigValue,
+                          default: RuntimeConfigValue,
+                          apply_mode: RuntimeConfigApplyMode,
+                          description: &str| -> RuntimeConfigEntry {
+            RuntimeConfigEntry {
+                key: key.to_string(),
+                source: if value == default {
+                    RuntimeConfigSource::Startup
+                } else {
+                    RuntimeConfigSource::RuntimeOverride
+                },
+                value,
+                default,
+                apply_mode,
+                description: Some(description.to_string()),
+            }
+        };
+        match setting {
+            "mode" => Some(make_entry(
+                RuntimeConfigValue::String(Self::interface_mode_name(current.mode)),
+                RuntimeConfigValue::String(Self::interface_mode_name(startup.mode)),
+                RuntimeConfigApplyMode::Immediate,
+                "Routing mode for this interface.",
+            )),
+            "announce_rate_target" => Some(make_entry(
+                current
+                    .announce_rate_target
+                    .map(RuntimeConfigValue::Float)
+                    .unwrap_or(RuntimeConfigValue::Null),
+                startup
+                    .announce_rate_target
+                    .map(RuntimeConfigValue::Float)
+                    .unwrap_or(RuntimeConfigValue::Null),
+                RuntimeConfigApplyMode::Immediate,
+                "Optional announce rate target in announces/sec; null disables it.",
+            )),
+            "announce_rate_grace" => Some(make_entry(
+                RuntimeConfigValue::Int(current.announce_rate_grace as i64),
+                RuntimeConfigValue::Int(startup.announce_rate_grace as i64),
+                RuntimeConfigApplyMode::Immediate,
+                "Announce rate grace period in announces.",
+            )),
+            "announce_rate_penalty" => Some(make_entry(
+                RuntimeConfigValue::Float(current.announce_rate_penalty),
+                RuntimeConfigValue::Float(startup.announce_rate_penalty),
+                RuntimeConfigApplyMode::Immediate,
+                "Announce rate penalty multiplier.",
+            )),
+            "announce_cap" => Some(make_entry(
+                RuntimeConfigValue::Float(current.announce_cap),
+                RuntimeConfigValue::Float(startup.announce_cap),
+                RuntimeConfigApplyMode::Immediate,
+                "Fraction of bitrate reserved for announces.",
+            )),
+            "ingress_control" => Some(make_entry(
+                RuntimeConfigValue::Bool(current.ingress_control),
+                RuntimeConfigValue::Bool(startup.ingress_control),
+                RuntimeConfigApplyMode::Immediate,
+                "Whether ingress control is enabled for this interface.",
+            )),
+            _ => None,
+        }
+    }
+
+    fn split_generic_interface_runtime_key<'a>(
+        &self,
+        key: &'a str,
+    ) -> Result<(&'a str, &'a str), RuntimeConfigError> {
+        let rest = key.strip_prefix("interface.").ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::UnknownKey,
+            message: format!("unknown runtime-config key '{}'", key),
+        })?;
+        rest.rsplit_once('.').ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::UnknownKey,
+            message: format!("unknown runtime-config key '{}'", key),
+        })
+    }
+
+    fn interface_runtime_infos_by_name(
+        &self,
+        name: &str,
+    ) -> Option<(
+        rns_core::transport::types::InterfaceId,
+        &rns_core::transport::types::InterfaceInfo,
+        &rns_core::transport::types::InterfaceInfo,
+    )> {
+        let (id, entry) = self
+            .interfaces
+            .iter()
+            .find(|(_, entry)| entry.info.name == name)?;
+        let startup = self.interface_runtime_defaults.get(name)?;
+        Some((*id, &entry.info, startup))
+    }
+
+    fn interface_mode_name(mode: u8) -> String {
+        match mode {
+            rns_core::constants::MODE_FULL => "full".to_string(),
+            rns_core::constants::MODE_ACCESS_POINT => "access_point".to_string(),
+            rns_core::constants::MODE_POINT_TO_POINT => "point_to_point".to_string(),
+            rns_core::constants::MODE_ROAMING => "roaming".to_string(),
+            rns_core::constants::MODE_BOUNDARY => "boundary".to_string(),
+            rns_core::constants::MODE_GATEWAY => "gateway".to_string(),
+            _ => mode.to_string(),
+        }
+    }
+
+    fn parse_interface_mode(value: &RuntimeConfigValue) -> Option<u8> {
+        match value {
+            RuntimeConfigValue::Int(v) if *v >= 0 && *v <= u8::MAX as i64 => Some(*v as u8),
+            RuntimeConfigValue::String(s) => match s.to_ascii_lowercase().as_str() {
+                "full" => Some(rns_core::constants::MODE_FULL),
+                "access_point" | "accesspoint" | "ap" => Some(rns_core::constants::MODE_ACCESS_POINT),
+                "point_to_point" | "pointtopoint" | "ptp" => Some(rns_core::constants::MODE_POINT_TO_POINT),
+                "roaming" => Some(rns_core::constants::MODE_ROAMING),
+                "boundary" => Some(rns_core::constants::MODE_BOUNDARY),
+                "gateway" | "gw" => Some(rns_core::constants::MODE_GATEWAY),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn set_generic_interface_runtime_config(
+        &mut self,
+        key: &str,
+        value: RuntimeConfigValue,
+    ) -> Result<(), RuntimeConfigError> {
+        let (name, setting) = self.split_generic_interface_runtime_key(key)?;
+        let (id, _) = self
+            .interfaces
+            .iter()
+            .find(|(_, entry)| entry.info.name == name)
+            .map(|(id, entry)| (*id, entry))
+            .ok_or(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::NotFound,
+                message: format!("interface '{}' not found", name),
+            })?;
+        let entry = self.interfaces.get_mut(&id).unwrap();
+        match setting {
+            "mode" => {
+                entry.info.mode = Self::parse_interface_mode(&value).ok_or(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::InvalidValue,
+                    message: format!("{} must be a valid interface mode", key),
+                })?;
+            }
+            "announce_rate_target" => {
+                entry.info.announce_rate_target = match value {
+                    RuntimeConfigValue::Null => None,
+                    RuntimeConfigValue::Float(v) if v >= 0.0 => Some(v),
+                    RuntimeConfigValue::Int(v) if v >= 0 => Some(v as f64),
+                    RuntimeConfigValue::Float(_) | RuntimeConfigValue::Int(_) => {
+                        return Err(RuntimeConfigError {
+                            code: RuntimeConfigErrorCode::InvalidValue,
+                            message: format!("{} must be >= 0", key),
+                        })
+                    }
+                    _ => {
+                        return Err(RuntimeConfigError {
+                            code: RuntimeConfigErrorCode::InvalidType,
+                            message: format!("{} expects a numeric value or null", key),
+                        })
+                    }
+                };
+            }
+            "announce_rate_grace" => entry.info.announce_rate_grace = Self::expect_u64(value, key)? as u32,
+            "announce_rate_penalty" => entry.info.announce_rate_penalty = Self::expect_f64(value, key)?,
+            "announce_cap" => entry.info.announce_cap = Self::expect_f64(value, key)?,
+            "ingress_control" => entry.info.ingress_control = Self::expect_bool(value, key)?,
+            _ => {
+                return Err(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::UnknownKey,
+                    message: format!("unknown runtime-config key '{}'", key),
+                })
+            }
+        }
+        let info = entry.info.clone();
+        self.engine.register_interface(info);
+        Ok(())
+    }
+
+    fn reset_generic_interface_runtime_config(&mut self, key: &str) -> Result<(), RuntimeConfigError> {
+        let (name, setting) = self.split_generic_interface_runtime_key(key)?;
+        let startup = self.interface_runtime_defaults.get(name).cloned().ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::NotFound,
+            message: format!("interface '{}' not found", name),
+        })?;
+        let entry = self
+            .interfaces
+            .values_mut()
+            .find(|entry| entry.info.name == name)
+            .ok_or(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::NotFound,
+                message: format!("interface '{}' not found", name),
+            })?;
+        match setting {
+            "mode" => entry.info.mode = startup.mode,
+            "announce_rate_target" => entry.info.announce_rate_target = startup.announce_rate_target,
+            "announce_rate_grace" => entry.info.announce_rate_grace = startup.announce_rate_grace,
+            "announce_rate_penalty" => entry.info.announce_rate_penalty = startup.announce_rate_penalty,
+            "announce_cap" => entry.info.announce_cap = startup.announce_cap,
+            "ingress_control" => entry.info.ingress_control = startup.ingress_control,
+            _ => {
+                return Err(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::UnknownKey,
+                    message: format!("unknown runtime-config key '{}'", key),
+                })
+            }
+        }
+        let info = entry.info.clone();
+        self.engine.register_interface(info);
+        Ok(())
+    }
+
     #[cfg(feature = "iface-tcp")]
     fn tcp_server_runtime_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
         let rest = key.strip_prefix("tcp_server.")?;
@@ -3268,6 +3528,7 @@ impl Driver {
                         let iface_type = infer_interface_type(&info.name);
                         // Set started time for ingress control age tracking
                         info.started = time::now();
+                        self.register_interface_runtime_defaults(&info);
                         self.engine.register_interface(info.clone());
                         if let Some(writer) = new_writer {
                             self.interfaces.insert(
@@ -3363,6 +3624,7 @@ impl Driver {
                         if entry.dynamic {
                             // Dynamic interfaces are removed entirely
                             log::info!("[{}] dynamic interface removed", id.0);
+                            self.interface_runtime_defaults.remove(&entry.info.name);
                             self.engine.deregister_interface(id);
                             self.interfaces.remove(&id);
                         } else {
@@ -4409,6 +4671,9 @@ impl Driver {
                     _ if key.starts_with("pipe.") => self.set_pipe_runtime_config(&key, value),
                     #[cfg(feature = "iface-rnode")]
                     _ if key.starts_with("rnode.") => self.set_rnode_runtime_config(&key, value),
+                    _ if key.starts_with("interface.") => {
+                        self.set_generic_interface_runtime_config(&key, value)
+                    }
                     _ => {
                         return QueryResponse::RuntimeConfigSet(Err(RuntimeConfigError {
                             code: RuntimeConfigErrorCode::UnknownKey,
@@ -4495,6 +4760,9 @@ impl Driver {
                     _ if key.starts_with("pipe.") => self.reset_pipe_runtime_config(&key),
                     #[cfg(feature = "iface-rnode")]
                     _ if key.starts_with("rnode.") => self.reset_rnode_runtime_config(&key),
+                    _ if key.starts_with("interface.") => {
+                        self.reset_generic_interface_runtime_config(&key)
+                    }
                     _ => {
                         return QueryResponse::RuntimeConfigReset(Err(RuntimeConfigError {
                             code: RuntimeConfigErrorCode::UnknownKey,
@@ -6385,6 +6653,36 @@ mod tests {
             runtime: Arc::new(std::sync::Mutex::new(startup.clone())),
             startup,
         });
+    }
+
+    fn register_test_generic_interface(driver: &mut Driver, id: u64, name: &str) {
+        let mut info = make_interface_info(id);
+        info.name = name.to_string();
+        info.mode = rns_core::constants::MODE_FULL;
+        info.announce_rate_target = Some(1.5);
+        info.announce_rate_grace = 2;
+        info.announce_rate_penalty = 0.25;
+        info.announce_cap = 0.05;
+        info.ingress_control = true;
+        driver.register_interface_runtime_defaults(&info);
+        driver.engine.register_interface(info.clone());
+        let (writer, _) = MockWriter::new();
+        driver.interfaces.insert(
+            InterfaceId(id),
+            InterfaceEntry {
+                id: InterfaceId(id),
+                info,
+                writer: Box::new(writer),
+                online: true,
+                dynamic: false,
+                ifac: None,
+                stats: InterfaceStats {
+                    started: time::now(),
+                    ..Default::default()
+                },
+                interface_type: "TestInterface".to_string(),
+            },
+        );
     }
 
     #[cfg(feature = "iface-auto")]
@@ -8538,6 +8836,63 @@ mod tests {
             panic!("expected reset ok");
         };
         assert_eq!(entry.value, RuntimeConfigValue::Int(868_000_000));
+    }
+
+    #[test]
+    fn runtime_config_lists_generic_interface_keys() {
+        let mut driver = new_test_driver();
+        register_test_generic_interface(&mut driver, 1, "public");
+        let response = driver.handle_query(QueryRequest::ListRuntimeConfig);
+        let QueryResponse::RuntimeConfigList(entries) = response else {
+            panic!("expected runtime config list");
+        };
+        let keys: Vec<String> = entries.into_iter().map(|entry| entry.key).collect();
+        assert!(keys.contains(&"interface.public.mode".to_string()));
+        assert!(keys.contains(&"interface.public.announce_rate_target".to_string()));
+        assert!(keys.contains(&"interface.public.announce_rate_grace".to_string()));
+        assert!(keys.contains(&"interface.public.announce_rate_penalty".to_string()));
+        assert!(keys.contains(&"interface.public.announce_cap".to_string()));
+        assert!(keys.contains(&"interface.public.ingress_control".to_string()));
+    }
+
+    #[test]
+    fn runtime_config_sets_generic_interface_values() {
+        let mut driver = new_test_driver();
+        register_test_generic_interface(&mut driver, 1, "public");
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "interface.public.announce_cap".into(),
+            value: RuntimeConfigValue::Float(0.15),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected set ok");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Float(0.15));
+        assert_eq!(
+            driver
+                .engine
+                .interface_info(&InterfaceId(1))
+                .unwrap()
+                .announce_cap,
+            0.15
+        );
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "interface.public.mode".into(),
+            value: RuntimeConfigValue::String("gateway".into()),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected set ok");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::String("gateway".into()));
+
+        let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
+            key: "interface.public.mode".into(),
+        });
+        let QueryResponse::RuntimeConfigReset(Ok(entry)) = response else {
+            panic!("expected reset ok");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::String("full".into()));
     }
 
     #[test]

@@ -873,6 +873,7 @@ impl RnsNode {
                     writer,
                     interface_type_name,
                 } => {
+                    driver.register_interface_runtime_defaults(&info);
                     driver.engine.register_interface(info.clone());
                     driver.interfaces.insert(
                         id,
@@ -912,6 +913,7 @@ impl RnsNode {
                             None
                         };
 
+                        driver.register_interface_runtime_defaults(&sub.info);
                         driver.engine.register_interface(sub.info.clone());
                         driver.interfaces.insert(
                             sub.id,
