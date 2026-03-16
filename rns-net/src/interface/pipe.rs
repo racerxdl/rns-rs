@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -24,16 +25,43 @@ pub struct PipeConfig {
     pub command: String,
     pub respawn_delay: Duration,
     pub interface_id: InterfaceId,
+    pub runtime: Arc<Mutex<PipeRuntime>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PipeRuntime {
+    pub respawn_delay: Duration,
+}
+
+impl PipeRuntime {
+    pub fn from_config(config: &PipeConfig) -> Self {
+        Self {
+            respawn_delay: config.respawn_delay,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PipeRuntimeConfigHandle {
+    pub interface_name: String,
+    pub runtime: Arc<Mutex<PipeRuntime>>,
+    pub startup: PipeRuntime,
 }
 
 impl Default for PipeConfig {
     fn default() -> Self {
-        PipeConfig {
+        let mut config = PipeConfig {
             name: String::new(),
             command: String::new(),
             respawn_delay: Duration::from_secs(5),
             interface_id: InterfaceId(0),
-        }
+            runtime: Arc::new(Mutex::new(PipeRuntime {
+                respawn_delay: Duration::from_secs(5),
+            })),
+        };
+        let startup = PipeRuntime::from_config(&config);
+        config.runtime = Arc::new(Mutex::new(startup));
+        config
     }
 }
 
@@ -51,6 +79,10 @@ impl Writer for PipeWriter {
 /// Start the pipe interface. Spawns subprocess, returns writer.
 pub fn start(config: PipeConfig, tx: EventSender) -> io::Result<Box<dyn Writer>> {
     let id = config.interface_id;
+    {
+        let startup = PipeRuntime::from_config(&config);
+        *config.runtime.lock().unwrap() = startup;
+    }
 
     let mut child = spawn_child(&config.command)?;
 
@@ -160,7 +192,7 @@ fn respawn(
     tx: &EventSender,
 ) -> Option<(std::process::ChildStdout, std::process::Child)> {
     loop {
-        thread::sleep(config.respawn_delay);
+        thread::sleep(config.runtime.lock().unwrap().respawn_delay);
         log::info!(
             "[{}] attempting to respawn subprocess: {}",
             config.name,
@@ -241,6 +273,7 @@ impl InterfaceFactory for PipeFactory {
             command,
             respawn_delay,
             interface_id: id,
+            runtime: Arc::new(Mutex::new(PipeRuntime { respawn_delay })),
         }))
     }
 
@@ -286,6 +319,14 @@ impl InterfaceFactory for PipeFactory {
     }
 }
 
+pub(crate) fn pipe_runtime_handle_from_config(config: &PipeConfig) -> PipeRuntimeConfigHandle {
+    PipeRuntimeConfigHandle {
+        interface_name: config.name.clone(),
+        runtime: Arc::clone(&config.runtime),
+        startup: PipeRuntime::from_config(config),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -300,6 +341,9 @@ mod tests {
             command: "cat".into(),
             respawn_delay: Duration::from_secs(1),
             interface_id: InterfaceId(100),
+            runtime: Arc::new(Mutex::new(PipeRuntime {
+                respawn_delay: Duration::from_secs(1),
+            })),
         };
 
         let mut writer = start(config, tx).unwrap();
@@ -335,6 +379,9 @@ mod tests {
             command: "cat".into(),
             respawn_delay: Duration::from_secs(1),
             interface_id: InterfaceId(101),
+            runtime: Arc::new(Mutex::new(PipeRuntime {
+                respawn_delay: Duration::from_secs(1),
+            })),
         };
 
         let mut writer = start(config, tx).unwrap();
@@ -362,6 +409,9 @@ mod tests {
             command: "true".into(),                 // exits immediately with 0
             respawn_delay: Duration::from_secs(60), // long delay so we catch InterfaceDown
             interface_id: InterfaceId(102),
+            runtime: Arc::new(Mutex::new(PipeRuntime {
+                respawn_delay: Duration::from_secs(60),
+            })),
         };
 
         let _writer = start(config, tx).unwrap();
@@ -400,6 +450,9 @@ mod tests {
             command: "/nonexistent_rns_test_binary_that_does_not_exist_xyz".into(),
             respawn_delay: Duration::from_secs(60),
             interface_id: InterfaceId(103),
+            runtime: Arc::new(Mutex::new(PipeRuntime {
+                respawn_delay: Duration::from_secs(60),
+            })),
         };
 
         // sh -c <nonexistent> will start sh successfully but the child exits immediately

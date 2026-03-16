@@ -34,6 +34,10 @@ use crate::interface::auto::AutoRuntime;
 use crate::interface::i2p::I2pRuntimeConfigHandle;
 #[cfg(all(feature = "iface-i2p", test))]
 use crate::interface::i2p::I2pRuntime;
+#[cfg(feature = "iface-pipe")]
+use crate::interface::pipe::PipeRuntimeConfigHandle;
+#[cfg(all(feature = "iface-pipe", test))]
+use crate::interface::pipe::PipeRuntime;
 #[cfg(feature = "iface-tcp")]
 use crate::interface::tcp::TcpClientRuntimeConfigHandle;
 #[cfg(feature = "iface-tcp")]
@@ -408,6 +412,9 @@ pub struct Driver {
     /// Runtime-config handles for I2P interfaces, keyed by config name.
     #[cfg(feature = "iface-i2p")]
     pub(crate) i2p_runtime: HashMap<String, I2pRuntimeConfigHandle>,
+    /// Runtime-config handles for Pipe interfaces, keyed by config name.
+    #[cfg(feature = "iface-pipe")]
+    pub(crate) pipe_runtime: HashMap<String, PipeRuntimeConfigHandle>,
     /// Storage for discovered interfaces.
     pub(crate) discovered_interfaces: crate::discovery::DiscoveredInterfaceStorage,
     /// Required stamp value for accepting discovered interfaces.
@@ -539,6 +546,8 @@ impl Driver {
             auto_runtime: HashMap::new(),
             #[cfg(feature = "iface-i2p")]
             i2p_runtime: HashMap::new(),
+            #[cfg(feature = "iface-pipe")]
+            pipe_runtime: HashMap::new(),
             discovered_interfaces: crate::discovery::DiscoveredInterfaceStorage::new(
                 std::env::temp_dir().join("rns-discovered-interfaces"),
             ),
@@ -766,6 +775,11 @@ impl Driver {
         self.i2p_runtime.insert(handle.interface_name.clone(), handle);
     }
 
+    #[cfg(feature = "iface-pipe")]
+    pub(crate) fn register_pipe_runtime(&mut self, handle: PipeRuntimeConfigHandle) {
+        self.pipe_runtime.insert(handle.interface_name.clone(), handle);
+    }
+
     fn runtime_config_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
         let defaults = self.runtime_config_defaults;
         let make_entry = |key: &str,
@@ -886,6 +900,10 @@ impl Driver {
                 if let Some(entry) = self.i2p_runtime_entry(key) {
                     return Some(entry);
                 }
+                #[cfg(feature = "iface-pipe")]
+                if let Some(entry) = self.pipe_runtime_entry(key) {
+                    return Some(entry);
+                }
                 None
             }
         }
@@ -928,6 +946,10 @@ impl Driver {
         #[cfg(feature = "iface-i2p")]
         {
             entries.extend(self.list_i2p_runtime_config());
+        }
+        #[cfg(feature = "iface-pipe")]
+        {
+            entries.extend(self.list_pipe_runtime_config());
         }
 
         entries
@@ -1958,6 +1980,106 @@ impl Driver {
         let startup = handle.startup.clone();
         match setting {
             "reconnect_wait_secs" => runtime.reconnect_wait = startup.reconnect_wait,
+            _ => {
+                return Err(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::UnknownKey,
+                    message: format!("unknown runtime-config key '{}'", key),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "iface-pipe")]
+    fn list_pipe_runtime_config(&self) -> Vec<RuntimeConfigEntry> {
+        let mut entries = Vec::new();
+        let mut names: Vec<&String> = self.pipe_runtime.keys().collect();
+        names.sort();
+        for name in names {
+            let key = format!("pipe.{}.respawn_delay_secs", name);
+            if let Some(entry) = self.pipe_runtime_entry(&key) {
+                entries.push(entry);
+            }
+        }
+        entries
+    }
+
+    #[cfg(feature = "iface-pipe")]
+    fn pipe_runtime_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
+        let rest = key.strip_prefix("pipe.")?;
+        let (name, setting) = rest.split_once('.')?;
+        let handle = self.pipe_runtime.get(name)?;
+        let current = handle.runtime.lock().unwrap().clone();
+        let startup = handle.startup.clone();
+        match setting {
+            "respawn_delay_secs" => Some(RuntimeConfigEntry {
+                key: key.to_string(),
+                source: if current.respawn_delay == startup.respawn_delay {
+                    RuntimeConfigSource::Startup
+                } else {
+                    RuntimeConfigSource::RuntimeOverride
+                },
+                value: RuntimeConfigValue::Float(current.respawn_delay.as_secs_f64()),
+                default: RuntimeConfigValue::Float(startup.respawn_delay.as_secs_f64()),
+                apply_mode: RuntimeConfigApplyMode::NextReconnect,
+                description: Some(
+                    "Delay before respawning the pipe subprocess after exit.".to_string(),
+                ),
+            }),
+            _ => None,
+        }
+    }
+
+    #[cfg(feature = "iface-pipe")]
+    fn split_pipe_runtime_key<'a>(
+        &self,
+        key: &'a str,
+    ) -> Result<(&'a str, &'a str), RuntimeConfigError> {
+        let rest = key.strip_prefix("pipe.").ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::UnknownKey,
+            message: format!("unknown runtime-config key '{}'", key),
+        })?;
+        rest.split_once('.').ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::UnknownKey,
+            message: format!("unknown runtime-config key '{}'", key),
+        })
+    }
+
+    #[cfg(feature = "iface-pipe")]
+    fn set_pipe_runtime_config(
+        &mut self,
+        key: &str,
+        value: RuntimeConfigValue,
+    ) -> Result<(), RuntimeConfigError> {
+        let (name, setting) = self.split_pipe_runtime_key(key)?;
+        let handle = self.pipe_runtime.get(name).ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::NotFound,
+            message: format!("pipe interface '{}' not found", name),
+        })?;
+        let mut runtime = handle.runtime.lock().unwrap();
+        match setting {
+            "respawn_delay_secs" => {
+                runtime.respawn_delay = Duration::from_secs_f64(Self::expect_f64(value, key)?.max(0.1));
+                Ok(())
+            }
+            _ => Err(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::UnknownKey,
+                message: format!("unknown runtime-config key '{}'", key),
+            }),
+        }
+    }
+
+    #[cfg(feature = "iface-pipe")]
+    fn reset_pipe_runtime_config(&mut self, key: &str) -> Result<(), RuntimeConfigError> {
+        let (name, setting) = self.split_pipe_runtime_key(key)?;
+        let handle = self.pipe_runtime.get(name).ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::NotFound,
+            message: format!("pipe interface '{}' not found", name),
+        })?;
+        let mut runtime = handle.runtime.lock().unwrap();
+        let startup = handle.startup.clone();
+        match setting {
+            "respawn_delay_secs" => runtime.respawn_delay = startup.respawn_delay,
             _ => {
                 return Err(RuntimeConfigError {
                     code: RuntimeConfigErrorCode::UnknownKey,
@@ -4038,6 +4160,8 @@ impl Driver {
                     _ if key.starts_with("auto.") => self.set_auto_runtime_config(&key, value),
                     #[cfg(feature = "iface-i2p")]
                     _ if key.starts_with("i2p.") => self.set_i2p_runtime_config(&key, value),
+                    #[cfg(feature = "iface-pipe")]
+                    _ if key.starts_with("pipe.") => self.set_pipe_runtime_config(&key, value),
                     _ => {
                         return QueryResponse::RuntimeConfigSet(Err(RuntimeConfigError {
                             code: RuntimeConfigErrorCode::UnknownKey,
@@ -4120,6 +4244,8 @@ impl Driver {
                     _ if key.starts_with("auto.") => self.reset_auto_runtime_config(&key),
                     #[cfg(feature = "iface-i2p")]
                     _ if key.starts_with("i2p.") => self.reset_i2p_runtime_config(&key),
+                    #[cfg(feature = "iface-pipe")]
+                    _ if key.starts_with("pipe.") => self.reset_pipe_runtime_config(&key),
                     _ => {
                         return QueryResponse::RuntimeConfigReset(Err(RuntimeConfigError {
                             code: RuntimeConfigErrorCode::UnknownKey,
@@ -6032,6 +6158,18 @@ mod tests {
             reconnect_wait: Duration::from_secs(15),
         };
         driver.register_i2p_runtime(I2pRuntimeConfigHandle {
+            interface_name: name.to_string(),
+            runtime: Arc::new(std::sync::Mutex::new(startup.clone())),
+            startup,
+        });
+    }
+
+    #[cfg(feature = "iface-pipe")]
+    fn register_test_pipe(driver: &mut Driver, name: &str) {
+        let startup = PipeRuntime {
+            respawn_delay: Duration::from_secs(5),
+        };
+        driver.register_pipe_runtime(PipeRuntimeConfigHandle {
             interface_name: name.to_string(),
             runtime: Arc::new(std::sync::Mutex::new(startup.clone())),
             startup,
@@ -8039,6 +8177,43 @@ mod tests {
             panic!("expected reset ok");
         };
         assert_eq!(entry.value, RuntimeConfigValue::Float(15.0));
+    }
+
+    #[cfg(feature = "iface-pipe")]
+    #[test]
+    fn runtime_config_lists_pipe_keys() {
+        let mut driver = new_test_driver();
+        register_test_pipe(&mut driver, "worker");
+        let response = driver.handle_query(QueryRequest::ListRuntimeConfig);
+        let QueryResponse::RuntimeConfigList(entries) = response else {
+            panic!("expected runtime config list");
+        };
+        let keys: Vec<String> = entries.into_iter().map(|entry| entry.key).collect();
+        assert!(keys.contains(&"pipe.worker.respawn_delay_secs".to_string()));
+    }
+
+    #[cfg(feature = "iface-pipe")]
+    #[test]
+    fn runtime_config_sets_pipe_values() {
+        let mut driver = new_test_driver();
+        register_test_pipe(&mut driver, "worker");
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "pipe.worker.respawn_delay_secs".into(),
+            value: RuntimeConfigValue::Float(2.0),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected set ok");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Float(2.0));
+
+        let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
+            key: "pipe.worker.respawn_delay_secs".into(),
+        });
+        let QueryResponse::RuntimeConfigReset(Ok(entry)) = response else {
+            panic!("expected reset ok");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Float(5.0));
     }
 
     #[test]
