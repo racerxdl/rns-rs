@@ -106,6 +106,7 @@ fn main() {
             max_paths_per_destination: 1,
             known_destinations_ttl: std::time::Duration::from_secs(48 * 60 * 60),
             registry: None,
+            known_destinations_ttl: std::time::Duration::from_secs(48 * 60 * 60),
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
         },
