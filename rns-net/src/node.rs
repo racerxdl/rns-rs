@@ -28,6 +28,8 @@ use crate::interface::backbone::{
 use crate::interface::tcp::{tcp_client_runtime_handle_from_config, TcpClientConfig};
 #[cfg(feature = "iface-tcp")]
 use crate::interface::tcp_server::{runtime_handle_from_config as tcp_runtime_handle_from_config, TcpServerConfig};
+#[cfg(feature = "iface-udp")]
+use crate::interface::udp::{udp_runtime_handle_from_config, UdpConfig};
 use crate::storage;
 use crate::time;
 
@@ -748,6 +750,16 @@ impl RnsNode {
                             iface_config.ifac.as_ref(),
                         ),
                     );
+                }
+            }
+            #[cfg(feature = "iface-udp")]
+            if iface_config.type_name == "UDPInterface" {
+                if let Some(udp_config) = iface_config
+                    .config_data
+                    .as_any()
+                    .downcast_ref::<UdpConfig>()
+                {
+                    driver.register_udp_runtime(udp_runtime_handle_from_config(udp_config));
                 }
             }
 

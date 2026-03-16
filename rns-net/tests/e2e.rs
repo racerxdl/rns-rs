@@ -2670,6 +2670,7 @@ fn test_udp_announce_and_message() {
                     forward_ip: Some("127.0.0.1".into()),
                     forward_port: Some(port_b),
                     interface_id: InterfaceId(1),
+                    ..UdpConfig::default()
                 }),
                 mode: MODE_FULL,
                 ifac: None,
@@ -2719,6 +2720,7 @@ fn test_udp_announce_and_message() {
                     forward_ip: Some("127.0.0.1".into()),
                     forward_port: Some(port_a),
                     interface_id: InterfaceId(1),
+                    ..UdpConfig::default()
                 }),
                 mode: MODE_FULL,
                 ifac: None,

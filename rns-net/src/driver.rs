@@ -32,6 +32,10 @@ use crate::interface::tcp::TcpClientRuntimeConfigHandle;
 use crate::interface::tcp_server::TcpServerRuntimeConfigHandle;
 #[cfg(all(feature = "iface-tcp", test))]
 use crate::interface::tcp_server::TcpServerRuntime;
+#[cfg(feature = "iface-udp")]
+use crate::interface::udp::UdpRuntimeConfigHandle;
+#[cfg(all(feature = "iface-udp", test))]
+use crate::interface::udp::UdpRuntime;
 use crate::holepunch::orchestrator::{HolePunchManager, HolePunchManagerAction};
 use crate::ifac;
 use crate::interface::{InterfaceEntry, InterfaceStats};
@@ -387,6 +391,9 @@ pub struct Driver {
     /// Runtime-config state for TCP server discovery metadata, keyed by config name.
     #[cfg(feature = "iface-tcp")]
     pub(crate) tcp_server_discovery_runtime: HashMap<String, TcpServerDiscoveryRuntimeHandle>,
+    /// Runtime-config handles for UDP interfaces, keyed by config name.
+    #[cfg(feature = "iface-udp")]
+    pub(crate) udp_runtime: HashMap<String, UdpRuntimeConfigHandle>,
     /// Storage for discovered interfaces.
     pub(crate) discovered_interfaces: crate::discovery::DiscoveredInterfaceStorage,
     /// Required stamp value for accepting discovered interfaces.
@@ -512,6 +519,8 @@ impl Driver {
             tcp_client_runtime: HashMap::new(),
             #[cfg(feature = "iface-tcp")]
             tcp_server_discovery_runtime: HashMap::new(),
+            #[cfg(feature = "iface-udp")]
+            udp_runtime: HashMap::new(),
             discovered_interfaces: crate::discovery::DiscoveredInterfaceStorage::new(
                 std::env::temp_dir().join("rns-discovered-interfaces"),
             ),
@@ -724,6 +733,11 @@ impl Driver {
             .insert(handle.interface_name.clone(), handle);
     }
 
+    #[cfg(feature = "iface-udp")]
+    pub(crate) fn register_udp_runtime(&mut self, handle: UdpRuntimeConfigHandle) {
+        self.udp_runtime.insert(handle.interface_name.clone(), handle);
+    }
+
     fn runtime_config_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
         let defaults = self.runtime_config_defaults;
         let make_entry = |key: &str,
@@ -832,6 +846,10 @@ impl Driver {
                 if let Some(entry) = self.tcp_client_runtime_entry(key) {
                     return Some(entry);
                 }
+                #[cfg(feature = "iface-udp")]
+                if let Some(entry) = self.udp_runtime_entry(key) {
+                    return Some(entry);
+                }
                 None
             }
         }
@@ -862,6 +880,10 @@ impl Driver {
         {
             entries.extend(self.list_tcp_server_runtime_config());
             entries.extend(self.list_tcp_client_runtime_config());
+        }
+        #[cfg(feature = "iface-udp")]
+        {
+            entries.extend(self.list_udp_runtime_config());
         }
 
         entries
@@ -1525,6 +1547,142 @@ impl Driver {
             "connect_timeout_secs" => runtime.connect_timeout = startup.connect_timeout,
             "reconnect_wait_secs" => runtime.reconnect_wait = startup.reconnect_wait,
             "max_reconnect_tries" => runtime.max_reconnect_tries = startup.max_reconnect_tries,
+            _ => {
+                return Err(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::UnknownKey,
+                    message: format!("unknown runtime-config key '{}'", key),
+                })
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "iface-udp")]
+    fn list_udp_runtime_config(&self) -> Vec<RuntimeConfigEntry> {
+        let mut entries = Vec::new();
+        let mut names: Vec<&String> = self.udp_runtime.keys().collect();
+        names.sort();
+        for name in names {
+            for suffix in ["forward_ip", "forward_port"] {
+                let key = format!("udp.{}.{}", name, suffix);
+                if let Some(entry) = self.udp_runtime_entry(&key) {
+                    entries.push(entry);
+                }
+            }
+        }
+        entries
+    }
+
+    #[cfg(feature = "iface-udp")]
+    fn udp_runtime_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
+        let rest = key.strip_prefix("udp.")?;
+        let (name, setting) = rest.split_once('.')?;
+        let handle = self.udp_runtime.get(name)?;
+        let current = handle.runtime.lock().unwrap().clone();
+        let startup = handle.startup.clone();
+        let make_entry = |value: RuntimeConfigValue,
+                          default: RuntimeConfigValue,
+                          description: &str| -> RuntimeConfigEntry {
+            RuntimeConfigEntry {
+                key: key.to_string(),
+                source: if value == default {
+                    RuntimeConfigSource::Startup
+                } else {
+                    RuntimeConfigSource::RuntimeOverride
+                },
+                value,
+                default,
+                apply_mode: RuntimeConfigApplyMode::Immediate,
+                description: Some(description.to_string()),
+            }
+        };
+        match setting {
+            "forward_ip" => Some(make_entry(
+                current
+                    .forward_ip
+                    .clone()
+                    .map(RuntimeConfigValue::String)
+                    .unwrap_or(RuntimeConfigValue::Null),
+                startup
+                    .forward_ip
+                    .clone()
+                    .map(RuntimeConfigValue::String)
+                    .unwrap_or(RuntimeConfigValue::Null),
+                "Outbound UDP destination IP or hostname; null clears it.",
+            )),
+            "forward_port" => Some(make_entry(
+                current
+                    .forward_port
+                    .map(|value| RuntimeConfigValue::Int(value as i64))
+                    .unwrap_or(RuntimeConfigValue::Null),
+                startup
+                    .forward_port
+                    .map(|value| RuntimeConfigValue::Int(value as i64))
+                    .unwrap_or(RuntimeConfigValue::Null),
+                "Outbound UDP destination port; null clears it.",
+            )),
+            _ => None,
+        }
+    }
+
+    #[cfg(feature = "iface-udp")]
+    fn split_udp_runtime_key<'a>(
+        &self,
+        key: &'a str,
+    ) -> Result<(&'a str, &'a str), RuntimeConfigError> {
+        let rest = key.strip_prefix("udp.").ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::UnknownKey,
+            message: format!("unknown runtime-config key '{}'", key),
+        })?;
+        rest.split_once('.').ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::UnknownKey,
+            message: format!("unknown runtime-config key '{}'", key),
+        })
+    }
+
+    #[cfg(feature = "iface-udp")]
+    fn set_udp_runtime_config(
+        &mut self,
+        key: &str,
+        value: RuntimeConfigValue,
+    ) -> Result<(), RuntimeConfigError> {
+        let (name, setting) = self.split_udp_runtime_key(key)?;
+        let handle = self.udp_runtime.get(name).ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::NotFound,
+            message: format!("udp interface '{}' not found", name),
+        })?;
+        let mut runtime = handle.runtime.lock().unwrap();
+        match setting {
+            "forward_ip" => {
+                runtime.forward_ip = Self::expect_optional_string(value, key)?;
+                Ok(())
+            }
+            "forward_port" => {
+                runtime.forward_port = match value {
+                    RuntimeConfigValue::Null => None,
+                    other => Some(Self::expect_u64(other, key)? as u16),
+                };
+                Ok(())
+            }
+            _ => Err(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::UnknownKey,
+                message: format!("unknown runtime-config key '{}'", key),
+            }),
+        }
+    }
+
+    #[cfg(feature = "iface-udp")]
+    fn reset_udp_runtime_config(&mut self, key: &str) -> Result<(), RuntimeConfigError> {
+        let (name, setting) = self.split_udp_runtime_key(key)?;
+        let handle = self.udp_runtime.get(name).ok_or(RuntimeConfigError {
+            code: RuntimeConfigErrorCode::NotFound,
+            message: format!("udp interface '{}' not found", name),
+        })?;
+        let mut runtime = handle.runtime.lock().unwrap();
+        let startup = handle.startup.clone();
+        match setting {
+            "forward_ip" => runtime.forward_ip = startup.forward_ip,
+            "forward_port" => runtime.forward_port = startup.forward_port,
             _ => {
                 return Err(RuntimeConfigError {
                     code: RuntimeConfigErrorCode::UnknownKey,
@@ -3599,6 +3757,8 @@ impl Driver {
                     _ if key.starts_with("tcp_client.") => {
                         self.set_tcp_client_runtime_config(&key, value)
                     }
+                    #[cfg(feature = "iface-udp")]
+                    _ if key.starts_with("udp.") => self.set_udp_runtime_config(&key, value),
                     _ => {
                         return QueryResponse::RuntimeConfigSet(Err(RuntimeConfigError {
                             code: RuntimeConfigErrorCode::UnknownKey,
@@ -3675,6 +3835,8 @@ impl Driver {
                     _ if key.starts_with("tcp_client.") => {
                         self.reset_tcp_client_runtime_config(&key)
                     }
+                    #[cfg(feature = "iface-udp")]
+                    _ if key.starts_with("udp.") => self.reset_udp_runtime_config(&key),
                     _ => {
                         return QueryResponse::RuntimeConfigReset(Err(RuntimeConfigError {
                             code: RuntimeConfigErrorCode::UnknownKey,
@@ -5554,6 +5716,19 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "iface-udp")]
+    fn register_test_udp(driver: &mut Driver, name: &str) {
+        let startup = UdpRuntime {
+            forward_ip: Some("127.0.0.1".into()),
+            forward_port: Some(4242),
+        };
+        driver.register_udp_runtime(UdpRuntimeConfigHandle {
+            interface_name: name.to_string(),
+            runtime: Arc::new(std::sync::Mutex::new(startup.clone())),
+            startup,
+        });
+    }
+
     impl Callbacks for MockCallbacks {
         fn on_announce(&mut self, announced: crate::destination::AnnouncedIdentity) {
             self.announces
@@ -7420,6 +7595,56 @@ mod tests {
             panic!("expected runtime config reset success");
         };
         assert_eq!(entry.value, RuntimeConfigValue::Float(5.0));
+    }
+
+    #[cfg(feature = "iface-udp")]
+    #[test]
+    fn runtime_config_lists_udp_keys() {
+        let mut driver = new_test_driver();
+        register_test_udp(&mut driver, "lan");
+        let response = driver.handle_query(QueryRequest::ListRuntimeConfig);
+        let QueryResponse::RuntimeConfigList(entries) = response else {
+            panic!("expected runtime config list");
+        };
+        let keys: Vec<String> = entries.into_iter().map(|entry| entry.key).collect();
+        assert!(keys.contains(&"udp.lan.forward_ip".to_string()));
+        assert!(keys.contains(&"udp.lan.forward_port".to_string()));
+    }
+
+    #[cfg(feature = "iface-udp")]
+    #[test]
+    fn runtime_config_sets_udp_values() {
+        let mut driver = new_test_driver();
+        register_test_udp(&mut driver, "lan");
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "udp.lan.forward_ip".into(),
+            value: RuntimeConfigValue::String("192.168.1.10".into()),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected set ok");
+        };
+        assert_eq!(
+            entry.value,
+            RuntimeConfigValue::String("192.168.1.10".into())
+        );
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "udp.lan.forward_port".into(),
+            value: RuntimeConfigValue::Null,
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected set ok");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Null);
+
+        let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
+            key: "udp.lan.forward_port".into(),
+        });
+        let QueryResponse::RuntimeConfigReset(Ok(entry)) = response else {
+            panic!("expected reset ok");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Int(4242));
     }
 
     #[test]

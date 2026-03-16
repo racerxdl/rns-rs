@@ -5,6 +5,7 @@
 
 use std::io::{self};
 use std::net::{SocketAddr, UdpSocket};
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 use rns_core::transport::types::InterfaceId;
@@ -21,30 +22,72 @@ pub struct UdpConfig {
     pub forward_ip: Option<String>,
     pub forward_port: Option<u16>,
     pub interface_id: InterfaceId,
+    pub runtime: Arc<Mutex<UdpRuntime>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct UdpRuntime {
+    pub forward_ip: Option<String>,
+    pub forward_port: Option<u16>,
+}
+
+impl UdpRuntime {
+    pub fn from_config(config: &UdpConfig) -> Self {
+        Self {
+            forward_ip: config.forward_ip.clone(),
+            forward_port: config.forward_port,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct UdpRuntimeConfigHandle {
+    pub interface_name: String,
+    pub runtime: Arc<Mutex<UdpRuntime>>,
+    pub startup: UdpRuntime,
 }
 
 impl Default for UdpConfig {
     fn default() -> Self {
-        UdpConfig {
+        let mut config = UdpConfig {
             name: String::new(),
             listen_ip: None,
             listen_port: None,
             forward_ip: None,
             forward_port: None,
             interface_id: InterfaceId(0),
-        }
+            runtime: Arc::new(Mutex::new(UdpRuntime {
+                forward_ip: None,
+                forward_port: None,
+            })),
+        };
+        let startup = UdpRuntime::from_config(&config);
+        config.runtime = Arc::new(Mutex::new(startup));
+        config
     }
 }
 
 /// Writer that sends raw data via UDP to a target address.
 struct UdpWriter {
     socket: UdpSocket,
-    target: SocketAddr,
+    runtime: Arc<Mutex<UdpRuntime>>,
 }
 
 impl Writer for UdpWriter {
     fn send_frame(&mut self, data: &[u8]) -> io::Result<()> {
-        self.socket.send_to(data, self.target)?;
+        let runtime = self.runtime.lock().unwrap().clone();
+        let target = match (runtime.forward_ip, runtime.forward_port) {
+            (Some(ip), Some(port)) => format!("{}:{}", ip, port)
+                .parse::<SocketAddr>()
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?,
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
+                    "UDP interface has no forward target configured",
+                ))
+            }
+        };
+        self.socket.send_to(data, target)?;
         Ok(())
     }
 }
@@ -53,22 +96,12 @@ impl Writer for UdpWriter {
 /// Returns a writer if forward_ip/port are set.
 pub fn start(config: UdpConfig, tx: EventSender) -> io::Result<Option<Box<dyn Writer>>> {
     let id = config.interface_id;
-    let mut writer: Option<Box<dyn Writer>> = None;
-
-    // Create writer socket if forward params are set
-    if let (Some(ref fwd_ip), Some(fwd_port)) = (&config.forward_ip, config.forward_port) {
-        let target: SocketAddr = format!("{}:{}", fwd_ip, fwd_port)
-            .parse()
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
-
-        let send_socket = UdpSocket::bind("0.0.0.0:0")?;
-        send_socket.set_broadcast(true)?;
-
-        writer = Some(Box::new(UdpWriter {
-            socket: send_socket,
-            target,
-        }));
-    }
+    let send_socket = UdpSocket::bind("0.0.0.0:0")?;
+    send_socket.set_broadcast(true)?;
+    let writer: Option<Box<dyn Writer>> = Some(Box::new(UdpWriter {
+        socket: send_socket,
+        runtime: Arc::clone(&config.runtime),
+    }));
 
     // Create reader socket if listen params are set
     if let (Some(ref bind_ip), Some(bind_port)) = (&config.listen_ip, config.listen_port) {
@@ -124,19 +157,6 @@ use super::{InterfaceConfigData, InterfaceFactory, StartContext, StartResult};
 use rns_core::transport::types::InterfaceInfo;
 use std::collections::HashMap;
 
-/// A no-op writer used when UDP is started in listen-only mode (no forward address).
-/// Preserves engine registration while signalling that outbound writes are not supported.
-struct NoopWriter;
-
-impl Writer for NoopWriter {
-    fn send_frame(&mut self, _data: &[u8]) -> io::Result<()> {
-        Err(io::Error::new(
-            io::ErrorKind::Other,
-            "listen-only UDP interface",
-        ))
-    }
-}
-
 /// Factory for `UDPInterface`.
 pub struct UdpFactory;
 
@@ -168,14 +188,21 @@ impl InterfaceFactory for UdpFactory {
             .and_then(|v| v.parse().ok())
             .or(port_shorthand);
 
-        Ok(Box::new(UdpConfig {
+        let mut config = UdpConfig {
             name: name.to_string(),
             listen_ip,
             listen_port,
             forward_ip,
             forward_port,
             interface_id: id,
-        }))
+            runtime: Arc::new(Mutex::new(UdpRuntime {
+                forward_ip: None,
+                forward_port: None,
+            })),
+        };
+        let startup = UdpRuntime::from_config(&config);
+        config.runtime = Arc::new(Mutex::new(startup));
+        Ok(Box::new(config))
     }
 
     fn start(
@@ -215,10 +242,7 @@ impl InterfaceFactory for UdpFactory {
 
         let maybe_writer = start(udp_config, ctx.tx)?;
 
-        let writer: Box<dyn Writer> = match maybe_writer {
-            Some(w) => w,
-            None => Box::new(NoopWriter),
-        };
+        let writer: Box<dyn Writer> = maybe_writer.unwrap();
 
         Ok(StartResult::Simple {
             id,
@@ -226,6 +250,14 @@ impl InterfaceFactory for UdpFactory {
             writer,
             interface_type_name: "UDPInterface".to_string(),
         })
+    }
+}
+
+pub(crate) fn udp_runtime_handle_from_config(config: &UdpConfig) -> UdpRuntimeConfigHandle {
+    UdpRuntimeConfigHandle {
+        interface_name: config.name.clone(),
+        runtime: Arc::clone(&config.runtime),
+        startup: UdpRuntime::from_config(config),
     }
 }
 
@@ -256,6 +288,7 @@ mod tests {
             forward_ip: None,
             forward_port: None,
             interface_id: InterfaceId(10),
+            ..UdpConfig::default()
         };
 
         let _writer = start(config, tx).unwrap();
@@ -293,6 +326,7 @@ mod tests {
             forward_ip: Some("127.0.0.1".into()),
             forward_port: Some(recv_port),
             interface_id: InterfaceId(11),
+            ..UdpConfig::default()
         };
 
         let writer = start(config, tx).unwrap();
@@ -327,6 +361,7 @@ mod tests {
             forward_ip: Some("127.0.0.1".into()),
             forward_port: Some(forward_port),
             interface_id: InterfaceId(12),
+            ..UdpConfig::default()
         };
 
         let writer = start(config, tx).unwrap();
@@ -360,6 +395,7 @@ mod tests {
             forward_ip: None,
             forward_port: None,
             interface_id: InterfaceId(13),
+            ..UdpConfig::default()
         };
 
         let _writer = start(config, tx).unwrap();
@@ -394,10 +430,12 @@ mod tests {
         // Create writer directly
         let send_socket = UdpSocket::bind("127.0.0.1:0").unwrap();
         send_socket.set_broadcast(true).unwrap();
-        let target: SocketAddr = format!("127.0.0.1:{}", recv_port).parse().unwrap();
         let mut writer = UdpWriter {
             socket: send_socket,
-            target,
+            runtime: Arc::new(Mutex::new(UdpRuntime {
+                forward_ip: Some("127.0.0.1".into()),
+                forward_port: Some(recv_port),
+            })),
         };
 
         let payload = vec![0xAA, 0xBB, 0xCC];
