@@ -1454,6 +1454,44 @@ impl RnsNode {
         response_rx.recv().map_err(|_| SendError)
     }
 
+    /// Enable or disable a loaded WASM hook at runtime.
+    pub fn set_hook_enabled(
+        &self,
+        name: String,
+        attach_point: String,
+        enabled: bool,
+    ) -> Result<Result<(), String>, SendError> {
+        let (response_tx, response_rx) = std::sync::mpsc::channel();
+        self.tx
+            .send(Event::SetHookEnabled {
+                name,
+                attach_point,
+                enabled,
+                response_tx,
+            })
+            .map_err(|_| SendError)?;
+        response_rx.recv().map_err(|_| SendError)
+    }
+
+    /// Update the priority of a loaded WASM hook at runtime.
+    pub fn set_hook_priority(
+        &self,
+        name: String,
+        attach_point: String,
+        priority: i32,
+    ) -> Result<Result<(), String>, SendError> {
+        let (response_tx, response_rx) = std::sync::mpsc::channel();
+        self.tx
+            .send(Event::SetHookPriority {
+                name,
+                attach_point,
+                priority,
+                response_tx,
+            })
+            .map_err(|_| SendError)?;
+        response_rx.recv().map_err(|_| SendError)
+    }
+
     /// List all loaded hooks.
     pub fn list_hooks(&self) -> Result<Vec<crate::event::HookInfo>, SendError> {
         let (response_tx, response_rx) = std::sync::mpsc::channel();

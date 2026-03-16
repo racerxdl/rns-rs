@@ -80,6 +80,9 @@ pub fn handle_request(
         ("POST", "/api/hook/load") => handle_load_hook(req, node),
         ("POST", "/api/hook/unload") => handle_unload_hook(req, node),
         ("POST", "/api/hook/reload") => handle_reload_hook(req, node),
+        ("POST", "/api/hook/enable") => handle_set_hook_enabled(req, node, true),
+        ("POST", "/api/hook/disable") => handle_set_hook_enabled(req, node, false),
+        ("POST", "/api/hook/priority") => handle_set_hook_priority(req, node),
 
         _ => HttpResponse::not_found(),
     }
@@ -827,6 +830,60 @@ fn handle_reload_hook(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
     with_node(node, |n| {
         match n.reload_hook(name, attach_point, wasm_bytes) {
             Ok(Ok(())) => HttpResponse::ok(json!({"status": "reloaded"})),
+            Ok(Err(e)) => HttpResponse::bad_request(&e),
+            Err(_) => HttpResponse::internal_error("Driver unavailable"),
+        }
+    })
+}
+
+fn handle_set_hook_enabled(req: &HttpRequest, node: &NodeHandle, enabled: bool) -> HttpResponse {
+    let body = match parse_json_body(req) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+
+    let name = match body["name"].as_str() {
+        Some(s) => s.to_string(),
+        None => return HttpResponse::bad_request("Missing name"),
+    };
+    let attach_point = match body["attach_point"].as_str() {
+        Some(s) => s.to_string(),
+        None => return HttpResponse::bad_request("Missing attach_point"),
+    };
+
+    with_node(node, |n| {
+        match n.set_hook_enabled(name, attach_point, enabled) {
+            Ok(Ok(())) => HttpResponse::ok(json!({
+                "status": if enabled { "enabled" } else { "disabled" }
+            })),
+            Ok(Err(e)) => HttpResponse::bad_request(&e),
+            Err(_) => HttpResponse::internal_error("Driver unavailable"),
+        }
+    })
+}
+
+fn handle_set_hook_priority(req: &HttpRequest, node: &NodeHandle) -> HttpResponse {
+    let body = match parse_json_body(req) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+
+    let name = match body["name"].as_str() {
+        Some(s) => s.to_string(),
+        None => return HttpResponse::bad_request("Missing name"),
+    };
+    let attach_point = match body["attach_point"].as_str() {
+        Some(s) => s.to_string(),
+        None => return HttpResponse::bad_request("Missing attach_point"),
+    };
+    let priority = match body["priority"].as_i64() {
+        Some(v) => v as i32,
+        None => return HttpResponse::bad_request("Missing priority"),
+    };
+
+    with_node(node, |n| {
+        match n.set_hook_priority(name, attach_point, priority) {
+            Ok(Ok(())) => HttpResponse::ok(json!({"status": "priority_updated"})),
             Ok(Err(e)) => HttpResponse::bad_request(&e),
             Err(_) => HttpResponse::internal_error("Driver unavailable"),
         }

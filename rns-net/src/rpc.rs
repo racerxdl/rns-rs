@@ -652,6 +652,46 @@ fn handle_hook_rpc_request(
                 .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "hook unload timed out"))?;
             Ok(hook_result_to_pickle(response))
         }
+        "enable" | "disable" => {
+            let name = required_string(request, "name")?;
+            let attach_point = required_string(request, "attach_point")?;
+            let enabled = op == "enable";
+            let (response_tx, response_rx) = mpsc::channel();
+            event_tx
+                .send(Event::SetHookEnabled {
+                    name,
+                    attach_point,
+                    enabled,
+                    response_tx,
+                })
+                .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "driver shut down"))?;
+            let response = response_rx.recv_timeout(std::time::Duration::from_secs(5)).map_err(
+                |_| io::Error::new(io::ErrorKind::TimedOut, "hook enable/disable timed out"),
+            )?;
+            Ok(hook_result_to_pickle(response))
+        }
+        "set_priority" => {
+            let name = required_string(request, "name")?;
+            let attach_point = required_string(request, "attach_point")?;
+            let priority = request
+                .get("priority")
+                .and_then(|v| v.as_int())
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing priority"))?
+                as i32;
+            let (response_tx, response_rx) = mpsc::channel();
+            event_tx
+                .send(Event::SetHookPriority {
+                    name,
+                    attach_point,
+                    priority,
+                    response_tx,
+                })
+                .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "driver shut down"))?;
+            let response = response_rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "hook priority timed out"))?;
+            Ok(hook_result_to_pickle(response))
+        }
         _ => Ok(PickleValue::None),
     }
 }
@@ -1333,6 +1373,57 @@ impl RpcClient {
             (
                 PickleValue::String("attach_point".into()),
                 PickleValue::String(attach_point.to_string()),
+            ),
+        ]))?;
+        parse_hook_result(&response)
+    }
+
+    pub fn set_hook_enabled(
+        &mut self,
+        name: &str,
+        attach_point: &str,
+        enabled: bool,
+    ) -> io::Result<Result<(), String>> {
+        let op = if enabled { "enable" } else { "disable" };
+        let response = self.call(&PickleValue::Dict(vec![
+            (
+                PickleValue::String("hook".into()),
+                PickleValue::String(op.into()),
+            ),
+            (
+                PickleValue::String("name".into()),
+                PickleValue::String(name.to_string()),
+            ),
+            (
+                PickleValue::String("attach_point".into()),
+                PickleValue::String(attach_point.to_string()),
+            ),
+        ]))?;
+        parse_hook_result(&response)
+    }
+
+    pub fn set_hook_priority(
+        &mut self,
+        name: &str,
+        attach_point: &str,
+        priority: i32,
+    ) -> io::Result<Result<(), String>> {
+        let response = self.call(&PickleValue::Dict(vec![
+            (
+                PickleValue::String("hook".into()),
+                PickleValue::String("set_priority".into()),
+            ),
+            (
+                PickleValue::String("name".into()),
+                PickleValue::String(name.to_string()),
+            ),
+            (
+                PickleValue::String("attach_point".into()),
+                PickleValue::String(attach_point.to_string()),
+            ),
+            (
+                PickleValue::String("priority".into()),
+                PickleValue::Int(priority as i64),
             ),
         ]))?;
         parse_hook_result(&response)

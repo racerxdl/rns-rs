@@ -24,6 +24,9 @@ pub fn run(args: Args) {
         Some("load") => do_load(&args, &base_url, token.as_deref()),
         Some("unload") => do_unload(&args, &base_url, token.as_deref()),
         Some("reload") => do_reload(&args, &base_url, token.as_deref()),
+        Some("enable") => do_set_enabled(&args, &base_url, token.as_deref(), true),
+        Some("disable") => do_set_enabled(&args, &base_url, token.as_deref(), false),
+        Some("set-priority") => do_set_priority(&args, &base_url, token.as_deref()),
         _ => print_usage(),
     }
 }
@@ -191,6 +194,83 @@ fn do_reload(args: &Args, base_url: &str, token: Option<&str>) {
     }
 }
 
+fn do_set_enabled(args: &Args, base_url: &str, token: Option<&str>, enabled: bool) {
+    let name = match args.positional.get(1) {
+        Some(n) => n,
+        None => {
+            eprintln!("Missing hook name");
+            print_usage();
+            std::process::exit(1);
+        }
+    };
+    let attach_point = match args.get("point") {
+        Some(p) => p.to_string(),
+        None => {
+            eprintln!("Missing --point <HookPoint>");
+            print_usage();
+            std::process::exit(1);
+        }
+    };
+
+    let body = serde_json::json!({
+        "name": name,
+        "attach_point": attach_point,
+    });
+    let url = format!(
+        "{}/api/hook/{}",
+        base_url,
+        if enabled { "enable" } else { "disable" }
+    );
+    match simple_post(&url, &body.to_string(), token) {
+        Ok(resp) => println!("{}", resp),
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+fn do_set_priority(args: &Args, base_url: &str, token: Option<&str>) {
+    let name = match args.positional.get(1) {
+        Some(n) => n,
+        None => {
+            eprintln!("Missing hook name");
+            print_usage();
+            std::process::exit(1);
+        }
+    };
+    let attach_point = match args.get("point") {
+        Some(p) => p.to_string(),
+        None => {
+            eprintln!("Missing --point <HookPoint>");
+            print_usage();
+            std::process::exit(1);
+        }
+    };
+    let priority: i32 = match args.get("priority").and_then(|s| s.parse().ok()) {
+        Some(priority) => priority,
+        None => {
+            eprintln!("Missing --priority <N>");
+            print_usage();
+            std::process::exit(1);
+        }
+    };
+
+    let body = serde_json::json!({
+        "name": name,
+        "attach_point": attach_point,
+        "priority": priority,
+    });
+    let url = format!("{}/api/hook/priority", base_url);
+    match simple_post(&url, &body.to_string(), token) {
+        Ok(resp) => println!("{}", resp),
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
 /// Simple HTTP GET using std::net::TcpStream (no external HTTP client dependency).
 fn simple_get(url: &str, token: Option<&str>) -> Result<String, String> {
     let (host, port, path) = parse_url(url)?;
@@ -282,6 +362,9 @@ fn print_usage() {
     println!("    unload <name> --point <HookPoint>   Unload a hook");
     println!("    reload <name> --point <HookPoint>   Reload a hook with new WASM");
     println!("         --path <wasm_file>");
+    println!("    enable <name> --point <HookPoint>   Enable a loaded hook");
+    println!("    disable <name> --point <HookPoint>  Disable a loaded hook");
+    println!("    set-priority <name> --point <HookPoint> --priority N");
     println!();
     println!("OPTIONS:");
     println!("    --url URL          HTTP server URL (default: http://127.0.0.1:8080)");

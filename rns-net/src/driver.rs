@@ -493,6 +493,27 @@ impl Driver {
         self.provider_bridge.is_some()
     }
 
+    #[cfg(feature = "rns-hooks")]
+    fn update_hook_program<F>(
+        &mut self,
+        name: &str,
+        attach_point: &str,
+        mut update: F,
+    ) -> Result<(), String>
+    where
+        F: FnMut(&mut rns_hooks::LoadedProgram),
+    {
+        let point_idx = crate::config::parse_hook_point(attach_point)
+            .ok_or_else(|| format!("unknown hook point '{}'", attach_point))?;
+        let program = self.hook_slots[point_idx]
+            .programs
+            .iter_mut()
+            .find(|program| program.name == name)
+            .ok_or_else(|| format!("hook '{}' not found at point '{}'", name, attach_point))?;
+        update(program);
+        Ok(())
+    }
+
     pub(crate) fn set_tick_interval_handle(&mut self, tick_interval_ms: Arc<AtomicU64>) {
         self.tick_interval_ms = tick_interval_ms;
     }
@@ -1915,6 +1936,67 @@ impl Driver {
                     #[cfg(not(feature = "rns-hooks"))]
                     {
                         let _ = (name, attach_point, wasm_bytes);
+                        let _ = response_tx.send(Err("hooks not enabled".to_string()));
+                    }
+                }
+                Event::SetHookEnabled {
+                    name,
+                    attach_point,
+                    enabled,
+                    response_tx,
+                } => {
+                    #[cfg(feature = "rns-hooks")]
+                    {
+                        let result =
+                            self.update_hook_program(&name, &attach_point, |program| {
+                                program.enabled = enabled;
+                            });
+                        if result.is_ok() {
+                            log::info!(
+                                "{} hook '{}' at point {}",
+                                if enabled { "Enabled" } else { "Disabled" },
+                                name,
+                                attach_point,
+                            );
+                        }
+                        let _ = response_tx.send(result);
+                    }
+                    #[cfg(not(feature = "rns-hooks"))]
+                    {
+                        let _ = (name, attach_point, enabled);
+                        let _ = response_tx.send(Err("hooks not enabled".to_string()));
+                    }
+                }
+                Event::SetHookPriority {
+                    name,
+                    attach_point,
+                    priority,
+                    response_tx,
+                } => {
+                    #[cfg(feature = "rns-hooks")]
+                    {
+                        let result =
+                            self.update_hook_program(&name, &attach_point, |program| {
+                                program.priority = priority;
+                            });
+                        if result.is_ok() {
+                            let point_idx = crate::config::parse_hook_point(&attach_point)
+                                .expect("validated hook point");
+                            self.hook_slots[point_idx]
+                                .programs
+                                .sort_by(|a, b| b.priority.cmp(&a.priority));
+                            log::info!(
+                                "Updated hook '{}' at point {} to priority {}",
+                                name,
+                                attach_point,
+                                priority,
+                            );
+                        }
+                        let _ = response_tx.send(result);
+                    }
+                    #[cfg(not(feature = "rns-hooks"))]
+                    {
+                        let _ = (name, attach_point, priority);
                         let _ = response_tx.send(Err("hooks not enabled".to_string()));
                     }
                 }

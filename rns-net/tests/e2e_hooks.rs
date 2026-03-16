@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use rns_crypto::identity::Identity;
 use rns_crypto::OsRng;
+use rns_core::transport::types::InterfaceId;
 
 use rns_net::{
     AnnouncedIdentity, Callbacks, DestHash, Destination, IdentityHash, InterfaceConfig, NodeConfig,
@@ -214,6 +215,7 @@ fn start_transport_node(port: u16) -> RnsNode {
             probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
             device: None,
             hooks: Vec::new(),
+            known_destinations_ttl: Duration::from_secs(48 * 60 * 60),
             discover_interfaces: false,
             discovery_required_value: None,
             respond_to_probes: false,
@@ -260,6 +262,7 @@ fn start_client_node(port: u16, identity: &Identity, callbacks: Box<dyn Callback
             probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
             device: None,
             hooks: Vec::new(),
+            known_destinations_ttl: Duration::from_secs(48 * 60 * 60),
             discover_interfaces: false,
             discovery_required_value: None,
             respond_to_probes: false,
@@ -442,6 +445,83 @@ fn test_reload_hook() {
     assert_eq!(hooks.len(), 1);
     assert_eq!(hooks[0].name, "my_hook");
     assert_eq!(hooks[0].priority, 5);
+
+    node.shutdown();
+    transport.shutdown();
+}
+
+#[test]
+fn test_enable_disable_hook() {
+    let port = find_free_port();
+    let transport = start_transport_node(port);
+
+    let identity = Identity::new(&mut OsRng);
+    let (tx, _rx) = mpsc::channel();
+    let node = start_client_node(port, &identity, Box::new(TestCallbacks::new(tx)));
+    std::thread::sleep(SETTLE);
+
+    node.load_hook(
+        "toggle_hook".into(),
+        wasm_bytes("packet_logger"),
+        "PreIngress".into(),
+        5,
+    )
+    .expect("send failed")
+    .expect("load_hook failed");
+
+    node.set_hook_enabled("toggle_hook".into(), "PreIngress".into(), false)
+        .expect("send failed")
+        .expect("disable failed");
+    let hooks = node.list_hooks().expect("list_hooks send failed");
+    assert_eq!(hooks.len(), 1);
+    assert!(!hooks[0].enabled);
+
+    node.set_hook_enabled("toggle_hook".into(), "PreIngress".into(), true)
+        .expect("send failed")
+        .expect("enable failed");
+    let hooks = node.list_hooks().expect("list_hooks send failed");
+    assert!(hooks[0].enabled);
+
+    node.shutdown();
+    transport.shutdown();
+}
+
+#[test]
+fn test_set_hook_priority_reorders_listing() {
+    let port = find_free_port();
+    let transport = start_transport_node(port);
+
+    let identity = Identity::new(&mut OsRng);
+    let (tx, _rx) = mpsc::channel();
+    let node = start_client_node(port, &identity, Box::new(TestCallbacks::new(tx)));
+    std::thread::sleep(SETTLE);
+
+    node.load_hook(
+        "low".into(),
+        wasm_bytes("packet_logger"),
+        "PreIngress".into(),
+        1,
+    )
+    .expect("send failed")
+    .expect("load low failed");
+    node.load_hook(
+        "high".into(),
+        wasm_bytes("announce_filter"),
+        "PreIngress".into(),
+        10,
+    )
+    .expect("send failed")
+    .expect("load high failed");
+
+    node.set_hook_priority("low".into(), "PreIngress".into(), 20)
+        .expect("send failed")
+        .expect("set priority failed");
+
+    let hooks = node.list_hooks().expect("list_hooks send failed");
+    assert_eq!(hooks.len(), 2);
+    assert_eq!(hooks[0].name, "low");
+    assert_eq!(hooks[0].priority, 20);
+    assert_eq!(hooks[1].name, "high");
 
     node.shutdown();
     transport.shutdown();

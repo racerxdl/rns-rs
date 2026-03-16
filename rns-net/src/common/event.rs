@@ -220,6 +220,20 @@ pub enum Event<W: Send> {
         wasm_bytes: Vec<u8>,
         response_tx: mpsc::Sender<Result<(), String>>,
     },
+    /// Enable or disable a loaded WASM hook at runtime.
+    SetHookEnabled {
+        name: String,
+        attach_point: String,
+        enabled: bool,
+        response_tx: mpsc::Sender<Result<(), String>>,
+    },
+    /// Update the priority of a loaded WASM hook at runtime.
+    SetHookPriority {
+        name: String,
+        attach_point: String,
+        priority: i32,
+        response_tx: mpsc::Sender<Result<(), String>>,
+    },
     /// List all loaded hooks.
     ListHooks {
         response_tx: mpsc::Sender<Vec<HookInfo>>,
@@ -633,6 +647,28 @@ impl<W: Send> fmt::Debug for Event<W> {
                 .debug_struct("ReloadHook")
                 .field("name", name)
                 .field("attach_point", attach_point)
+                .finish(),
+            Event::SetHookEnabled {
+                name,
+                attach_point,
+                enabled,
+                ..
+            } => f
+                .debug_struct("SetHookEnabled")
+                .field("name", name)
+                .field("attach_point", attach_point)
+                .field("enabled", enabled)
+                .finish(),
+            Event::SetHookPriority {
+                name,
+                attach_point,
+                priority,
+                ..
+            } => f
+                .debug_struct("SetHookPriority")
+                .field("name", name)
+                .field("attach_point", attach_point)
+                .field("priority", priority)
                 .finish(),
             Event::ListHooks { .. } => write!(f, "ListHooks"),
         }
