@@ -1242,8 +1242,6 @@ impl Driver {
         names.sort();
         for name in names {
             for suffix in [
-                "target_host",
-                "target_port",
                 "connect_timeout_secs",
                 "reconnect_wait_secs",
                 "max_reconnect_tries",
@@ -1281,16 +1279,6 @@ impl Driver {
             }
         };
         match setting {
-            "target_host" => Some(make_entry(
-                RuntimeConfigValue::String(current.target_host),
-                RuntimeConfigValue::String(startup.target_host),
-                "TCP client target host; applies on the next reconnect.",
-            )),
-            "target_port" => Some(make_entry(
-                RuntimeConfigValue::Int(current.target_port as i64),
-                RuntimeConfigValue::Int(startup.target_port as i64),
-                "TCP client target port; applies on the next reconnect.",
-            )),
             "connect_timeout_secs" => Some(make_entry(
                 RuntimeConfigValue::Float(current.connect_timeout.as_secs_f64()),
                 RuntimeConfigValue::Float(startup.connect_timeout.as_secs_f64()),
@@ -1338,21 +1326,6 @@ impl Driver {
         })?;
         let mut runtime = handle.runtime.lock().unwrap();
         match setting {
-            "target_host" => {
-                runtime.target_host = Self::expect_string(value, key)?;
-                Ok(())
-            }
-            "target_port" => {
-                let port = Self::expect_u64(value, key)?;
-                if port > u16::MAX as u64 {
-                    return Err(RuntimeConfigError {
-                        code: RuntimeConfigErrorCode::InvalidValue,
-                        message: format!("{} must be <= {}", key, u16::MAX),
-                    });
-                }
-                runtime.target_port = port as u16;
-                Ok(())
-            }
             "connect_timeout_secs" => {
                 runtime.connect_timeout = Duration::from_secs_f64(Self::expect_f64(value, key)?);
                 Ok(())
@@ -1385,8 +1358,6 @@ impl Driver {
         let mut runtime = handle.runtime.lock().unwrap();
         let startup = handle.startup.clone();
         match setting {
-            "target_host" => runtime.target_host = startup.target_host,
-            "target_port" => runtime.target_port = startup.target_port,
             "connect_timeout_secs" => runtime.connect_timeout = startup.connect_timeout,
             "reconnect_wait_secs" => runtime.reconnect_wait = startup.reconnect_wait,
             "max_reconnect_tries" => runtime.max_reconnect_tries = startup.max_reconnect_tries,
@@ -7190,9 +7161,9 @@ mod tests {
             panic!("expected runtime config list");
         };
         let keys: Vec<String> = entries.into_iter().map(|entry| entry.key).collect();
-        assert!(keys.contains(&"tcp_client.uplink.target_host".to_string()));
-        assert!(keys.contains(&"tcp_client.uplink.target_port".to_string()));
         assert!(keys.contains(&"tcp_client.uplink.connect_timeout_secs".to_string()));
+        assert!(keys.contains(&"tcp_client.uplink.reconnect_wait_secs".to_string()));
+        assert!(keys.contains(&"tcp_client.uplink.max_reconnect_tries".to_string()));
     }
 
     #[cfg(feature = "iface-tcp")]
@@ -7202,30 +7173,30 @@ mod tests {
         register_test_tcp_client(&mut driver, "uplink");
 
         let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
-            key: "tcp_client.uplink.target_host".into(),
-            value: RuntimeConfigValue::String("example.com".into()),
+            key: "tcp_client.uplink.connect_timeout_secs".into(),
+            value: RuntimeConfigValue::Float(2.5),
         });
         let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
             panic!("expected runtime config set success");
         };
-        assert_eq!(entry.value, RuntimeConfigValue::String("example.com".into()));
+        assert_eq!(entry.value, RuntimeConfigValue::Float(2.5));
 
         let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
-            key: "tcp_client.uplink.target_port".into(),
-            value: RuntimeConfigValue::Int(5150),
+            key: "tcp_client.uplink.max_reconnect_tries".into(),
+            value: RuntimeConfigValue::Int(0),
         });
         let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
             panic!("expected runtime config set success");
         };
-        assert_eq!(entry.value, RuntimeConfigValue::Int(5150));
+        assert_eq!(entry.value, RuntimeConfigValue::Int(0));
 
         let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
-            key: "tcp_client.uplink.target_host".into(),
+            key: "tcp_client.uplink.connect_timeout_secs".into(),
         });
         let QueryResponse::RuntimeConfigReset(Ok(entry)) = response else {
             panic!("expected runtime config reset success");
         };
-        assert_eq!(entry.value, RuntimeConfigValue::String("127.0.0.1".into()));
+        assert_eq!(entry.value, RuntimeConfigValue::Float(5.0));
     }
 
     #[test]
