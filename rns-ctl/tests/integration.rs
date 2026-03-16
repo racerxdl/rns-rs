@@ -124,6 +124,7 @@ fn start_test_server_with_config(
             max_paths_per_destination: 1,
             known_destinations_ttl: Duration::from_secs(48 * 60 * 60),
             registry: None,
+            provider_bridge: None,
         },
         callbacks,
     )

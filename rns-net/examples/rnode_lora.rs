@@ -56,6 +56,46 @@ fn main() {
 
     log::info!("Connecting to RNode on {} at {} MHz", port, freq_mhz);
 
+    let mut rnode = RNodeConfig {
+        name: format!("RNode {}", port),
+        port: port.clone(),
+        speed: 115200,
+        base_interface_id: InterfaceId(1),
+        subinterfaces: vec![RNodeSubConfig {
+            name: "LoRa".into(),
+            frequency,
+            bandwidth: 125000,
+            txpower: 14,
+            spreading_factor: 8,
+            coding_rate: 5,
+            flow_control: false,
+            st_alock: None,
+            lt_alock: None,
+        }],
+        id_interval: None,
+        id_callsign: None,
+        pre_opened_fd: None,
+        runtime: std::sync::Arc::new(std::sync::Mutex::new(
+            rns_net::interface::rnode::RNodeRuntime {
+                sub: RNodeSubConfig {
+                    name: String::new(),
+                    frequency: 868_000_000,
+                    bandwidth: 125_000,
+                    txpower: 7,
+                    spreading_factor: 8,
+                    coding_rate: 5,
+                    flow_control: false,
+                    st_alock: None,
+                    lt_alock: None,
+                },
+                writer: None,
+            },
+        )),
+    };
+    rnode.runtime = std::sync::Arc::new(std::sync::Mutex::new(
+        rns_net::interface::rnode::RNodeRuntime::from_config(&rnode),
+    ));
+
     let node = RnsNode::start(
         NodeConfig {
             panic_on_interface_error: false,
@@ -64,26 +104,7 @@ fn main() {
             interfaces: vec![InterfaceConfig {
                 name: String::new(),
                 type_name: "RNodeInterface".to_string(),
-                config_data: Box::new(RNodeConfig {
-                    name: format!("RNode {}", port),
-                    port: port.clone(),
-                    speed: 115200,
-                    base_interface_id: InterfaceId(1),
-                    subinterfaces: vec![RNodeSubConfig {
-                        name: "LoRa".into(),
-                        frequency,
-                        bandwidth: 125000,
-                        txpower: 14,
-                        spreading_factor: 8,
-                        coding_rate: 5,
-                        flow_control: false,
-                        st_alock: None,
-                        lt_alock: None,
-                    }],
-                    id_interval: None,
-                    id_callsign: None,
-                    pre_opened_fd: None,
-                }),
+                config_data: Box::new(rnode),
                 mode: MODE_FULL,
                 ifac: None,
                 discovery: None,
@@ -106,7 +127,6 @@ fn main() {
             max_paths_per_destination: 1,
             known_destinations_ttl: std::time::Duration::from_secs(48 * 60 * 60),
             registry: None,
-            known_destinations_ttl: std::time::Duration::from_secs(48 * 60 * 60),
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
         },
