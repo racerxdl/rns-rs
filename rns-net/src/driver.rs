@@ -116,6 +116,13 @@ pub(crate) struct TcpServerDiscoveryRuntimeHandle {
     pub(crate) startup: TcpServerDiscoveryRuntime,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct IfacRuntimeConfig {
+    pub(crate) netname: Option<String>,
+    pub(crate) netkey: Option<String>,
+    pub(crate) size: usize,
+}
+
 /// Thin wrapper providing `EngineAccess` for a `TransportEngine` + Driver interfaces.
 #[cfg(feature = "rns-hooks")]
 struct EngineRef<'a> {
@@ -424,6 +431,10 @@ pub struct Driver {
     pub(crate) rnode_runtime: HashMap<String, RNodeRuntimeConfigHandle>,
     /// Startup/default interface metadata for generic cross-cutting runtime config.
     pub(crate) interface_runtime_defaults: HashMap<String, rns_core::transport::types::InterfaceInfo>,
+    /// Current IFAC runtime config for static interfaces that support IFAC mutation.
+    pub(crate) interface_ifac_runtime: HashMap<String, IfacRuntimeConfig>,
+    /// Startup/default IFAC runtime config for static interfaces.
+    pub(crate) interface_ifac_runtime_defaults: HashMap<String, IfacRuntimeConfig>,
     /// Storage for discovered interfaces.
     pub(crate) discovered_interfaces: crate::discovery::DiscoveredInterfaceStorage,
     /// Required stamp value for accepting discovered interfaces.
@@ -560,6 +571,8 @@ impl Driver {
             #[cfg(feature = "iface-rnode")]
             rnode_runtime: HashMap::new(),
             interface_runtime_defaults: HashMap::new(),
+            interface_ifac_runtime: HashMap::new(),
+            interface_ifac_runtime_defaults: HashMap::new(),
             discovered_interfaces: crate::discovery::DiscoveredInterfaceStorage::new(
                 std::env::temp_dir().join("rns-discovered-interfaces"),
             ),
@@ -804,6 +817,19 @@ impl Driver {
         self.interface_runtime_defaults
             .entry(info.name.clone())
             .or_insert_with(|| info.clone());
+    }
+
+    pub(crate) fn register_interface_ifac_runtime(
+        &mut self,
+        interface_name: &str,
+        startup: IfacRuntimeConfig,
+    ) {
+        self.interface_ifac_runtime_defaults
+            .entry(interface_name.to_string())
+            .or_insert_with(|| startup.clone());
+        self.interface_ifac_runtime
+            .entry(interface_name.to_string())
+            .or_insert(startup);
     }
 
     fn runtime_config_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
@@ -2374,6 +2400,14 @@ impl Driver {
                     entries.push(entry);
                 }
             }
+            if self.interface_ifac_runtime.contains_key(&name) {
+                for suffix in ["ifac_netname", "ifac_passphrase", "ifac_size_bytes"] {
+                    let key = format!("interface.{}.{}", name, suffix);
+                    if let Some(entry) = self.generic_interface_runtime_entry(&key) {
+                        entries.push(entry);
+                    }
+                }
+            }
         }
         entries
     }
@@ -2381,7 +2415,6 @@ impl Driver {
     fn generic_interface_runtime_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
         let rest = key.strip_prefix("interface.")?;
         let (name, setting) = rest.rsplit_once('.')?;
-        let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
         let make_entry = |value: RuntimeConfigValue,
                           default: RuntimeConfigValue,
                           apply_mode: RuntimeConfigApplyMode,
@@ -2400,48 +2433,123 @@ impl Driver {
             }
         };
         match setting {
-            "mode" => Some(make_entry(
-                RuntimeConfigValue::String(Self::interface_mode_name(current.mode)),
-                RuntimeConfigValue::String(Self::interface_mode_name(startup.mode)),
-                RuntimeConfigApplyMode::Immediate,
-                "Routing mode for this interface.",
-            )),
-            "announce_rate_target" => Some(make_entry(
-                current
-                    .announce_rate_target
-                    .map(RuntimeConfigValue::Float)
-                    .unwrap_or(RuntimeConfigValue::Null),
-                startup
-                    .announce_rate_target
-                    .map(RuntimeConfigValue::Float)
-                    .unwrap_or(RuntimeConfigValue::Null),
-                RuntimeConfigApplyMode::Immediate,
-                "Optional announce rate target in announces/sec; null disables it.",
-            )),
-            "announce_rate_grace" => Some(make_entry(
-                RuntimeConfigValue::Int(current.announce_rate_grace as i64),
-                RuntimeConfigValue::Int(startup.announce_rate_grace as i64),
-                RuntimeConfigApplyMode::Immediate,
-                "Announce rate grace period in announces.",
-            )),
-            "announce_rate_penalty" => Some(make_entry(
-                RuntimeConfigValue::Float(current.announce_rate_penalty),
-                RuntimeConfigValue::Float(startup.announce_rate_penalty),
-                RuntimeConfigApplyMode::Immediate,
-                "Announce rate penalty multiplier.",
-            )),
-            "announce_cap" => Some(make_entry(
-                RuntimeConfigValue::Float(current.announce_cap),
-                RuntimeConfigValue::Float(startup.announce_cap),
-                RuntimeConfigApplyMode::Immediate,
-                "Fraction of bitrate reserved for announces.",
-            )),
-            "ingress_control" => Some(make_entry(
-                RuntimeConfigValue::Bool(current.ingress_control),
-                RuntimeConfigValue::Bool(startup.ingress_control),
-                RuntimeConfigApplyMode::Immediate,
-                "Whether ingress control is enabled for this interface.",
-            )),
+            "ifac_netname" => {
+                let current = self.interface_ifac_runtime.get(name)?;
+                let startup = self.interface_ifac_runtime_defaults.get(name)?;
+                Some(make_entry(
+                    current
+                        .netname
+                        .clone()
+                        .map(RuntimeConfigValue::String)
+                        .unwrap_or(RuntimeConfigValue::Null),
+                    startup
+                        .netname
+                        .clone()
+                        .map(RuntimeConfigValue::String)
+                        .unwrap_or(RuntimeConfigValue::Null),
+                    RuntimeConfigApplyMode::Immediate,
+                    "IFAC network name for this interface; null clears it.",
+                ))
+            }
+            "ifac_passphrase" => {
+                let current = self.interface_ifac_runtime.get(name)?;
+                let startup = self.interface_ifac_runtime_defaults.get(name)?;
+                let current_value = current
+                    .netkey
+                    .as_ref()
+                    .map(|_| RuntimeConfigValue::String("<redacted>".to_string()))
+                    .unwrap_or(RuntimeConfigValue::Null);
+                let default_value = startup
+                    .netkey
+                    .as_ref()
+                    .map(|_| RuntimeConfigValue::String("<redacted>".to_string()))
+                    .unwrap_or(RuntimeConfigValue::Null);
+                Some(RuntimeConfigEntry {
+                    key: key.to_string(),
+                    source: if current.netkey == startup.netkey {
+                        RuntimeConfigSource::Startup
+                    } else {
+                        RuntimeConfigSource::RuntimeOverride
+                    },
+                    value: current_value,
+                    default: default_value,
+                    apply_mode: RuntimeConfigApplyMode::Immediate,
+                    description: Some(
+                        "IFAC passphrase for this interface; write-only, set a string to change it or null to clear it."
+                            .to_string(),
+                    ),
+                })
+            }
+            "ifac_size_bytes" => {
+                let current = self.interface_ifac_runtime.get(name)?;
+                let startup = self.interface_ifac_runtime_defaults.get(name)?;
+                Some(make_entry(
+                    RuntimeConfigValue::Int(current.size as i64),
+                    RuntimeConfigValue::Int(startup.size as i64),
+                    RuntimeConfigApplyMode::Immediate,
+                    "IFAC size in bytes; applies when IFAC is enabled.",
+                ))
+            }
+            "mode" => {
+                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                Some(make_entry(
+                    RuntimeConfigValue::String(Self::interface_mode_name(current.mode)),
+                    RuntimeConfigValue::String(Self::interface_mode_name(startup.mode)),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Routing mode for this interface.",
+                ))
+            }
+            "announce_rate_target" => {
+                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                Some(make_entry(
+                    current
+                        .announce_rate_target
+                        .map(RuntimeConfigValue::Float)
+                        .unwrap_or(RuntimeConfigValue::Null),
+                    startup
+                        .announce_rate_target
+                        .map(RuntimeConfigValue::Float)
+                        .unwrap_or(RuntimeConfigValue::Null),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Optional announce rate target in announces/sec; null disables it.",
+                ))
+            }
+            "announce_rate_grace" => {
+                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                Some(make_entry(
+                    RuntimeConfigValue::Int(current.announce_rate_grace as i64),
+                    RuntimeConfigValue::Int(startup.announce_rate_grace as i64),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Announce rate grace period in announces.",
+                ))
+            }
+            "announce_rate_penalty" => {
+                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                Some(make_entry(
+                    RuntimeConfigValue::Float(current.announce_rate_penalty),
+                    RuntimeConfigValue::Float(startup.announce_rate_penalty),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Announce rate penalty multiplier.",
+                ))
+            }
+            "announce_cap" => {
+                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                Some(make_entry(
+                    RuntimeConfigValue::Float(current.announce_cap),
+                    RuntimeConfigValue::Float(startup.announce_cap),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Fraction of bitrate reserved for announces.",
+                ))
+            }
+            "ingress_control" => {
+                let (_, current, startup) = self.interface_runtime_infos_by_name(name)?;
+                Some(make_entry(
+                    RuntimeConfigValue::Bool(current.ingress_control),
+                    RuntimeConfigValue::Bool(startup.ingress_control),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Whether ingress control is enabled for this interface.",
+                ))
+            }
             _ => None,
         }
     }
@@ -2504,6 +2612,21 @@ impl Driver {
         }
     }
 
+    fn apply_interface_ifac_runtime(
+        entry: &mut InterfaceEntry,
+        config: &IfacRuntimeConfig,
+    ) {
+        entry.ifac = if config.netname.is_some() || config.netkey.is_some() {
+            Some(ifac::derive_ifac(
+                config.netname.as_deref(),
+                config.netkey.as_deref(),
+                config.size,
+            ))
+        } else {
+            None
+        };
+    }
+
     fn set_generic_interface_runtime_config(
         &mut self,
         key: &str,
@@ -2521,6 +2644,57 @@ impl Driver {
             })?;
         let entry = self.interfaces.get_mut(&id).unwrap();
         match setting {
+            "ifac_netname" => {
+                let runtime = self
+                    .interface_ifac_runtime
+                    .get_mut(name)
+                    .ok_or(RuntimeConfigError {
+                        code: RuntimeConfigErrorCode::UnknownKey,
+                        message: format!("unknown runtime-config key '{}'", key),
+                    })?;
+                runtime.netname = match value {
+                    RuntimeConfigValue::Null => None,
+                    RuntimeConfigValue::String(value) => Some(value),
+                    _ => {
+                        return Err(RuntimeConfigError {
+                            code: RuntimeConfigErrorCode::InvalidType,
+                            message: format!("{} expects a string or null", key),
+                        })
+                    }
+                };
+                Self::apply_interface_ifac_runtime(entry, runtime);
+            }
+            "ifac_passphrase" => {
+                let runtime = self
+                    .interface_ifac_runtime
+                    .get_mut(name)
+                    .ok_or(RuntimeConfigError {
+                        code: RuntimeConfigErrorCode::UnknownKey,
+                        message: format!("unknown runtime-config key '{}'", key),
+                    })?;
+                runtime.netkey = match value {
+                    RuntimeConfigValue::Null => None,
+                    RuntimeConfigValue::String(value) => Some(value),
+                    _ => {
+                        return Err(RuntimeConfigError {
+                            code: RuntimeConfigErrorCode::InvalidType,
+                            message: format!("{} expects a string or null", key),
+                        })
+                    }
+                };
+                Self::apply_interface_ifac_runtime(entry, runtime);
+            }
+            "ifac_size_bytes" => {
+                let runtime = self
+                    .interface_ifac_runtime
+                    .get_mut(name)
+                    .ok_or(RuntimeConfigError {
+                        code: RuntimeConfigErrorCode::UnknownKey,
+                        message: format!("unknown runtime-config key '{}'", key),
+                    })?;
+                runtime.size = (Self::expect_u64(value, key)? as usize).max(crate::ifac::IFAC_MIN_SIZE);
+                Self::apply_interface_ifac_runtime(entry, runtime);
+            }
             "mode" => {
                 entry.info.mode = Self::parse_interface_mode(&value).ok_or(RuntimeConfigError {
                     code: RuntimeConfigErrorCode::InvalidValue,
@@ -2577,6 +2751,60 @@ impl Driver {
                 message: format!("interface '{}' not found", name),
             })?;
         match setting {
+            "ifac_netname" => {
+                let startup_ifac = self
+                    .interface_ifac_runtime_defaults
+                    .get(name)
+                    .ok_or(RuntimeConfigError {
+                        code: RuntimeConfigErrorCode::UnknownKey,
+                        message: format!("unknown runtime-config key '{}'", key),
+                    })?;
+                let runtime = self
+                    .interface_ifac_runtime
+                    .get_mut(name)
+                    .ok_or(RuntimeConfigError {
+                        code: RuntimeConfigErrorCode::UnknownKey,
+                        message: format!("unknown runtime-config key '{}'", key),
+                    })?;
+                runtime.netname = startup_ifac.netname.clone();
+                Self::apply_interface_ifac_runtime(entry, runtime);
+            }
+            "ifac_passphrase" => {
+                let startup_ifac = self
+                    .interface_ifac_runtime_defaults
+                    .get(name)
+                    .ok_or(RuntimeConfigError {
+                        code: RuntimeConfigErrorCode::UnknownKey,
+                        message: format!("unknown runtime-config key '{}'", key),
+                    })?;
+                let runtime = self
+                    .interface_ifac_runtime
+                    .get_mut(name)
+                    .ok_or(RuntimeConfigError {
+                        code: RuntimeConfigErrorCode::UnknownKey,
+                        message: format!("unknown runtime-config key '{}'", key),
+                    })?;
+                runtime.netkey = startup_ifac.netkey.clone();
+                Self::apply_interface_ifac_runtime(entry, runtime);
+            }
+            "ifac_size_bytes" => {
+                let startup_ifac = self
+                    .interface_ifac_runtime_defaults
+                    .get(name)
+                    .ok_or(RuntimeConfigError {
+                        code: RuntimeConfigErrorCode::UnknownKey,
+                        message: format!("unknown runtime-config key '{}'", key),
+                    })?;
+                let runtime = self
+                    .interface_ifac_runtime
+                    .get_mut(name)
+                    .ok_or(RuntimeConfigError {
+                        code: RuntimeConfigErrorCode::UnknownKey,
+                        message: format!("unknown runtime-config key '{}'", key),
+                    })?;
+                runtime.size = startup_ifac.size;
+                Self::apply_interface_ifac_runtime(entry, runtime);
+            }
             "mode" => entry.info.mode = startup.mode,
             "announce_rate_target" => entry.info.announce_rate_target = startup.announce_rate_target,
             "announce_rate_grace" => entry.info.announce_rate_grace = startup.announce_rate_grace,
@@ -6665,6 +6893,14 @@ mod tests {
         info.announce_cap = 0.05;
         info.ingress_control = true;
         driver.register_interface_runtime_defaults(&info);
+        driver.register_interface_ifac_runtime(
+            &info.name,
+            IfacRuntimeConfig {
+                netname: None,
+                netkey: None,
+                size: 16,
+            },
+        );
         driver.engine.register_interface(info.clone());
         let (writer, _) = MockWriter::new();
         driver.interfaces.insert(
@@ -8853,6 +9089,9 @@ mod tests {
         assert!(keys.contains(&"interface.public.announce_rate_penalty".to_string()));
         assert!(keys.contains(&"interface.public.announce_cap".to_string()));
         assert!(keys.contains(&"interface.public.ingress_control".to_string()));
+        assert!(keys.contains(&"interface.public.ifac_netname".to_string()));
+        assert!(keys.contains(&"interface.public.ifac_passphrase".to_string()));
+        assert!(keys.contains(&"interface.public.ifac_size_bytes".to_string()));
     }
 
     #[test]
@@ -8893,6 +9132,71 @@ mod tests {
             panic!("expected reset ok");
         };
         assert_eq!(entry.value, RuntimeConfigValue::String("full".into()));
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "interface.public.ifac_netname".into(),
+            value: RuntimeConfigValue::String("mesh".into()),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected set ok");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::String("mesh".into()));
+        assert_eq!(
+            driver.interfaces.get(&InterfaceId(1)).unwrap().ifac.as_ref().unwrap().size,
+            16
+        );
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "interface.public.ifac_passphrase".into(),
+            value: RuntimeConfigValue::String("secret".into()),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected set ok");
+        };
+        assert_eq!(
+            entry.value,
+            RuntimeConfigValue::String("<redacted>".into())
+        );
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "interface.public.ifac_size_bytes".into(),
+            value: RuntimeConfigValue::Int(24),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected set ok");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Int(24));
+        let ifac = driver.interfaces.get(&InterfaceId(1)).unwrap().ifac.as_ref().unwrap();
+        assert_eq!(ifac.size, 24);
+
+        let response = driver.handle_query(QueryRequest::GetRuntimeConfig {
+            key: "interface.public.ifac_passphrase".into(),
+        });
+        let QueryResponse::RuntimeConfigEntry(Some(entry)) = response else {
+            panic!("expected runtime config entry");
+        };
+        assert_eq!(
+            entry.value,
+            RuntimeConfigValue::String("<redacted>".into())
+        );
+
+        let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
+            key: "interface.public.ifac_netname".into(),
+        });
+        let QueryResponse::RuntimeConfigReset(Ok(entry)) = response else {
+            panic!("expected reset ok");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Null);
+        assert!(driver.interfaces.get(&InterfaceId(1)).unwrap().ifac.is_some());
+
+        let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
+            key: "interface.public.ifac_passphrase".into(),
+        });
+        let QueryResponse::RuntimeConfigReset(Ok(entry)) = response else {
+            panic!("expected reset ok");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Null);
+        assert!(driver.interfaces.get(&InterfaceId(1)).unwrap().ifac.is_none());
     }
 
     #[test]
