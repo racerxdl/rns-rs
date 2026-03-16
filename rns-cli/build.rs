@@ -5,10 +5,8 @@ use std::process::Command;
 fn main() {
     println!("cargo:rerun-if-changed=../.git/HEAD");
     println!("cargo:rerun-if-changed=../.git/refs");
-    println!("cargo:rerun-if-changed=../rns-hooks/examples/stats_scraper/src/lib.rs");
-    println!("cargo:rerun-if-changed=../rns-hooks/examples/stats_scraper/Cargo.toml");
-    println!("cargo:rerun-if-changed=../rns-hooks/sdk/rns-hooks-sdk/src");
-    println!("cargo:rerun-if-changed=../rns-hooks/sdk/rns-hooks-abi/src");
+    println!("cargo:rerun-if-changed=../rns-stats-hook/src/lib.rs");
+    println!("cargo:rerun-if-changed=../rns-stats-hook/Cargo.toml");
 
     let pkg_version = env!("CARGO_PKG_VERSION");
     let parts: Vec<&str> = pkg_version.split('.').collect();
@@ -39,13 +37,13 @@ fn main() {
 
 fn embed_stats_hook() -> anyhow::Result<()> {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
-    let hook_manifest = manifest_dir.join("../rns-hooks/examples/stats_scraper/Cargo.toml");
     let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let profile = if env::var("PROFILE").unwrap_or_else(|_| "debug".to_string()) == "release" {
         "release"
     } else {
         "debug"
     };
+    let hook_manifest = resolve_stats_hook_manifest(&manifest_dir, &cargo)?;
 
     let mut cmd = Command::new(cargo);
     let target_root = PathBuf::from(env::var("OUT_DIR")?).join("embedded-hook-target");
@@ -67,7 +65,7 @@ fn embed_stats_hook() -> anyhow::Result<()> {
     let wasm_path = target_root
         .join("wasm32-unknown-unknown")
         .join(profile)
-        .join("stats_scraper.wasm");
+        .join("rns_stats_hook.wasm");
     if !Path::new(&wasm_path).exists() {
         anyhow::bail!("expected embedded hook at {}", wasm_path.display());
     }
@@ -77,4 +75,35 @@ fn embed_stats_hook() -> anyhow::Result<()> {
         wasm_path.display()
     );
     Ok(())
+}
+
+fn resolve_stats_hook_manifest(manifest_dir: &Path, cargo: &str) -> anyhow::Result<PathBuf> {
+    let local = manifest_dir.join("../rns-stats-hook/Cargo.toml");
+    if local.exists() {
+        return Ok(local);
+    }
+
+    let output = Command::new(cargo)
+        .args(["metadata", "--format-version", "1"])
+        .current_dir(manifest_dir)
+        .output()?;
+    if !output.status.success() {
+        anyhow::bail!("cargo metadata failed with status {}", output.status);
+    }
+
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let packages = value
+        .get("packages")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| anyhow::anyhow!("cargo metadata response missing packages"))?;
+
+    let manifest = packages.iter().find_map(|pkg| {
+        let name = pkg.get("name").and_then(|v| v.as_str())?;
+        (name == "rns-stats-hook")
+            .then(|| pkg.get("manifest_path").and_then(|v| v.as_str()))
+            .flatten()
+            .map(PathBuf::from)
+    });
+
+    manifest.ok_or_else(|| anyhow::anyhow!("could not locate rns-stats-hook manifest"))
 }
