@@ -44,7 +44,7 @@ pub use event::{
 pub use ifac::IfacState;
 #[cfg(feature = "iface-auto")]
 pub use interface::auto::{AutoConfig, AutoFactory};
-#[cfg(feature = "iface-backbone")]
+#[cfg(all(feature = "iface-backbone", target_os = "linux"))]
 pub use interface::backbone::{BackboneClientConfig, BackboneConfig, BackboneInterfaceFactory};
 #[cfg(feature = "iface-i2p")]
 pub use interface::i2p::{I2pConfig, I2pFactory};

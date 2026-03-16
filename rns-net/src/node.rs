@@ -20,7 +20,7 @@ use crate::ifac;
 #[cfg(feature = "iface-local")]
 use crate::interface::local::LocalServerConfig;
 use crate::interface::{InterfaceEntry, InterfaceStats};
-#[cfg(feature = "iface-backbone")]
+#[cfg(all(feature = "iface-backbone", target_os = "linux"))]
 use crate::interface::backbone::{
     client_runtime_handle_from_mode, runtime_handle_from_mode, BackboneMode,
 };
@@ -144,7 +144,7 @@ fn extract_discovery_config(
     })
 }
 
-#[cfg(feature = "iface-backbone")]
+#[cfg(all(feature = "iface-backbone", target_os = "linux"))]
 fn backbone_discovery_runtime_from_interface(
     interface_name: &str,
     mode: &BackboneMode,
@@ -697,7 +697,7 @@ impl RnsNode {
             .registry
             .unwrap_or_else(crate::interface::registry::InterfaceRegistry::with_builtins);
         for iface_config in config.interfaces {
-            #[cfg(feature = "iface-backbone")]
+            #[cfg(all(feature = "iface-backbone", target_os = "linux"))]
             if iface_config.type_name == "BackboneInterface" {
                 if let Some(mode) = iface_config
                     .config_data

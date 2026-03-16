@@ -2,7 +2,7 @@
 
 #[cfg(feature = "iface-auto")]
 pub mod auto;
-#[cfg(feature = "iface-backbone")]
+#[cfg(all(feature = "iface-backbone", target_os = "linux"))]
 pub mod backbone;
 #[cfg(feature = "iface-i2p")]
 pub mod i2p;
