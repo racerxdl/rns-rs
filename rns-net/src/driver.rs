@@ -37,6 +37,7 @@ use crate::link_manager::{LinkManager, LinkManagerAction};
 use crate::time;
 
 const DEFAULT_KNOWN_DESTINATIONS_TTL: f64 = 48.0 * 60.0 * 60.0;
+const DEFAULT_RATE_LIMITER_TTL_SECS: f64 = 48.0 * 60.0 * 60.0;
 const DEFAULT_TICK_INTERVAL_MS: u64 = 1000;
 const DEFAULT_KNOWN_DESTINATIONS_CLEANUP_INTERVAL_TICKS: u32 = 3600;
 const DEFAULT_ANNOUNCE_CACHE_CLEANUP_INTERVAL_TICKS: u32 = 3600;
@@ -48,6 +49,7 @@ const DEFAULT_MANAGEMENT_ANNOUNCE_INTERVAL_SECS: f64 = 300.0;
 pub(crate) struct RuntimeConfigDefaults {
     pub(crate) tick_interval_ms: u64,
     pub(crate) known_destinations_ttl: f64,
+    pub(crate) rate_limiter_ttl_secs: f64,
     pub(crate) known_destinations_cleanup_interval_ticks: u32,
     pub(crate) announce_cache_cleanup_interval_ticks: u32,
     pub(crate) announce_cache_cleanup_batch_size: usize,
@@ -304,6 +306,8 @@ pub struct Driver {
     pub(crate) known_destinations: HashMap<[u8; 16], crate::destination::AnnouncedIdentity>,
     /// TTL for known destinations without an active path, in seconds.
     pub(crate) known_destinations_ttl: f64,
+    /// TTL for announce rate-limiter entries without an active path, in seconds.
+    pub(crate) rate_limiter_ttl_secs: f64,
     /// Destination hash for rnstransport.path.request (PLAIN).
     pub(crate) path_request_dest: [u8; 16],
     /// Proof strategies per destination hash.
@@ -407,6 +411,7 @@ impl Driver {
         let runtime_config_defaults = RuntimeConfigDefaults {
             tick_interval_ms: DEFAULT_TICK_INTERVAL_MS,
             known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
+            rate_limiter_ttl_secs: DEFAULT_RATE_LIMITER_TTL_SECS,
             known_destinations_cleanup_interval_ticks:
                 DEFAULT_KNOWN_DESTINATIONS_CLEANUP_INTERVAL_TICKS,
             announce_cache_cleanup_interval_ticks:
@@ -432,6 +437,7 @@ impl Driver {
             initial_announce_sent: false,
             known_destinations: HashMap::new(),
             known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
+            rate_limiter_ttl_secs: DEFAULT_RATE_LIMITER_TTL_SECS,
             path_request_dest,
             proof_strategies: HashMap::new(),
             sent_packets: HashMap::new(),
@@ -545,6 +551,13 @@ impl Driver {
                 RuntimeConfigApplyMode::Immediate,
                 "TTL for known destinations without an active path.",
             )),
+            "global.rate_limiter_ttl_secs" => Some(make_entry(
+                key,
+                RuntimeConfigValue::Float(self.rate_limiter_ttl_secs),
+                RuntimeConfigValue::Float(defaults.rate_limiter_ttl_secs),
+                RuntimeConfigApplyMode::Immediate,
+                "TTL for announce rate-limiter entries without an active path.",
+            )),
             "global.known_destinations_cleanup_interval_ticks" => Some(make_entry(
                 key,
                 RuntimeConfigValue::Int(self.known_destinations_cleanup_interval_ticks as i64),
@@ -611,6 +624,7 @@ impl Driver {
         let mut entries: Vec<RuntimeConfigEntry> = [
             "global.tick_interval_ms",
             "global.known_destinations_ttl_secs",
+            "global.rate_limiter_ttl_secs",
             "global.known_destinations_cleanup_interval_ticks",
             "global.announce_cache_cleanup_interval_ticks",
             "global.announce_cache_cleanup_batch_size",
@@ -1304,8 +1318,12 @@ impl Driver {
                         });
                         let kd_removed = kd_before - self.known_destinations.len();
 
-                        // Cull rate limiter entries
-                        let rl_removed = self.engine.cull_rate_limiter(&active_dests);
+                        // Cull rate limiter entries while keeping active or recently used ones.
+                        let rl_removed = self.engine.cull_rate_limiter(
+                            &active_dests,
+                            now,
+                            self.rate_limiter_ttl_secs,
+                        );
 
                         if kd_removed > 0 || rl_removed > 0 {
                             log::info!(
@@ -2354,6 +2372,19 @@ impl Driver {
                             Err(err) => Err(err),
                         }
                     }
+                    "global.rate_limiter_ttl_secs" => {
+                        match Self::expect_f64(value, &key) {
+                            Ok(value) if value >= 0.0 => {
+                                self.rate_limiter_ttl_secs = value;
+                                Ok(())
+                            }
+                            Ok(_) => Err(RuntimeConfigError {
+                                code: RuntimeConfigErrorCode::InvalidValue,
+                                message: format!("{} must be >= 0", key),
+                            }),
+                            Err(err) => Err(err),
+                        }
+                    }
                     "global.known_destinations_cleanup_interval_ticks" => {
                         match Self::expect_u64(value, &key) {
                             Ok(value) if value > 0 => {
@@ -2464,6 +2495,10 @@ impl Driver {
                     }
                     "global.known_destinations_ttl_secs" => {
                         self.known_destinations_ttl = defaults.known_destinations_ttl;
+                        Ok(())
+                    }
+                    "global.rate_limiter_ttl_secs" => {
+                        self.rate_limiter_ttl_secs = defaults.rate_limiter_ttl_secs;
                         Ok(())
                     }
                     "global.known_destinations_cleanup_interval_ticks" => {
@@ -5812,6 +5847,7 @@ mod tests {
         let keys: Vec<String> = entries.into_iter().map(|entry| entry.key).collect();
         assert!(keys.contains(&"global.tick_interval_ms".to_string()));
         assert!(keys.contains(&"global.known_destinations_ttl_secs".to_string()));
+        assert!(keys.contains(&"global.rate_limiter_ttl_secs".to_string()));
         assert!(keys.contains(&"global.direct_connect_policy".to_string()));
     }
 
@@ -5851,6 +5887,33 @@ mod tests {
             panic!("expected runtime config set failure");
         };
         assert_eq!(err.code, RuntimeConfigErrorCode::InvalidValue);
+    }
+
+    #[test]
+    fn runtime_config_set_and_reset_rate_limiter_ttl() {
+        let mut driver = new_test_driver();
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "global.rate_limiter_ttl_secs".into(),
+            value: RuntimeConfigValue::Float(600.0),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected runtime config set success");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Float(600.0));
+        assert_eq!(driver.rate_limiter_ttl_secs, 600.0);
+
+        let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
+            key: "global.rate_limiter_ttl_secs".into(),
+        });
+        let QueryResponse::RuntimeConfigReset(Ok(entry)) = response else {
+            panic!("expected runtime config reset success");
+        };
+        assert_eq!(
+            entry.value,
+            RuntimeConfigValue::Float(DEFAULT_RATE_LIMITER_TTL_SECS)
+        );
+        assert_eq!(driver.rate_limiter_ttl_secs, DEFAULT_RATE_LIMITER_TTL_SECS);
     }
 
     #[cfg(feature = "iface-backbone")]

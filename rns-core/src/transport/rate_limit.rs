@@ -20,11 +20,18 @@ impl AnnounceRateLimiter {
         self.table.iter()
     }
 
-    /// Remove entries for destinations not in the given active set.
+    /// Remove entries for destinations that are neither active nor recently used.
     /// Returns the number of removed entries.
-    pub fn cull_stale(&mut self, active_destinations: &alloc::collections::BTreeSet<[u8; 16]>) -> usize {
+    pub fn cull_stale(
+        &mut self,
+        active_destinations: &alloc::collections::BTreeSet<[u8; 16]>,
+        now: f64,
+        ttl_secs: f64,
+    ) -> usize {
         let before = self.table.len();
-        self.table.retain(|k, _| active_destinations.contains(k));
+        self.table.retain(|k, entry| {
+            active_destinations.contains(k) || now - entry.last < ttl_secs
+        });
         before - self.table.len()
     }
 
@@ -174,5 +181,32 @@ mod tests {
         assert!(limiter.check_and_update(&dest(1), 101.0, Some(10.0), 0, 30.0));
         // Different destination is not affected
         assert!(!limiter.check_and_update(&dest(2), 101.0, Some(10.0), 0, 30.0));
+    }
+
+    #[test]
+    fn test_cull_stale_keeps_recent_entries() {
+        let mut limiter = AnnounceRateLimiter::new();
+        assert!(!limiter.check_and_update(&dest(1), 100.0, Some(10.0), 0, 30.0));
+        assert!(!limiter.check_and_update(&dest(2), 150.0, Some(10.0), 0, 30.0));
+
+        let active = alloc::collections::BTreeSet::new();
+        let removed = limiter.cull_stale(&active, 180.0, 40.0);
+
+        assert_eq!(removed, 1);
+        assert_eq!(limiter.entries().count(), 1);
+        assert_eq!(limiter.entries().next().unwrap().0, &dest(2));
+    }
+
+    #[test]
+    fn test_cull_stale_keeps_active_entries_even_if_old() {
+        let mut limiter = AnnounceRateLimiter::new();
+        assert!(!limiter.check_and_update(&dest(1), 100.0, Some(10.0), 0, 30.0));
+
+        let mut active = alloc::collections::BTreeSet::new();
+        active.insert(dest(1));
+        let removed = limiter.cull_stale(&active, 10_000.0, 1.0);
+
+        assert_eq!(removed, 0);
+        assert_eq!(limiter.entries().count(), 1);
     }
 }

@@ -1641,10 +1641,15 @@ impl TransportEngine {
             .collect()
     }
 
-    /// Cull rate limiter entries for destinations not in the given active set.
+    /// Cull rate limiter entries for destinations that are neither active nor recently used.
     /// Returns the number of removed entries.
-    pub fn cull_rate_limiter(&mut self, active: &alloc::collections::BTreeSet<[u8; 16]>) -> usize {
-        self.rate_limiter.cull_stale(active)
+    pub fn cull_rate_limiter(
+        &mut self,
+        active: &alloc::collections::BTreeSet<[u8; 16]>,
+        now: f64,
+        ttl_secs: f64,
+    ) -> usize {
+        self.rate_limiter.cull_stale(active, now, ttl_secs)
     }
 
     // =========================================================================
