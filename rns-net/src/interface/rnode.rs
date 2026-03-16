@@ -58,11 +58,48 @@ pub struct RNodeConfig {
     /// Pre-opened file descriptor (e.g. from a USB bridge socketpair on Android).
     /// When set, `start()` uses this fd directly instead of opening `port`.
     pub pre_opened_fd: Option<i32>,
+    pub runtime: Arc<Mutex<RNodeRuntime>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RNodeRuntime {
+    pub sub: RNodeSubConfig,
+    pub writer: Option<Arc<Mutex<std::fs::File>>>,
+}
+
+impl RNodeRuntime {
+    pub fn from_config(config: &RNodeConfig) -> Self {
+        Self {
+            sub: config
+                .subinterfaces
+                .first()
+                .cloned()
+                .unwrap_or_else(|| RNodeSubConfig {
+                    name: config.name.clone(),
+                    frequency: 868_000_000,
+                    bandwidth: 125_000,
+                    txpower: 7,
+                    spreading_factor: 8,
+                    coding_rate: 5,
+                    flow_control: false,
+                    st_alock: None,
+                    lt_alock: None,
+                }),
+            writer: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RNodeRuntimeConfigHandle {
+    pub interface_name: String,
+    pub runtime: Arc<Mutex<RNodeRuntime>>,
+    pub startup: RNodeRuntime,
 }
 
 impl Default for RNodeConfig {
     fn default() -> Self {
-        RNodeConfig {
+        let mut config = RNodeConfig {
             name: String::new(),
             port: String::new(),
             speed: 115200,
@@ -71,7 +108,24 @@ impl Default for RNodeConfig {
             id_callsign: None,
             base_interface_id: InterfaceId(0),
             pre_opened_fd: None,
-        }
+            runtime: Arc::new(Mutex::new(RNodeRuntime {
+                sub: RNodeSubConfig {
+                    name: String::new(),
+                    frequency: 868_000_000,
+                    bandwidth: 125_000,
+                    txpower: 7,
+                    spreading_factor: 8,
+                    coding_rate: 5,
+                    flow_control: false,
+                    st_alock: None,
+                    lt_alock: None,
+                },
+                writer: None,
+            })),
+        };
+        let startup = RNodeRuntime::from_config(&config);
+        config.runtime = Arc::new(Mutex::new(startup));
+        config
     }
 }
 
@@ -216,6 +270,11 @@ pub fn start(
 
     // Spawn reader thread
     let reader_shared_writer = shared_writer.clone();
+    {
+        let mut runtime = config.runtime.lock().unwrap();
+        runtime.writer = Some(shared_writer.clone());
+        runtime.sub = config.subinterfaces.first().cloned().unwrap_or(runtime.sub.clone());
+    }
     let reader_config = config.clone();
     let reader_flow_states = flow_states;
     thread::Builder::new()
@@ -422,7 +481,7 @@ fn reader_loop(
 }
 
 /// Configure a single subinterface on the RNode device.
-fn configure_subinterface(
+pub(crate) fn configure_subinterface(
     writer: &Arc<Mutex<std::fs::File>>,
     index: u8,
     sub: &RNodeSubConfig,
@@ -661,6 +720,20 @@ impl InterfaceFactory for RNodeFactory {
             id_callsign,
             base_interface_id: id,
             pre_opened_fd,
+            runtime: Arc::new(Mutex::new(RNodeRuntime {
+                sub: RNodeSubConfig {
+                    name: name.to_string(),
+                    frequency,
+                    bandwidth,
+                    txpower,
+                    spreading_factor,
+                    coding_rate,
+                    flow_control,
+                    st_alock,
+                    lt_alock,
+                },
+                writer: None,
+            })),
         }))
     }
 
@@ -714,6 +787,14 @@ impl InterfaceFactory for RNodeFactory {
         }
 
         Ok(StartResult::Multi(subs))
+    }
+}
+
+pub(crate) fn rnode_runtime_handle_from_config(config: &RNodeConfig) -> RNodeRuntimeConfigHandle {
+    RNodeRuntimeConfigHandle {
+        interface_name: config.name.clone(),
+        runtime: Arc::clone(&config.runtime),
+        startup: RNodeRuntime::from_config(config),
     }
 }
 

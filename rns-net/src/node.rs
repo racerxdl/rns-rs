@@ -30,6 +30,8 @@ use crate::interface::auto::{auto_runtime_handle_from_config, AutoConfig};
 use crate::interface::i2p::{i2p_runtime_handle_from_config, I2pConfig};
 #[cfg(feature = "iface-pipe")]
 use crate::interface::pipe::{pipe_runtime_handle_from_config, PipeConfig};
+#[cfg(feature = "iface-rnode")]
+use crate::interface::rnode::{rnode_runtime_handle_from_config, RNodeConfig};
 #[cfg(feature = "iface-tcp")]
 use crate::interface::tcp::{tcp_client_runtime_handle_from_config, TcpClientConfig};
 #[cfg(feature = "iface-tcp")]
@@ -796,6 +798,16 @@ impl RnsNode {
                     .downcast_ref::<PipeConfig>()
                 {
                     driver.register_pipe_runtime(pipe_runtime_handle_from_config(pipe_config));
+                }
+            }
+            #[cfg(feature = "iface-rnode")]
+            if iface_config.type_name == "RNodeInterface" {
+                if let Some(rnode_config) = iface_config
+                    .config_data
+                    .as_any()
+                    .downcast_ref::<RNodeConfig>()
+                {
+                    driver.register_rnode_runtime(rnode_runtime_handle_from_config(rnode_config));
                 }
             }
 
