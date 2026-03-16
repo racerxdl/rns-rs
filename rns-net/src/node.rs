@@ -177,6 +177,40 @@ fn backbone_discovery_runtime_from_interface(
     })
 }
 
+#[cfg(feature = "iface-tcp")]
+fn tcp_server_discovery_runtime_from_interface(
+    interface_name: &str,
+    config: &crate::interface::tcp_server::TcpServerConfig,
+    discovery: Option<&crate::discovery::DiscoveryConfig>,
+    transport_enabled: bool,
+    ifac: Option<&IfacConfig>,
+) -> crate::driver::TcpServerDiscoveryRuntimeHandle {
+    let startup_config = discovery.cloned().unwrap_or(crate::discovery::DiscoveryConfig {
+        discovery_name: interface_name.to_string(),
+        announce_interval: 21600,
+        stamp_value: crate::discovery::DEFAULT_STAMP_VALUE,
+        reachable_on: None,
+        interface_type: "TCPServerInterface".to_string(),
+        listen_port: Some(config.listen_port),
+        latitude: None,
+        longitude: None,
+        height: None,
+    });
+    let startup = crate::driver::TcpServerDiscoveryRuntime {
+        discoverable: discovery.is_some(),
+        config: startup_config,
+        transport_enabled,
+        ifac_netname: ifac.and_then(|cfg| cfg.netname.clone()),
+        ifac_netkey: ifac.and_then(|cfg| cfg.netkey.clone()),
+    };
+
+    crate::driver::TcpServerDiscoveryRuntimeHandle {
+        interface_name: config.name.clone(),
+        current: startup.clone(),
+        startup,
+    }
+}
+
 /// Top-level node configuration.
 pub struct NodeConfig {
     pub transport_enabled: bool,
@@ -680,12 +714,21 @@ impl RnsNode {
             }
             #[cfg(feature = "iface-tcp")]
             if iface_config.type_name == "TCPServerInterface" {
-                if let Some(config) = iface_config
+                if let Some(tcp_config) = iface_config
                     .config_data
                     .as_any()
                     .downcast_ref::<TcpServerConfig>()
                 {
-                    driver.register_tcp_server_runtime(tcp_runtime_handle_from_config(config));
+                    driver.register_tcp_server_runtime(tcp_runtime_handle_from_config(tcp_config));
+                    driver.register_tcp_server_discovery_runtime(
+                        tcp_server_discovery_runtime_from_interface(
+                            &iface_config.name,
+                            tcp_config,
+                            iface_config.discovery.as_ref(),
+                            config.transport_enabled,
+                            iface_config.ifac.as_ref(),
+                        ),
+                    );
                 }
             }
 

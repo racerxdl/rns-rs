@@ -76,6 +76,24 @@ pub(crate) struct BackboneDiscoveryRuntimeHandle {
     pub(crate) startup: BackboneDiscoveryRuntime,
 }
 
+#[cfg(feature = "iface-tcp")]
+#[derive(Debug, Clone)]
+pub(crate) struct TcpServerDiscoveryRuntime {
+    pub(crate) discoverable: bool,
+    pub(crate) config: crate::discovery::DiscoveryConfig,
+    pub(crate) transport_enabled: bool,
+    pub(crate) ifac_netname: Option<String>,
+    pub(crate) ifac_netkey: Option<String>,
+}
+
+#[cfg(feature = "iface-tcp")]
+#[derive(Debug, Clone)]
+pub(crate) struct TcpServerDiscoveryRuntimeHandle {
+    pub(crate) interface_name: String,
+    pub(crate) current: TcpServerDiscoveryRuntime,
+    pub(crate) startup: TcpServerDiscoveryRuntime,
+}
+
 /// Thin wrapper providing `EngineAccess` for a `TransportEngine` + Driver interfaces.
 #[cfg(feature = "rns-hooks")]
 struct EngineRef<'a> {
@@ -358,6 +376,9 @@ pub struct Driver {
     /// Runtime-config handles for TCP server interfaces, keyed by config name.
     #[cfg(feature = "iface-tcp")]
     pub(crate) tcp_server_runtime: HashMap<String, TcpServerRuntimeConfigHandle>,
+    /// Runtime-config state for TCP server discovery metadata, keyed by config name.
+    #[cfg(feature = "iface-tcp")]
+    pub(crate) tcp_server_discovery_runtime: HashMap<String, TcpServerDiscoveryRuntimeHandle>,
     /// Storage for discovered interfaces.
     pub(crate) discovered_interfaces: crate::discovery::DiscoveredInterfaceStorage,
     /// Required stamp value for accepting discovered interfaces.
@@ -477,6 +498,8 @@ impl Driver {
             backbone_discovery_runtime: HashMap::new(),
             #[cfg(feature = "iface-tcp")]
             tcp_server_runtime: HashMap::new(),
+            #[cfg(feature = "iface-tcp")]
+            tcp_server_discovery_runtime: HashMap::new(),
             discovered_interfaces: crate::discovery::DiscoveredInterfaceStorage::new(
                 std::env::temp_dir().join("rns-discovered-interfaces"),
             ),
@@ -563,6 +586,53 @@ impl Driver {
         Ok(())
     }
 
+    #[cfg(feature = "iface-tcp")]
+    fn make_tcp_server_discoverable_interface(
+        runtime: &TcpServerDiscoveryRuntimeHandle,
+    ) -> crate::discovery::DiscoverableInterface {
+        crate::discovery::DiscoverableInterface {
+            interface_name: runtime.interface_name.clone(),
+            config: runtime.current.config.clone(),
+            transport_enabled: runtime.current.transport_enabled,
+            ifac_netname: runtime.current.ifac_netname.clone(),
+            ifac_netkey: runtime.current.ifac_netkey.clone(),
+        }
+    }
+
+    #[cfg(feature = "iface-tcp")]
+    fn sync_tcp_server_discovery_runtime(
+        &mut self,
+        interface_name: &str,
+    ) -> Result<(), RuntimeConfigError> {
+        let handle = self
+            .tcp_server_discovery_runtime
+            .get(interface_name)
+            .ok_or(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::NotFound,
+                message: format!("tcp server interface '{}' not found", interface_name),
+            })?
+            .clone();
+
+        if handle.current.discoverable {
+            let iface = Self::make_tcp_server_discoverable_interface(&handle);
+            if let Some(announcer) = self.interface_announcer.as_mut() {
+                announcer.upsert_interface(iface);
+            } else if let Some(identity) = self.transport_identity.as_ref() {
+                self.interface_announcer = Some(crate::discovery::InterfaceAnnouncer::new(
+                    *identity.hash(),
+                    vec![iface],
+                ));
+            }
+        } else if let Some(announcer) = self.interface_announcer.as_mut() {
+            announcer.remove_interface(interface_name);
+            if announcer.is_empty() {
+                self.interface_announcer = None;
+            }
+        }
+
+        Ok(())
+    }
+
     #[cfg(feature = "rns-hooks")]
     fn update_hook_program<F>(
         &mut self,
@@ -612,6 +682,15 @@ impl Driver {
         handle: TcpServerRuntimeConfigHandle,
     ) {
         self.tcp_server_runtime
+            .insert(handle.interface_name.clone(), handle);
+    }
+
+    #[cfg(feature = "iface-tcp")]
+    pub(crate) fn register_tcp_server_discovery_runtime(
+        &mut self,
+        handle: TcpServerDiscoveryRuntimeHandle,
+    ) {
+        self.tcp_server_discovery_runtime
             .insert(handle.interface_name.clone(), handle);
     }
 
@@ -1115,9 +1194,21 @@ impl Driver {
         let mut names: Vec<&String> = self.tcp_server_runtime.keys().collect();
         names.sort();
         for name in names {
-            let key = format!("tcp_server.{}.max_connections", name);
-            if let Some(entry) = self.tcp_server_runtime_entry(&key) {
-                entries.push(entry);
+            for suffix in [
+                "max_connections",
+                "discoverable",
+                "discovery_name",
+                "announce_interval_secs",
+                "reachable_on",
+                "stamp_value",
+                "latitude",
+                "longitude",
+                "height",
+            ] {
+                let key = format!("tcp_server.{}.{}", name, suffix);
+                if let Some(entry) = self.tcp_server_runtime_entry(&key) {
+                    entries.push(entry);
+                }
             }
         }
         entries
@@ -1127,6 +1218,124 @@ impl Driver {
     fn tcp_server_runtime_entry(&self, key: &str) -> Option<RuntimeConfigEntry> {
         let rest = key.strip_prefix("tcp_server.")?;
         let (name, setting) = rest.split_once('.')?;
+        if matches!(
+            setting,
+            "discoverable"
+                | "discovery_name"
+                | "announce_interval_secs"
+                | "reachable_on"
+                | "stamp_value"
+                | "latitude"
+                | "longitude"
+                | "height"
+        ) {
+            let handle = self.tcp_server_discovery_runtime.get(name)?;
+            let current = &handle.current;
+            let startup = &handle.startup;
+            let make_entry = |value: RuntimeConfigValue,
+                              default: RuntimeConfigValue,
+                              apply_mode: RuntimeConfigApplyMode,
+                              description: &str| -> RuntimeConfigEntry {
+                RuntimeConfigEntry {
+                    key: key.to_string(),
+                    source: if value == default {
+                        RuntimeConfigSource::Startup
+                    } else {
+                        RuntimeConfigSource::RuntimeOverride
+                    },
+                    value,
+                    default,
+                    apply_mode,
+                    description: Some(description.to_string()),
+                }
+            };
+            return match setting {
+                "discoverable" => Some(make_entry(
+                    RuntimeConfigValue::Bool(current.discoverable),
+                    RuntimeConfigValue::Bool(startup.discoverable),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Whether this TCP server interface is advertised through interface discovery.",
+                )),
+                "discovery_name" => Some(make_entry(
+                    RuntimeConfigValue::String(current.config.discovery_name.clone()),
+                    RuntimeConfigValue::String(startup.config.discovery_name.clone()),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Human-readable discovery name advertised for this TCP server interface.",
+                )),
+                "announce_interval_secs" => Some(make_entry(
+                    RuntimeConfigValue::Int(current.config.announce_interval as i64),
+                    RuntimeConfigValue::Int(startup.config.announce_interval as i64),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Discovery announce interval for this TCP server interface in seconds.",
+                )),
+                "reachable_on" => Some(make_entry(
+                    current
+                        .config
+                        .reachable_on
+                        .clone()
+                        .map(RuntimeConfigValue::String)
+                        .unwrap_or(RuntimeConfigValue::Null),
+                    startup
+                        .config
+                        .reachable_on
+                        .clone()
+                        .map(RuntimeConfigValue::String)
+                        .unwrap_or(RuntimeConfigValue::Null),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Reachable hostname or IP advertised for this TCP server interface; null clears it.",
+                )),
+                "stamp_value" => Some(make_entry(
+                    RuntimeConfigValue::Int(current.config.stamp_value as i64),
+                    RuntimeConfigValue::Int(startup.config.stamp_value as i64),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Discovery proof-of-work stamp cost for this TCP server interface.",
+                )),
+                "latitude" => Some(make_entry(
+                    current
+                        .config
+                        .latitude
+                        .map(RuntimeConfigValue::Float)
+                        .unwrap_or(RuntimeConfigValue::Null),
+                    startup
+                        .config
+                        .latitude
+                        .map(RuntimeConfigValue::Float)
+                        .unwrap_or(RuntimeConfigValue::Null),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Latitude advertised for this TCP server interface; null clears it.",
+                )),
+                "longitude" => Some(make_entry(
+                    current
+                        .config
+                        .longitude
+                        .map(RuntimeConfigValue::Float)
+                        .unwrap_or(RuntimeConfigValue::Null),
+                    startup
+                        .config
+                        .longitude
+                        .map(RuntimeConfigValue::Float)
+                        .unwrap_or(RuntimeConfigValue::Null),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Longitude advertised for this TCP server interface; null clears it.",
+                )),
+                "height" => Some(make_entry(
+                    current
+                        .config
+                        .height
+                        .map(RuntimeConfigValue::Float)
+                        .unwrap_or(RuntimeConfigValue::Null),
+                    startup
+                        .config
+                        .height
+                        .map(RuntimeConfigValue::Float)
+                        .unwrap_or(RuntimeConfigValue::Null),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Height advertised for this TCP server interface; null clears it.",
+                )),
+                _ => None,
+            };
+        }
+
         let handle = self.tcp_server_runtime.get(name)?;
         let current = handle.runtime.lock().unwrap().clone();
         let startup = handle.startup.clone();
@@ -1172,6 +1381,19 @@ impl Driver {
         value: RuntimeConfigValue,
     ) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_tcp_server_runtime_key(key)?;
+        if matches!(
+            setting,
+            "discoverable"
+                | "discovery_name"
+                | "announce_interval_secs"
+                | "reachable_on"
+                | "stamp_value"
+                | "latitude"
+                | "longitude"
+                | "height"
+        ) {
+            return self.set_tcp_server_discovery_runtime_config(key, value);
+        }
         let handle = self.tcp_server_runtime.get(name).ok_or(RuntimeConfigError {
             code: RuntimeConfigErrorCode::NotFound,
             message: format!("tcp server interface '{}' not found", name),
@@ -1192,6 +1414,19 @@ impl Driver {
     #[cfg(feature = "iface-tcp")]
     fn reset_tcp_server_runtime_config(&mut self, key: &str) -> Result<(), RuntimeConfigError> {
         let (name, setting) = self.split_tcp_server_runtime_key(key)?;
+        if matches!(
+            setting,
+            "discoverable"
+                | "discovery_name"
+                | "announce_interval_secs"
+                | "reachable_on"
+                | "stamp_value"
+                | "latitude"
+                | "longitude"
+                | "height"
+        ) {
+            return self.reset_tcp_server_discovery_runtime_config(key);
+        }
         let handle = self.tcp_server_runtime.get(name).ok_or(RuntimeConfigError {
             code: RuntimeConfigErrorCode::NotFound,
             message: format!("tcp server interface '{}' not found", name),
@@ -1208,6 +1443,101 @@ impl Driver {
             }
         }
         Ok(())
+    }
+
+    #[cfg(feature = "iface-tcp")]
+    fn set_tcp_server_discovery_runtime_config(
+        &mut self,
+        key: &str,
+        value: RuntimeConfigValue,
+    ) -> Result<(), RuntimeConfigError> {
+        let (name, setting) = self.split_tcp_server_runtime_key(key)?;
+        let handle = self
+            .tcp_server_discovery_runtime
+            .get_mut(name)
+            .ok_or(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::NotFound,
+                message: format!("tcp server interface '{}' not found", name),
+            })?;
+        match setting {
+            "discoverable" => handle.current.discoverable = Self::expect_bool(value, key)?,
+            "discovery_name" => {
+                handle.current.config.discovery_name = Self::expect_string(value, key)?
+            }
+            "announce_interval_secs" => {
+                let secs = Self::expect_u64(value, key)?;
+                if secs < 300 {
+                    return Err(RuntimeConfigError {
+                        code: RuntimeConfigErrorCode::InvalidValue,
+                        message: format!("{} must be >= 300", key),
+                    });
+                }
+                handle.current.config.announce_interval = secs;
+            }
+            "reachable_on" => {
+                handle.current.config.reachable_on = Self::expect_optional_string(value, key)?
+            }
+            "stamp_value" => {
+                let raw = Self::expect_u64(value, key)?;
+                if raw > u8::MAX as u64 {
+                    return Err(RuntimeConfigError {
+                        code: RuntimeConfigErrorCode::InvalidValue,
+                        message: format!("{} must be <= {}", key, u8::MAX),
+                    });
+                }
+                handle.current.config.stamp_value = raw as u8;
+            }
+            "latitude" => handle.current.config.latitude = Self::expect_optional_f64(value, key)?,
+            "longitude" => {
+                handle.current.config.longitude = Self::expect_optional_f64(value, key)?
+            }
+            "height" => handle.current.config.height = Self::expect_optional_f64(value, key)?,
+            _ => {
+                return Err(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::UnknownKey,
+                    message: format!("unknown runtime-config key '{}'", key),
+                })
+            }
+        }
+        self.sync_tcp_server_discovery_runtime(name)
+    }
+
+    #[cfg(feature = "iface-tcp")]
+    fn reset_tcp_server_discovery_runtime_config(
+        &mut self,
+        key: &str,
+    ) -> Result<(), RuntimeConfigError> {
+        let (name, setting) = self.split_tcp_server_runtime_key(key)?;
+        let handle = self
+            .tcp_server_discovery_runtime
+            .get_mut(name)
+            .ok_or(RuntimeConfigError {
+                code: RuntimeConfigErrorCode::NotFound,
+                message: format!("tcp server interface '{}' not found", name),
+            })?;
+        match setting {
+            "discoverable" => handle.current.discoverable = handle.startup.discoverable,
+            "discovery_name" => {
+                handle.current.config.discovery_name = handle.startup.config.discovery_name.clone()
+            }
+            "announce_interval_secs" => {
+                handle.current.config.announce_interval = handle.startup.config.announce_interval
+            }
+            "reachable_on" => {
+                handle.current.config.reachable_on = handle.startup.config.reachable_on.clone()
+            }
+            "stamp_value" => handle.current.config.stamp_value = handle.startup.config.stamp_value,
+            "latitude" => handle.current.config.latitude = handle.startup.config.latitude,
+            "longitude" => handle.current.config.longitude = handle.startup.config.longitude,
+            "height" => handle.current.config.height = handle.startup.config.height,
+            _ => {
+                return Err(RuntimeConfigError {
+                    code: RuntimeConfigErrorCode::UnknownKey,
+                    message: format!("unknown runtime-config key '{}'", key),
+                })
+            }
+        }
+        self.sync_tcp_server_discovery_runtime(name)
     }
 
     #[cfg(feature = "iface-backbone")]
@@ -4831,6 +5161,32 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "iface-tcp")]
+    fn register_test_tcp_server_discovery(driver: &mut Driver, name: &str, discoverable: bool) {
+        let startup = TcpServerDiscoveryRuntime {
+            discoverable,
+            config: crate::discovery::DiscoveryConfig {
+                discovery_name: name.to_string(),
+                announce_interval: 3600,
+                stamp_value: crate::discovery::DEFAULT_STAMP_VALUE,
+                reachable_on: None,
+                interface_type: "TCPServerInterface".to_string(),
+                listen_port: Some(4242),
+                latitude: None,
+                longitude: None,
+                height: None,
+            },
+            transport_enabled: true,
+            ifac_netname: None,
+            ifac_netkey: None,
+        };
+        driver.register_tcp_server_discovery_runtime(TcpServerDiscoveryRuntimeHandle {
+            interface_name: name.to_string(),
+            current: startup.clone(),
+            startup,
+        });
+    }
+
     impl Callbacks for MockCallbacks {
         fn on_announce(&mut self, announced: crate::destination::AnnouncedIdentity) {
             self.announces
@@ -6551,12 +6907,15 @@ mod tests {
     fn runtime_config_lists_tcp_server_keys() {
         let mut driver = new_test_driver();
         register_test_tcp_server(&mut driver, "public");
+        register_test_tcp_server_discovery(&mut driver, "public", false);
         let response = driver.handle_query(QueryRequest::ListRuntimeConfig);
         let QueryResponse::RuntimeConfigList(entries) = response else {
             panic!("expected runtime config list");
         };
         let keys: Vec<String> = entries.into_iter().map(|entry| entry.key).collect();
         assert!(keys.contains(&"tcp_server.public.max_connections".to_string()));
+        assert!(keys.contains(&"tcp_server.public.discoverable".to_string()));
+        assert!(keys.contains(&"tcp_server.public.discovery_name".to_string()));
     }
 
     #[cfg(feature = "iface-tcp")]
@@ -6564,6 +6923,8 @@ mod tests {
     fn runtime_config_sets_tcp_server_values() {
         let mut driver = new_test_driver();
         register_test_tcp_server(&mut driver, "public");
+        register_test_tcp_server_discovery(&mut driver, "public", false);
+        driver.transport_identity = Some(rns_crypto::identity::Identity::new(&mut OsRng));
 
         let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
             key: "tcp_server.public.max_connections".into(),
@@ -6581,6 +6942,32 @@ mod tests {
             panic!("expected runtime config reset success");
         };
         assert_eq!(entry.value, RuntimeConfigValue::Int(4));
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "tcp_server.public.discoverable".into(),
+            value: RuntimeConfigValue::Bool(true),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected runtime config set success");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Bool(true));
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "tcp_server.public.latitude".into(),
+            value: RuntimeConfigValue::Float(41.9028),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected runtime config set success");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Float(41.9028));
+
+        let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
+            key: "tcp_server.public.latitude".into(),
+        });
+        let QueryResponse::RuntimeConfigReset(Ok(entry)) = response else {
+            panic!("expected runtime config reset success");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Null);
     }
 
     #[test]
