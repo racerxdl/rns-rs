@@ -2388,6 +2388,7 @@ impl Driver {
         names.dedup();
         for name in names {
             for suffix in [
+                "enabled",
                 "mode",
                 "announce_rate_target",
                 "announce_rate_grace",
@@ -2433,6 +2434,15 @@ impl Driver {
             }
         };
         match setting {
+            "enabled" => {
+                let entry = self.interfaces.values().find(|entry| entry.info.name == name)?;
+                Some(make_entry(
+                    RuntimeConfigValue::Bool(entry.enabled),
+                    RuntimeConfigValue::Bool(true),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Administrative enable/disable state for this interface.",
+                ))
+            }
             "ifac_netname" => {
                 let current = self.interface_ifac_runtime.get(name)?;
                 let startup = self.interface_ifac_runtime_defaults.get(name)?;
@@ -2644,6 +2654,9 @@ impl Driver {
             })?;
         let entry = self.interfaces.get_mut(&id).unwrap();
         match setting {
+            "enabled" => {
+                entry.enabled = Self::expect_bool(value, key)?;
+            }
             "ifac_netname" => {
                 let runtime = self
                     .interface_ifac_runtime
@@ -2751,6 +2764,7 @@ impl Driver {
                 message: format!("interface '{}' not found", name),
             })?;
         match setting {
+            "enabled" => entry.enabled = true,
             "ifac_netname" => {
                 let startup_ifac = self
                     .interface_ifac_runtime_defaults
@@ -3438,6 +3452,11 @@ impl Driver {
                             data[0]
                         );
                     }
+                    if let Some(entry) = self.interfaces.get(&interface_id) {
+                        if !entry.enabled || !entry.online {
+                            continue;
+                        }
+                    }
                     // Update rx stats
                     if let Some(entry) = self.interfaces.get_mut(&interface_id) {
                         entry.stats.rxb += data.len() as u64;
@@ -3765,6 +3784,7 @@ impl Driver {
                                     id,
                                     info,
                                     writer,
+                                    enabled: true,
                                     online: true,
                                     dynamic: true,
                                     ifac: None,
@@ -4415,7 +4435,7 @@ impl Driver {
                     total_txb += entry.stats.txb;
                     interfaces.push(SingleInterfaceStat {
                         name: entry.info.name.clone(),
-                        status: entry.online,
+                        status: entry.online && entry.enabled,
                         mode: entry.info.mode,
                         rxb: entry.stats.rxb,
                         txb: entry.stats.txb,
@@ -5026,7 +5046,7 @@ impl Driver {
                 let iface_id = self
                     .interfaces
                     .iter()
-                    .find(|(_, entry)| entry.info.wants_tunnel && entry.online)
+                    .find(|(_, entry)| entry.info.wants_tunnel && entry.online && entry.enabled)
                     .map(|(id, _)| *id);
 
                 if let Some(iface) = iface_id {
@@ -5307,12 +5327,12 @@ impl Driver {
                             raw.len(),
                             self.interfaces
                                 .get(&interface)
-                                .map(|e| e.online)
+                                .map(|e| e.online && e.enabled)
                                 .unwrap_or(false)
                         );
                     }
                     if let Some(entry) = self.interfaces.get_mut(&interface) {
-                        if entry.online {
+                        if entry.online && entry.enabled {
                             let data = if let Some(ref ifac_state) = entry.ifac {
                                 ifac::mask_outbound(&raw, ifac_state)
                             } else {
@@ -5396,7 +5416,7 @@ impl Driver {
                     }
                     let is_announce = raw.len() > 2 && (raw[0] & 0x03) == 0x01;
                     for entry in self.interfaces.values_mut() {
-                        if entry.online && Some(entry.id) != exclude {
+                        if entry.online && entry.enabled && Some(entry.id) != exclude {
                             let data = if let Some(ref ifac_state) = entry.ifac {
                                 ifac::mask_outbound(&raw, ifac_state)
                             } else {
@@ -5686,7 +5706,11 @@ impl Driver {
                 }
                 TransportAction::ForwardToLocalClients { raw, exclude } => {
                     for entry in self.interfaces.values_mut() {
-                        if entry.online && entry.info.is_local_client && Some(entry.id) != exclude {
+                        if entry.online
+                            && entry.enabled
+                            && entry.info.is_local_client
+                            && Some(entry.id) != exclude
+                        {
                             let data = if let Some(ref ifac_state) = entry.ifac {
                                 ifac::mask_outbound(&raw, ifac_state)
                             } else {
@@ -5711,6 +5735,7 @@ impl Driver {
                 } => {
                     for entry in self.interfaces.values_mut() {
                         if entry.online
+                            && entry.enabled
                             && entry.info.is_local_client == to_local
                             && Some(entry.id) != exclude
                         {
@@ -5805,7 +5830,7 @@ impl Driver {
                         &data,
                     ) {
                         if let Some(entry) = self.interfaces.get_mut(&interface) {
-                            if entry.online {
+                            if entry.online && entry.enabled {
                                 let raw = if let Some(ref ifac_state) = entry.ifac {
                                     ifac::mask_outbound(&packet.raw, ifac_state)
                                 } else {
@@ -6909,6 +6934,7 @@ mod tests {
                 id: InterfaceId(id),
                 info,
                 writer: Box::new(writer),
+                enabled: true,
                 online: true,
                 dynamic: false,
                 ifac: None,
@@ -7128,6 +7154,7 @@ mod tests {
             id: InterfaceId(id),
             info: make_interface_info(id),
             writer,
+            enabled: true,
             online,
             dynamic: false,
             ifac: None,
@@ -7564,6 +7591,7 @@ mod tests {
                 id: InterfaceId(200),
                 info,
                 writer: Box::new(writer),
+                enabled: true,
                 online: true,
                 dynamic: true,
                 ifac: None,
@@ -9083,6 +9111,7 @@ mod tests {
             panic!("expected runtime config list");
         };
         let keys: Vec<String> = entries.into_iter().map(|entry| entry.key).collect();
+        assert!(keys.contains(&"interface.public.enabled".to_string()));
         assert!(keys.contains(&"interface.public.mode".to_string()));
         assert!(keys.contains(&"interface.public.announce_rate_target".to_string()));
         assert!(keys.contains(&"interface.public.announce_rate_grace".to_string()));
@@ -9098,6 +9127,16 @@ mod tests {
     fn runtime_config_sets_generic_interface_values() {
         let mut driver = new_test_driver();
         register_test_generic_interface(&mut driver, 1, "public");
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "interface.public.enabled".into(),
+            value: RuntimeConfigValue::Bool(false),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected set ok");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Bool(false));
+        assert!(!driver.interfaces.get(&InterfaceId(1)).unwrap().enabled);
 
         let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
             key: "interface.public.announce_cap".into(),
@@ -9132,6 +9171,15 @@ mod tests {
             panic!("expected reset ok");
         };
         assert_eq!(entry.value, RuntimeConfigValue::String("full".into()));
+
+        let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
+            key: "interface.public.enabled".into(),
+        });
+        let QueryResponse::RuntimeConfigReset(Ok(entry)) = response else {
+            panic!("expected reset ok");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Bool(true));
+        assert!(driver.interfaces.get(&InterfaceId(1)).unwrap().enabled);
 
         let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
             key: "interface.public.ifac_netname".into(),
@@ -9197,6 +9245,59 @@ mod tests {
         };
         assert_eq!(entry.value, RuntimeConfigValue::Null);
         assert!(driver.interfaces.get(&InterfaceId(1)).unwrap().ifac.is_none());
+    }
+
+    #[test]
+    fn disabled_interface_drops_ingress_and_egress() {
+        let (tx, rx) = event::channel();
+        let (cbs, _, _, _, _, _) = MockCallbacks::new();
+        let mut driver = Driver::new(
+            TransportConfig {
+                transport_enabled: false,
+                identity_hash: None,
+                prefer_shorter_path: false,
+                max_paths_per_destination: 1,
+            },
+            rx,
+            tx.clone(),
+            Box::new(cbs),
+        );
+        let info = make_interface_info(1);
+        driver.register_interface_runtime_defaults(&info);
+        driver.engine.register_interface(info.clone());
+        let (writer, sent) = MockWriter::new();
+        driver.interfaces.insert(
+            InterfaceId(1),
+            InterfaceEntry {
+                id: InterfaceId(1),
+                info,
+                writer: Box::new(writer),
+                enabled: false,
+                online: true,
+                dynamic: false,
+                ifac: None,
+                stats: InterfaceStats::default(),
+                interface_type: String::new(),
+            },
+        );
+
+        driver.dispatch_all(vec![TransportAction::SendOnInterface {
+            interface: InterfaceId(1),
+            raw: vec![0x00, 0x01, 0x42],
+        }]);
+        assert!(sent.lock().unwrap().is_empty());
+
+        tx.send(Event::Frame {
+            interface_id: InterfaceId(1),
+            data: vec![0x00, 0x01, 0x42],
+        })
+        .unwrap();
+        tx.send(Event::Shutdown).unwrap();
+        driver.run();
+
+        let entry = driver.interfaces.get(&InterfaceId(1)).unwrap();
+        assert_eq!(entry.stats.rxb, 0);
+        assert_eq!(entry.stats.rx_packets, 0);
     }
 
     #[test]

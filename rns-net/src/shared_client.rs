@@ -108,6 +108,7 @@ impl RnsNode {
                 id,
                 info,
                 writer,
+                enabled: true,
                 online: false,
                 dynamic: false,
                 ifac: None,

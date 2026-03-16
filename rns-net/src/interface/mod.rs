@@ -77,6 +77,8 @@ pub struct InterfaceEntry {
     pub id: InterfaceId,
     pub info: InterfaceInfo,
     pub writer: Box<dyn Writer>,
+    /// Administrative enable/disable state.
+    pub enabled: bool,
     pub online: bool,
     /// True for dynamically spawned interfaces (e.g. TCP server clients).
     /// These are fully removed on InterfaceDown rather than just marked offline.
@@ -222,6 +224,7 @@ mod tests {
                 ingress_control: false,
             },
             writer: Box::new(MockWriter::new()),
+            enabled: true,
             online: false,
             dynamic: false,
             ifac: None,

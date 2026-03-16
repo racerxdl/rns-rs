@@ -58,6 +58,7 @@ mod tests {
                 id,
                 info,
                 writer: Box::new(NullWriter),
+                enabled: true,
                 online: true,
                 dynamic: false,
                 ifac: None,
