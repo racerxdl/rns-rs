@@ -828,9 +828,7 @@ mod tests {
     fn test_max_depth_exceeded() {
         // Build deeply nested arrays: [[[[...]]]] beyond MAX_DEPTH
         let mut data = Vec::new();
-        for _ in 0..MAX_DEPTH + 2 {
-            data.push(0x91); // fixarray of length 1
-        }
+        data.extend(core::iter::repeat_n(0x91, MAX_DEPTH + 2)); // fixarray of length 1
         data.push(0x01); // innermost value: uint 1
         assert_eq!(unpack(&data), Err(Error::MaxDepthExceeded));
     }
@@ -839,9 +837,7 @@ mod tests {
     fn test_depth_within_limit() {
         // Build nested arrays within limit (depth 5)
         let mut data = Vec::new();
-        for _ in 0..5 {
-            data.push(0x91); // fixarray of length 1
-        }
+        data.extend(core::iter::repeat_n(0x91, 5)); // fixarray of length 1
         data.push(0x01); // innermost value
         let (val, _) = unpack(&data).unwrap();
         // Should be Array([Array([Array([Array([Array([UInt(1)])])])])])
@@ -871,7 +867,7 @@ mod tests {
 
     #[test]
     fn test_array16_roundtrip() {
-        let items: Vec<Value> = (0..16).map(|i| Value::UInt(i)).collect();
+        let items: Vec<Value> = (0..16).map(Value::UInt).collect();
         let v = Value::Array(items);
         let packed = pack(&v);
         assert_eq!(packed[0], 0xdc); // array16

@@ -118,7 +118,7 @@ impl HookSlot {
 
     /// Returns true if this slot has programs attached (fast check).
     pub fn has_programs(&self) -> bool {
-        self.runner as *const () as usize != hook_noop as *const () as usize
+        !std::ptr::eq(self.runner as *const (), hook_noop as *const ())
     }
 }
 

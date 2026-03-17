@@ -96,6 +96,7 @@ impl ResourceSender {
     /// - `original_hash`: original hash from first segment (None for first segment)
     /// - `link_rtt`: current link RTT estimate
     /// - `traffic_timeout_factor`: link traffic timeout factor
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         data: &[u8],
         metadata: Option<&[u8]>,
@@ -379,7 +380,7 @@ impl ResourceSender {
         };
 
         // Verify alignment
-        if part_index % RESOURCE_HASHMAP_MAX_LEN != 0 {
+        if !part_index.is_multiple_of(RESOURCE_HASHMAP_MAX_LEN) {
             return None; // sequencing error
         }
 

@@ -26,7 +26,7 @@ fn get_memory(caller: &mut Caller<'_, StoreData>) -> Option<wasmtime::Memory> {
     caller.get_export("memory").and_then(|e| e.into_memory())
 }
 
-fn read_bytes<'a>(data: &'a [u8], ptr: usize, len: usize) -> Option<&'a [u8]> {
+fn read_bytes(data: &[u8], ptr: usize, len: usize) -> Option<&[u8]> {
     let end = ptr.checked_add(len)?;
     data.get(ptr..end)
 }
@@ -172,10 +172,7 @@ fn host_get_transport_identity(mut caller: Caller<'_, StoreData>, out_ptr: i32) 
 /// Get the outgoing announce rate for an interface in millihertz.
 /// Returns -1 if the interface is not found.
 fn host_get_announce_rate(caller: Caller<'_, StoreData>, id: i64) -> i32 {
-    match unsafe { caller.data().engine().announce_rate(id as u64) } {
-        Some(rate) => rate,
-        None => -1,
-    }
+    unsafe { caller.data().engine().announce_rate(id as u64) }.unwrap_or(-1)
 }
 
 /// Get the state of a link. Returns the state as u8 (Pending=0, Handshake=1, Active=2,

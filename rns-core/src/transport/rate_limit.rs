@@ -95,6 +95,12 @@ impl AnnounceRateLimiter {
     }
 }
 
+impl Default for AnnounceRateLimiter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

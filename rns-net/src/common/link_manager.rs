@@ -2862,7 +2862,7 @@ mod tests {
 
     #[test]
     fn test_resource_adv_accepted_by_accept_all() {
-        let (mut init_mgr, mut resp_mgr, link_id) = setup_active_link();
+        let (init_mgr, mut resp_mgr, link_id) = setup_active_link();
         let mut rng = OsRng;
 
         // Set responder to AcceptAll

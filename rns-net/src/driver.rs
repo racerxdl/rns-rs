@@ -8699,7 +8699,7 @@ mod tests {
     #[test]
     fn management_announces_emitted_after_delay() {
         let (tx, rx) = event::channel();
-        let (cbs, announces, _, _, _, _) = MockCallbacks::new();
+        let (cbs, _announces, _, _, _, _) = MockCallbacks::new();
         let identity = Identity::new(&mut OsRng);
         let identity_hash = *identity.hash();
         let mut driver = Driver::new(

@@ -192,6 +192,12 @@ impl IngressControl {
     }
 }
 
+impl Default for IngressControl {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

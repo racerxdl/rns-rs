@@ -1703,7 +1703,6 @@ mod tests {
         let (event_tx, event_rx) = crate::event::channel();
 
         // Start server
-        let addr = RpcAddr::Tcp("127.0.0.1".into(), 0);
         // Bind manually to get the actual port
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();

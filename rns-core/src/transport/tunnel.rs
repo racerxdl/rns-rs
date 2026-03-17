@@ -296,6 +296,12 @@ impl TunnelTable {
     }
 }
 
+impl Default for TunnelTable {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

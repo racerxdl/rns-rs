@@ -50,7 +50,7 @@ pub fn hkdf(
     let mut block: Vec<u8> = Vec::new();
     let mut derived = Vec::with_capacity(length);
 
-    let iterations = (length + hash_len - 1) / hash_len;
+    let iterations = length.div_ceil(hash_len);
     for i in 0..iterations {
         let mut input = Vec::new();
         input.extend_from_slice(&block);

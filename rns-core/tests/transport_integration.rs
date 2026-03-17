@@ -1094,15 +1094,12 @@ fn test_announce_mode_filtering() {
     // The retransmit should happen but the AP interface should be filtered
     // (retransmit is broadcast without attached_interface)
     for action in &tick_actions {
-        match action {
-            TransportAction::SendOnInterface { interface, .. } => {
-                assert_ne!(
-                    *interface,
-                    InterfaceId(2),
-                    "AP interface should not receive retransmitted announce"
-                );
-            }
-            _ => {}
+        if let TransportAction::SendOnInterface { interface, .. } = action {
+            assert_ne!(
+                *interface,
+                InterfaceId(2),
+                "AP interface should not receive retransmitted announce"
+            );
         }
     }
 }

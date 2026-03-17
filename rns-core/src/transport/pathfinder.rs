@@ -53,7 +53,7 @@ pub fn should_update_path(
     prefer_shorter_path: bool,
 ) -> PathDecision {
     // Hop limit
-    if announce_hops >= constants::PATHFINDER_M + 1 {
+    if announce_hops > constants::PATHFINDER_M {
         return PathDecision::Reject;
     }
 
@@ -120,6 +120,7 @@ pub enum MultiPathDecision {
 ///   against **that** specific path entry
 /// - New `next_hop` → accept as `AddAlternative` if the blob is genuinely
 ///   new (not in any stored path's blobs) and emission timestamp is valid
+#[allow(clippy::too_many_arguments)]
 pub fn decide_announce_multipath(
     existing_set: Option<&PathSet>,
     announce_hops: u8,
@@ -131,7 +132,7 @@ pub fn decide_announce_multipath(
     prefer_shorter_path: bool,
 ) -> MultiPathDecision {
     // Hop limit
-    if announce_hops >= constants::PATHFINDER_M + 1 {
+    if announce_hops > constants::PATHFINDER_M {
         return MultiPathDecision::Reject;
     }
 

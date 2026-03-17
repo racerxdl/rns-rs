@@ -128,11 +128,7 @@ impl LinkEngine {
     /// Must be called after packing the LINKREQUEST packet (since link_id depends
     /// on the packet's hashable part).
     pub fn set_link_id_from_hashable(&mut self, hashable_part: &[u8], data_len: usize) {
-        let extra = if data_len > LINK_ECPUBSIZE {
-            data_len - LINK_ECPUBSIZE
-        } else {
-            0
-        };
+        let extra = data_len.saturating_sub(LINK_ECPUBSIZE);
         self.link_id = compute_link_id(hashable_part, extra);
     }
 
@@ -140,6 +136,7 @@ impl LinkEngine {
     ///
     /// `owner_sig_prv` / `owner_sig_pub` are the destination's signing keys.
     /// Returns `(engine, actions)` where actions include the LRPROOF data to send.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_responder(
         owner_sig_prv: &Ed25519PrivateKey,
         owner_sig_pub_bytes: &[u8; 32],
@@ -152,11 +149,7 @@ impl LinkEngine {
     ) -> Result<(Self, Vec<u8>), LinkError> {
         let (peer_pub, peer_sig_pub, peer_mtu, mode) = parse_linkrequest_data(linkrequest_data)?;
 
-        let extra = if linkrequest_data.len() > LINK_ECPUBSIZE {
-            linkrequest_data.len() - LINK_ECPUBSIZE
-        } else {
-            0
-        };
+        let extra = linkrequest_data.len().saturating_sub(LINK_ECPUBSIZE);
         let link_id = compute_link_id(hashable_part, extra);
 
         // Generate ephemeral keys for this end
@@ -264,17 +257,18 @@ impl LinkEngine {
         let rtt_packed = pack_rtt(rtt);
         let rtt_encrypted = self.encrypt(&rtt_packed, rng)?;
 
-        let mut actions = Vec::new();
-        actions.push(LinkAction::StateChanged {
-            link_id: self.link_id,
-            new_state: LinkState::Active,
-            reason: None,
-        });
-        actions.push(LinkAction::LinkEstablished {
-            link_id: self.link_id,
-            rtt,
-            is_initiator: true,
-        });
+        let actions = vec![
+            LinkAction::StateChanged {
+                link_id: self.link_id,
+                new_state: LinkState::Active,
+                reason: None,
+            },
+            LinkAction::LinkEstablished {
+                link_id: self.link_id,
+                rtt,
+                is_initiator: true,
+            },
+        ];
 
         Ok((rtt_encrypted, actions))
     }
@@ -307,17 +301,18 @@ impl LinkEngine {
         self.last_inbound = now;
         self.update_keepalive();
 
-        let mut actions = Vec::new();
-        actions.push(LinkAction::StateChanged {
-            link_id: self.link_id,
-            new_state: LinkState::Active,
-            reason: None,
-        });
-        actions.push(LinkAction::LinkEstablished {
-            link_id: self.link_id,
-            rtt,
-            is_initiator: false,
-        });
+        let actions = vec![
+            LinkAction::StateChanged {
+                link_id: self.link_id,
+                new_state: LinkState::Active,
+                reason: None,
+            },
+            LinkAction::LinkEstablished {
+                link_id: self.link_id,
+                rtt,
+                is_initiator: false,
+            },
+        ];
 
         Ok(actions)
     }

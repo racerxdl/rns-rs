@@ -24,7 +24,7 @@ pub fn split_into_parts(
     if encrypted_data.is_empty() || sdu == 0 {
         return (Vec::new(), Vec::new());
     }
-    let num_parts = (encrypted_data.len() + sdu - 1) / sdu;
+    let num_parts = encrypted_data.len().div_ceil(sdu);
     let mut parts = Vec::with_capacity(num_parts);
     let mut hashes = Vec::with_capacity(num_parts);
 
@@ -54,11 +54,7 @@ pub fn build_hashmap(hashes: &[[u8; RESOURCE_MAPHASH_LEN]]) -> Vec<u8> {
 pub fn has_collision(hashes: &[[u8; RESOURCE_MAPHASH_LEN]]) -> bool {
     // Use a sliding window of COLLISION_GUARD_SIZE
     for (i, hash) in hashes.iter().enumerate() {
-        let guard_start = if i >= RESOURCE_COLLISION_GUARD_SIZE {
-            i - RESOURCE_COLLISION_GUARD_SIZE
-        } else {
-            0
-        };
+        let guard_start = i.saturating_sub(RESOURCE_COLLISION_GUARD_SIZE);
         for prev in &hashes[guard_start..i] {
             if prev == hash {
                 return true;
@@ -77,8 +73,8 @@ pub fn find_part_by_hash(
     window: usize,
 ) -> Option<usize> {
     let end = core::cmp::min(start + window, hashmap.len());
-    for i in start..end {
-        if let Some(ref h) = hashmap[i] {
+    for (i, item) in hashmap.iter().enumerate().take(end).skip(start) {
+        if let Some(h) = item {
             if h == target {
                 return Some(i);
             }

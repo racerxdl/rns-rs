@@ -21,6 +21,12 @@ impl Sha512 {
     }
 }
 
+impl Default for Sha512 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub fn sha512(data: &[u8]) -> [u8; 64] {
     sha2::Sha512::digest(data).into()
 }

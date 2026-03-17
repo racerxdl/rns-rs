@@ -536,10 +536,10 @@ fn test_hashmap_exhaustion_and_hmu() {
     // so identical parts would always have identical map hashes).
     // Write the part index into each SDU boundary to guarantee uniqueness.
     let mut data = vec![0u8; 35000];
-    for i in 0..data.len() {
+    for (i, byte) in data.iter_mut().enumerate() {
         // Mix in the byte position using multiple octets to avoid periodicity
         let pos = i as u32;
-        data[i] = (pos ^ (pos >> 8) ^ (pos >> 16)) as u8;
+        *byte = (pos ^ (pos >> 8) ^ (pos >> 16)) as u8;
     }
     // Need a large unique seed for 76+ parts to avoid hash collisions
     let seed: Vec<u8> = (0u8..=255)

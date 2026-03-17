@@ -49,6 +49,10 @@ impl PacketHashlist {
         debug_assert_eq!(self.queue.len(), self.set.len());
         self.queue.len()
     }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 struct PacketHashQueue {

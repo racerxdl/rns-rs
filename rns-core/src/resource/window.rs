@@ -94,6 +94,12 @@ impl WindowState {
     }
 }
 
+impl Default for WindowState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

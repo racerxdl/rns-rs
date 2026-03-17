@@ -162,7 +162,7 @@ impl ResourceAdvertisement {
         if total_hashes == 0 {
             return 1;
         }
-        (total_hashes + RESOURCE_HASHMAP_MAX_LEN - 1) / RESOURCE_HASHMAP_MAX_LEN
+        total_hashes.div_ceil(RESOURCE_HASHMAP_MAX_LEN)
     }
 }
 

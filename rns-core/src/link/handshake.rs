@@ -59,6 +59,7 @@ pub fn build_linkrequest_data(
 }
 
 /// Parse LINKREQUEST data. Returns `(x25519_pub, ed25519_pub, mtu, mode)`.
+#[allow(clippy::type_complexity)]
 pub fn parse_linkrequest_data(
     data: &[u8],
 ) -> Result<([u8; 32], [u8; 32], Option<u32>, LinkMode), LinkError> {

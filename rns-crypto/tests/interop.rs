@@ -118,8 +118,8 @@ fn test_hkdf_interop() {
     for v in vectors.as_array().unwrap() {
         let length = v["length"].as_u64().unwrap() as usize;
         let ikm = hex_to_bytes(v["ikm"].as_str().unwrap());
-        let salt = v["salt"].as_str().map(|s| hex_to_bytes(s));
-        let context = v["context"].as_str().map(|s| hex_to_bytes(s));
+        let salt = v["salt"].as_str().map(hex_to_bytes);
+        let context = v["context"].as_str().map(hex_to_bytes);
         let expected = hex_to_bytes(v["derived"].as_str().unwrap());
 
         let result = hkdf::hkdf(length, &ikm, salt.as_deref(), context.as_deref()).unwrap();

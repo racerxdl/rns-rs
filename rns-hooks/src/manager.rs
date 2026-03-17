@@ -609,7 +609,10 @@ mod tests {
 
         slot.attach(p1);
         assert_eq!(slot.programs.len(), 1);
-        assert!(slot.runner as *const () as usize != crate::hooks::hook_noop as *const () as usize);
+        assert!(!std::ptr::eq(
+            slot.runner as *const (),
+            crate::hooks::hook_noop as *const (),
+        ));
 
         slot.attach(p2);
         assert_eq!(slot.programs.len(), 2);

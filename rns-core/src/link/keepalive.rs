@@ -8,13 +8,7 @@ use crate::constants::{
 /// `keepalive = clamp(rtt * (KEEPALIVE_MAX / KEEPALIVE_MAX_RTT), KEEPALIVE_MIN, KEEPALIVE_MAX)`
 pub fn compute_keepalive(rtt: f64) -> f64 {
     let ka = rtt * (LINK_KEEPALIVE_MAX / LINK_KEEPALIVE_MAX_RTT);
-    if ka > LINK_KEEPALIVE_MAX {
-        LINK_KEEPALIVE_MAX
-    } else if ka < LINK_KEEPALIVE_MIN {
-        LINK_KEEPALIVE_MIN
-    } else {
-        ka
-    }
+    ka.clamp(LINK_KEEPALIVE_MIN, LINK_KEEPALIVE_MAX)
 }
 
 /// Compute stale_time from keepalive interval.

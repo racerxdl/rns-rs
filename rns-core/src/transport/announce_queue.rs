@@ -123,6 +123,12 @@ impl InterfaceAnnounceQueue {
     }
 }
 
+impl Default for InterfaceAnnounceQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Manage announce queues for all interfaces.
 #[derive(Debug, Clone)]
 pub struct AnnounceQueues {
@@ -140,6 +146,7 @@ impl AnnounceQueues {
     /// returns the action immediately. Otherwise, queues it.
     ///
     /// Returns Some(action) if the announce should be sent now, None if queued.
+    #[allow(clippy::too_many_arguments)]
     pub fn gate_announce(
         &mut self,
         interface: InterfaceId,
@@ -154,7 +161,7 @@ impl AnnounceQueues {
         let queue = self
             .queues
             .entry(interface)
-            .or_insert_with(InterfaceAnnounceQueue::new);
+            .or_default();
 
         // If no bitrate, no cap applies — send immediately
         let bitrate = match bitrate {
@@ -237,6 +244,12 @@ impl AnnounceQueues {
     #[cfg(test)]
     pub fn queue_for(&self, id: &InterfaceId) -> Option<&InterfaceAnnounceQueue> {
         self.queues.get(id)
+    }
+}
+
+impl Default for AnnounceQueues {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

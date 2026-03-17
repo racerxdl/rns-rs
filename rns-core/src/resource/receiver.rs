@@ -112,13 +112,13 @@ impl ResourceReceiver {
         // Populate initial hashmap from advertisement
         let initial_hashes = adv.hashmap.len() / RESOURCE_MAPHASH_LEN;
         let mut hashmap_height = 0;
-        for i in 0..initial_hashes {
+        for (i, slot) in hashmap_vec.iter_mut().enumerate().take(initial_hashes) {
             if i < total_parts {
                 let start = i * RESOURCE_MAPHASH_LEN;
                 let end = start + RESOURCE_MAPHASH_LEN;
                 let mut h = [0u8; RESOURCE_MAPHASH_LEN];
                 h.copy_from_slice(&adv.hashmap[start..end]);
-                hashmap_vec[i] = Some(h);
+                *slot = Some(h);
                 hashmap_height += 1;
             }
         }
@@ -416,6 +416,7 @@ impl ResourceReceiver {
     }
 
     /// Assemble received parts, decrypt, decompress, verify hash.
+    #[allow(clippy::type_complexity)]
     pub fn assemble(
         &mut self,
         decrypt_fn: &dyn Fn(&[u8]) -> Result<Vec<u8>, ()>,
@@ -515,6 +516,7 @@ impl ResourceReceiver {
     }
 
     /// Periodic tick. Checks for timeouts.
+    #[allow(clippy::type_complexity)]
     pub fn tick(
         &mut self,
         now: f64,
@@ -537,12 +539,10 @@ impl ResourceReceiver {
             let extra_wait = retries_used as f64 * RESOURCE_PER_RETRY_DELAY;
             let expected_tof = if self.outstanding_parts > 0 && eifr > 0.0 {
                 (self.outstanding_parts as f64 * self.sdu as f64 * 8.0) / eifr
+            } else if eifr > 0.0 {
+                (3.0 * self.sdu as f64) / eifr
             } else {
-                if eifr > 0.0 {
-                    (3.0 * self.sdu as f64) / eifr
-                } else {
-                    10.0 // fallback
-                }
+                10.0 // fallback
             };
 
             let sleep_time = self.last_activity

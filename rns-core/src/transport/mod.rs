@@ -39,6 +39,9 @@ use self::tables::{AnnounceEntry, DiscoveryPathRequest, LinkEntry, PathEntry, Pa
 use self::tunnel::TunnelTable;
 use self::types::{BlackholeEntry, InterfaceId, InterfaceInfo, TransportAction, TransportConfig};
 
+pub type PathTableRow = ([u8; 16], f64, [u8; 16], u8, f64, String);
+pub type RateTableRow = ([u8; 16], f64, u32, f64, Vec<f64>);
+
 /// The core transport/routing engine.
 ///
 /// Maintains routing tables and processes packets without performing any I/O.
@@ -124,7 +127,7 @@ impl TransportEngine {
     pub fn has_path(&self, dest_hash: &[u8; 16]) -> bool {
         self.path_table
             .get(dest_hash)
-            .map_or(false, |ps| !ps.is_empty())
+            .is_some_and(|ps| !ps.is_empty())
     }
 
     pub fn hops_to(&self, dest_hash: &[u8; 16]) -> Option<u8> {
@@ -629,20 +632,16 @@ impl TransportEngine {
         }
 
         // 9. Local delivery for LINKREQUEST and DATA
-        if packet.flags.packet_type == constants::PACKET_TYPE_LINKREQUEST
-            || packet.flags.packet_type == constants::PACKET_TYPE_DATA
+        if (packet.flags.packet_type == constants::PACKET_TYPE_LINKREQUEST
+            || packet.flags.packet_type == constants::PACKET_TYPE_DATA)
+            && self.local_destinations.contains_key(&packet.destination_hash)
         {
-            if self
-                .local_destinations
-                .contains_key(&packet.destination_hash)
-            {
-                actions.push(TransportAction::DeliverLocal {
-                    destination_hash: packet.destination_hash,
-                    raw: packet.raw.clone(),
-                    packet_hash: packet.packet_hash,
-                    receiving_interface: iface,
-                });
-            }
+            actions.push(TransportAction::DeliverLocal {
+                destination_hash: packet.destination_hash,
+                raw: packet.raw.clone(),
+                packet_hash: packet.packet_hash,
+                receiving_interface: iface,
+            });
         }
 
         actions
@@ -701,25 +700,25 @@ impl TransportEngine {
         // Ingress control: hold announces from unknown destinations during bursts
         if !self.has_path(&packet.destination_hash) {
             if let Some(info) = self.interfaces.get(&iface) {
-                if info.ingress_control {
-                    if self.ingress_control.should_ingress_limit(
+                if info.ingress_control
+                    && self.ingress_control.should_ingress_limit(
                         iface,
                         info.ia_freq,
                         info.started,
                         now,
-                    ) {
-                        self.ingress_control.hold_announce(
-                            iface,
-                            packet.destination_hash,
-                            ingress_control::HeldAnnounce {
-                                raw: original_raw.to_vec(),
-                                hops: packet.hops,
-                                receiving_interface: iface,
-                                timestamp: now,
-                            },
-                        );
-                        return;
-                    }
+                    )
+                {
+                    self.ingress_control.hold_announce(
+                        iface,
+                        packet.destination_hash,
+                        ingress_control::HeldAnnounce {
+                            raw: original_raw.to_vec(),
+                            hops: packet.hops,
+                            receiving_interface: iface,
+                            timestamp: now,
+                        },
+                    );
+                    return;
                 }
             }
         }
@@ -744,10 +743,9 @@ impl TransportEngine {
                     {
                         if packet.hops.checked_sub(1) == Some(announce_entry.hops + 1)
                             && announce_entry.retries > 0
+                            && now < announce_entry.retransmit_timeout
                         {
-                            if now < announce_entry.retransmit_timeout {
-                                self.announce_table.remove(&packet.destination_hash);
-                            }
+                            self.announce_table.remove(&packet.destination_hash);
                         }
                     }
                 }
@@ -764,7 +762,7 @@ impl TransportEngine {
         };
 
         // Check hop limit
-        if packet.hops >= constants::PATHFINDER_M + 1 {
+        if packet.hops > constants::PATHFINDER_M {
             return;
         }
 
@@ -1570,10 +1568,7 @@ impl TransportEngine {
     /// Get path table entries as tuples for management queries.
     /// Returns (dest_hash, timestamp, next_hop, hops, expires, interface_name).
     /// Reports primaries only for backward compatibility.
-    pub fn get_path_table(
-        &self,
-        max_hops: Option<u8>,
-    ) -> Vec<([u8; 16], f64, [u8; 16], u8, f64, alloc::string::String)> {
+    pub fn get_path_table(&self, max_hops: Option<u8>) -> Vec<PathTableRow> {
         let mut result = Vec::new();
         for (dest_hash, ps) in self.path_table.iter() {
             if let Some(entry) = ps.primary() {
@@ -1604,7 +1599,7 @@ impl TransportEngine {
 
     /// Get rate table entries as tuples for management queries.
     /// Returns (dest_hash, last, rate_violations, blocked_until, timestamps).
-    pub fn get_rate_table(&self) -> Vec<([u8; 16], f64, u32, f64, Vec<f64>)> {
+    pub fn get_rate_table(&self) -> Vec<RateTableRow> {
         self.rate_limiter
             .entries()
             .map(|(hash, entry)| {
@@ -1676,21 +1671,25 @@ impl TransportEngine {
     // =========================================================================
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn path_table(&self) -> &BTreeMap<[u8; 16], PathSet> {
         &self.path_table
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn announce_table(&self) -> &BTreeMap<[u8; 16], AnnounceEntry> {
         &self.announce_table
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn reverse_table(&self) -> &BTreeMap<[u8; 16], tables::ReverseEntry> {
         &self.reverse_table
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(crate) fn link_table_ref(&self) -> &BTreeMap<[u8; 16], LinkEntry> {
         &self.link_table
     }

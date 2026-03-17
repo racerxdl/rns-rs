@@ -417,7 +417,7 @@ pub const RESOURCE_SDU: usize = MDU;
 pub const RESOURCE_RANDOM_HASH_SIZE: usize = 4;
 
 /// Maximum efficient resource size (1 MB - 1)
-pub const RESOURCE_MAX_EFFICIENT_SIZE: usize = 1 * 1024 * 1024 - 1;
+pub const RESOURCE_MAX_EFFICIENT_SIZE: usize = 1024 * 1024 - 1;
 
 /// Maximum metadata size (16 MB - 1)
 pub const RESOURCE_METADATA_MAX_SIZE: usize = 16 * 1024 * 1024 - 1;

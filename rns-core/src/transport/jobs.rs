@@ -21,7 +21,7 @@ pub fn process_pending_announces(
 
     for (dest_hash, entry) in announce_table.iter_mut() {
         // Check local rebroadcast limit (Transport.py:523 checks retries >= LOCAL_REBROADCASTS_MAX)
-        if entry.retries > 0 && entry.retries >= constants::LOCAL_REBROADCASTS_MAX {
+        if entry.retries >= constants::LOCAL_REBROADCASTS_MAX {
             completed.push(*dest_hash);
             continue;
         }
@@ -87,11 +87,10 @@ pub fn cull_reverse_table(
 ) -> usize {
     let mut stale = Vec::new();
     for (hash, entry) in reverse_table.iter() {
-        if now > entry.timestamp + constants::REVERSE_TIMEOUT {
-            stale.push(*hash);
-        } else if !interfaces.contains_key(&entry.outbound_interface) {
-            stale.push(*hash);
-        } else if !interfaces.contains_key(&entry.receiving_interface) {
+        if now > entry.timestamp + constants::REVERSE_TIMEOUT
+            || !interfaces.contains_key(&entry.outbound_interface)
+            || !interfaces.contains_key(&entry.receiving_interface)
+        {
             stale.push(*hash);
         }
     }
@@ -112,11 +111,10 @@ pub fn cull_link_table(
     let mut stale = Vec::new();
     for (link_id, entry) in link_table.iter() {
         if entry.validated {
-            if now > entry.timestamp + constants::LINK_TIMEOUT {
-                stale.push(*link_id);
-            } else if !interfaces.contains_key(&entry.next_hop_interface) {
-                stale.push(*link_id);
-            } else if !interfaces.contains_key(&entry.received_interface) {
+            if now > entry.timestamp + constants::LINK_TIMEOUT
+                || !interfaces.contains_key(&entry.next_hop_interface)
+                || !interfaces.contains_key(&entry.received_interface)
+            {
                 stale.push(*link_id);
             }
         } else {
@@ -163,7 +161,7 @@ pub fn cull_path_states(
 ) -> usize {
     let mut stale = Vec::new();
     for dest_hash in path_states.keys() {
-        let has_path = path_table.get(dest_hash).map_or(false, |ps| !ps.is_empty());
+        let has_path = path_table.get(dest_hash).is_some_and(|ps| !ps.is_empty());
         if !has_path {
             stale.push(*dest_hash);
         }

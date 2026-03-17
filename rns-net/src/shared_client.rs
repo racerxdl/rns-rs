@@ -181,7 +181,7 @@ impl RnsNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::AtomicU64;
     use std::sync::mpsc;
     use std::sync::Arc;
 
@@ -304,11 +304,9 @@ mod tests {
 
         // Server should receive a Frame event from the client
         // (the packet will be HDLC-framed over the local connection)
-        let mut saw_frame = false;
         for _ in 0..10 {
             match server_rx.recv_timeout(Duration::from_secs(1)) {
                 Ok(crate::event::Event::Frame { .. }) => {
-                    saw_frame = true;
                     break;
                 }
                 Ok(_) => continue,

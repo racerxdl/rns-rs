@@ -1031,7 +1031,7 @@ mod tests {
         assert!(actions.is_empty());
 
         // After timeout
-        let actions = engine.tick(200.0 + PUNCH_TIMEOUT + 1.0);
+        let _actions = engine.tick(200.0 + PUNCH_TIMEOUT + 1.0);
         assert_eq!(engine.state(), HolePunchState::Failed);
     }
 

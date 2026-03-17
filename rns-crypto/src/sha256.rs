@@ -21,6 +21,12 @@ impl Sha256 {
     }
 }
 
+impl Default for Sha256 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub fn sha256(data: &[u8]) -> [u8; 32] {
     sha2::Sha256::digest(data).into()
 }

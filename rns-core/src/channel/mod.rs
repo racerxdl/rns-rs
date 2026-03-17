@@ -273,8 +273,7 @@ impl Channel {
         // Use modular distance from next_rx_sequence for correct wrap-boundary ordering.
         // wrapping_sub gives the unsigned distance in sequence space.
         let env_dist = envelope.sequence.wrapping_sub(self.next_rx_sequence);
-        let mut i = 0;
-        for existing in self.rx_ring.iter() {
+        for (i, existing) in self.rx_ring.iter().enumerate() {
             if envelope.sequence == existing.sequence {
                 return; // duplicate
             }
@@ -283,7 +282,6 @@ impl Channel {
                 self.rx_ring.insert(i, envelope);
                 return;
             }
-            i += 1;
         }
         self.rx_ring.push_back(envelope);
     }
