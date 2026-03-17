@@ -76,18 +76,23 @@ impl Writer for LocalWriter {
 #[cfg(target_os = "linux")]
 mod unix_socket {
     use std::io;
-    use std::os::unix::net::{UnixListener, UnixStream};
+    use std::os::linux::net::SocketAddrExt;
+    use std::os::unix::net::{SocketAddr, UnixListener, UnixStream};
+
+    fn abstract_addr(instance_name: &str) -> io::Result<SocketAddr> {
+        SocketAddr::from_abstract_name(format!("rns/{}", instance_name))
+    }
 
     /// Try to bind a Unix abstract socket with the given instance name.
     pub fn try_bind_unix(instance_name: &str) -> io::Result<UnixListener> {
-        let path = format!("\0rns/{}", instance_name);
-        UnixListener::bind(path)
+        let addr = abstract_addr(instance_name)?;
+        UnixListener::bind_addr(&addr)
     }
 
     /// Try to connect to a Unix abstract socket.
     pub fn try_connect_unix(instance_name: &str) -> io::Result<UnixStream> {
-        let path = format!("\0rns/{}", instance_name);
-        UnixStream::connect(path)
+        let addr = abstract_addr(instance_name)?;
+        UnixStream::connect_addr(&addr)
     }
 }
 
@@ -543,6 +548,18 @@ mod tests {
     use super::*;
     use std::sync::mpsc;
 
+    fn connect_test_client(instance_name: &str, _port: u16) {
+        #[cfg(target_os = "linux")]
+        {
+            let _client = unix_socket::try_connect_unix(instance_name).unwrap();
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        }
+    }
+
     fn find_free_port() -> u16 {
         TcpListener::bind("127.0.0.1:0")
             .unwrap()
@@ -554,11 +571,12 @@ mod tests {
     #[test]
     fn server_bind_tcp() {
         let port = find_free_port();
+        let instance_name = "test-bind".to_string();
         let (tx, _rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(7000));
 
         let config = LocalServerConfig {
-            instance_name: "test-bind".into(),
+            instance_name: instance_name.clone(),
             port,
             interface_id: InterfaceId(70),
         };
@@ -568,18 +586,18 @@ mod tests {
         start_server(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
 
-        // Should be able to connect
-        let _client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        connect_test_client(&instance_name, port);
     }
 
     #[test]
     fn server_accept_client() {
         let port = find_free_port();
+        let instance_name = "test-accept".to_string();
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(7100));
 
         let config = LocalServerConfig {
-            instance_name: "test-accept".into(),
+            instance_name: instance_name.clone(),
             port,
             interface_id: InterfaceId(71),
         };
@@ -587,7 +605,7 @@ mod tests {
         start_server(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
 
-        let _client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        connect_test_client(&instance_name, port);
 
         let event = rx.recv_timeout(Duration::from_secs(2)).unwrap();
         match event {
@@ -665,11 +683,12 @@ mod tests {
     #[test]
     fn multiple_local_clients() {
         let port = find_free_port();
+        let instance_name = "test-multi".to_string();
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(7300));
 
         let config = LocalServerConfig {
-            instance_name: "test-multi".into(),
+            instance_name: instance_name.clone(),
             port,
             interface_id: InterfaceId(74),
         };
@@ -677,8 +696,8 @@ mod tests {
         start_server(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
 
-        let _c1 = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
-        let _c2 = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        connect_test_client(&instance_name, port);
+        connect_test_client(&instance_name, port);
 
         let mut ids = Vec::new();
         for _ in 0..2 {
@@ -696,11 +715,12 @@ mod tests {
     #[test]
     fn client_disconnect_detected() {
         let port = find_free_port();
+        let instance_name = "test-dc".to_string();
         let (tx, rx) = mpsc::channel();
         let next_id = Arc::new(AtomicU64::new(7400));
 
         let config = LocalServerConfig {
-            instance_name: "test-dc".into(),
+            instance_name: instance_name.clone(),
             port,
             interface_id: InterfaceId(75),
         };
@@ -708,6 +728,10 @@ mod tests {
         start_server(config, tx, next_id).unwrap();
         thread::sleep(Duration::from_millis(50));
 
+        #[cfg(target_os = "linux")]
+        let client = unix_socket::try_connect_unix(&instance_name).unwrap();
+
+        #[cfg(not(target_os = "linux"))]
         let client = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
 
         // Drain InterfaceUp
@@ -722,5 +746,28 @@ mod tests {
             "expected InterfaceDown, got {:?}",
             event
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn unix_abstract_socket_helpers_work() {
+        let instance_name = format!(
+            "test-abstract-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+
+        let listener = unix_socket::try_bind_unix(&instance_name).unwrap();
+        let accept_thread = thread::spawn(move || listener.accept().unwrap().0);
+
+        let mut client = unix_socket::try_connect_unix(&instance_name).unwrap();
+        let mut server = accept_thread.join().unwrap();
+
+        client.write_all(b"ping").unwrap();
+        let mut buf = [0u8; 4];
+        server.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"ping");
     }
 }
