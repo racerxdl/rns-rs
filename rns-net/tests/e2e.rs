@@ -547,6 +547,13 @@ const APP_NAME: &str = "e2e_test";
 
 /// Start a transport node (TCP server) on the given port.
 fn start_transport_node(port: u16) -> RnsNode {
+    start_transport_node_with_packet_hashlist(port, rns_core::constants::HASHLIST_MAXSIZE)
+}
+
+fn start_transport_node_with_packet_hashlist(
+    port: u16,
+    packet_hashlist_max_entries: usize,
+) -> RnsNode {
     let node = RnsNode::start(
         NodeConfig {
             panic_on_interface_error: true,
@@ -583,6 +590,7 @@ fn start_transport_node(port: u16) -> RnsNode {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            packet_hashlist_max_entries,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
@@ -607,6 +615,20 @@ fn start_transport_node(port: u16) -> RnsNode {
 
 /// Start a client node (TCP client) connecting to the given port.
 fn start_client_node(port: u16, identity: &Identity, callbacks: Box<dyn Callbacks>) -> RnsNode {
+    start_client_node_with_packet_hashlist(
+        port,
+        identity,
+        callbacks,
+        rns_core::constants::HASHLIST_MAXSIZE,
+    )
+}
+
+fn start_client_node_with_packet_hashlist(
+    port: u16,
+    identity: &Identity,
+    callbacks: Box<dyn Callbacks>,
+    packet_hashlist_max_entries: usize,
+) -> RnsNode {
     RnsNode::start(
         NodeConfig {
             panic_on_interface_error: true,
@@ -644,6 +666,7 @@ fn start_client_node(port: u16, identity: &Identity, callbacks: Box<dyn Callback
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            packet_hashlist_max_entries,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
@@ -668,24 +691,63 @@ fn setup_two_peers() -> (
     Destination,
     Destination,
 ) {
+    setup_two_peers_with_packet_hashlist(rns_core::constants::HASHLIST_MAXSIZE)
+}
+
+#[allow(clippy::type_complexity)]
+fn setup_two_peers_with_packet_hashlist(
+    packet_hashlist_max_entries: usize,
+) -> (
+    RnsNode,
+    RnsNode,
+    mpsc::Receiver<TestEvent>,
+    RnsNode,
+    mpsc::Receiver<TestEvent>,
+    Identity,
+    Identity,
+    Destination,
+    Destination,
+) {
+    setup_two_peers_with_packet_hashlist_and_proof(
+        packet_hashlist_max_entries,
+        ProofStrategy::ProveAll,
+    )
+}
+
+#[allow(clippy::type_complexity)]
+fn setup_two_peers_with_packet_hashlist_and_proof(
+    packet_hashlist_max_entries: usize,
+    proof_strategy: ProofStrategy,
+) -> (
+    RnsNode,
+    RnsNode,
+    mpsc::Receiver<TestEvent>,
+    RnsNode,
+    mpsc::Receiver<TestEvent>,
+    Identity,
+    Identity,
+    Destination,
+    Destination,
+) {
     let port = find_free_port();
-    let transport = start_transport_node(port);
+    let transport = start_transport_node_with_packet_hashlist(port, packet_hashlist_max_entries);
 
     let alice_identity = Identity::new(&mut OsRng);
     let alice_ih = IdentityHash(*alice_identity.hash());
     let alice_dest = Destination::single_in(APP_NAME, &["msg", "rx"], alice_ih)
-        .set_proof_strategy(ProofStrategy::ProveAll);
+        .set_proof_strategy(proof_strategy);
 
     let bob_identity = Identity::new(&mut OsRng);
     let bob_ih = IdentityHash(*bob_identity.hash());
     let bob_dest = Destination::single_in(APP_NAME, &["msg", "rx"], bob_ih)
-        .set_proof_strategy(ProofStrategy::ProveAll);
+        .set_proof_strategy(proof_strategy);
 
     let (alice_tx, alice_rx) = mpsc::channel();
-    let alice_node = start_client_node(
+    let alice_node = start_client_node_with_packet_hashlist(
         port,
         &alice_identity,
         Box::new(TestCallbacks::new(alice_tx)),
+        packet_hashlist_max_entries,
     );
     alice_node
         .register_destination_with_proof(
@@ -695,7 +757,12 @@ fn setup_two_peers() -> (
         .unwrap();
 
     let (bob_tx, bob_rx) = mpsc::channel();
-    let bob_node = start_client_node(port, &bob_identity, Box::new(TestCallbacks::new(bob_tx)));
+    let bob_node = start_client_node_with_packet_hashlist(
+        port,
+        &bob_identity,
+        Box::new(TestCallbacks::new(bob_tx)),
+        packet_hashlist_max_entries,
+    );
     bob_node
         .register_destination_with_proof(&bob_dest, Some(bob_identity.get_private_key().unwrap()))
         .unwrap();
@@ -742,12 +809,74 @@ fn setup_two_peers_announced() -> (
     AnnouncedIdentity,
     AnnouncedIdentity,
 ) {
+    setup_two_peers_announced_with_packet_hashlist(rns_core::constants::HASHLIST_MAXSIZE)
+}
+
+#[allow(clippy::type_complexity)]
+fn setup_two_peers_announced_with_packet_hashlist(
+    packet_hashlist_max_entries: usize,
+) -> (
+    RnsNode,
+    RnsNode,
+    mpsc::Receiver<TestEvent>,
+    RnsNode,
+    mpsc::Receiver<TestEvent>,
+    Identity,
+    Identity,
+    Destination,
+    Destination,
+    AnnouncedIdentity,
+    AnnouncedIdentity,
+) {
     let (transport, alice_node, alice_rx, bob_node, bob_rx, alice_id, bob_id, alice_dest, bob_dest) =
-        setup_two_peers();
+        setup_two_peers_with_packet_hashlist(packet_hashlist_max_entries);
 
     // Announce sequentially: first Bob, then Alice.
     // Simultaneous bidirectional announces can race in the transport's
     // retransmit path, causing one direction to be permanently dropped.
+    let bob_announced = announce_with_retry(&bob_node, &bob_dest, &bob_id, Some(b"Bob"), &alice_rx)
+        .expect("Alice never received Bob's announce after retries");
+    let alice_announced =
+        announce_with_retry(&alice_node, &alice_dest, &alice_id, Some(b"Alice"), &bob_rx)
+            .expect("Bob never received Alice's announce after retries");
+
+    (
+        transport,
+        alice_node,
+        alice_rx,
+        bob_node,
+        bob_rx,
+        alice_id,
+        bob_id,
+        alice_dest,
+        bob_dest,
+        alice_announced,
+        bob_announced,
+    )
+}
+
+#[allow(clippy::type_complexity)]
+fn setup_two_peers_announced_no_proof_with_packet_hashlist(
+    packet_hashlist_max_entries: usize,
+) -> (
+    RnsNode,
+    RnsNode,
+    mpsc::Receiver<TestEvent>,
+    RnsNode,
+    mpsc::Receiver<TestEvent>,
+    Identity,
+    Identity,
+    Destination,
+    Destination,
+    AnnouncedIdentity,
+    AnnouncedIdentity,
+) {
+    let (transport, alice_node, alice_rx, bob_node, bob_rx, alice_id, bob_id, alice_dest, bob_dest) =
+        setup_two_peers_with_packet_hashlist_and_proof(
+            packet_hashlist_max_entries,
+            ProofStrategy::ProveNone,
+        );
+
     let bob_announced = announce_with_retry(&bob_node, &bob_dest, &bob_id, Some(b"Bob"), &alice_rx)
         .expect("Alice never received Bob's announce after retries");
     let alice_announced =
@@ -897,6 +1026,7 @@ fn test_direct_link_no_transport() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
@@ -1380,6 +1510,7 @@ fn test_plain_message_delivery() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
@@ -1412,6 +1543,119 @@ fn test_plain_message_delivery() {
 
     alice_node.shutdown();
     bob_node.shutdown();
+}
+
+#[test]
+fn test_single_duplicate_packet_dropped_until_fifo_eviction() {
+    let (
+        transport,
+        alice_node,
+        _alice_rx,
+        bob_node,
+        bob_rx,
+        _alice_id,
+        bob_id,
+        _alice_dest,
+        _bob_dest,
+        _alice_announced,
+        bob_announced,
+    ) = setup_two_peers_announced_no_proof_with_packet_hashlist(2);
+
+    let dest_to_bob = Destination::single_out(APP_NAME, &["msg", "rx"], &bob_announced);
+
+    let hash1 = alice_node.send_packet(&dest_to_bob, b"packet-one").unwrap();
+    let (_, raw1, recv_hash1) =
+        wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive first single packet");
+    assert_eq!(recv_hash1, hash1);
+
+    alice_node
+        .send_raw(raw1.clone(), rns_core::constants::DESTINATION_SINGLE, None)
+        .unwrap();
+    assert!(
+        wait_for_delivery(&bob_rx, Duration::from_millis(500)).is_none(),
+        "duplicate single packet should be suppressed"
+    );
+
+    alice_node.send_packet(&dest_to_bob, b"packet-two").unwrap();
+    wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive second unique single packet");
+
+    alice_node.send_packet(&dest_to_bob, b"packet-three").unwrap();
+    wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive third unique single packet");
+
+    alice_node
+        .send_raw(raw1, rns_core::constants::DESTINATION_SINGLE, None)
+        .unwrap();
+    let (_, raw1_again, recv_hash1_again) = wait_for_delivery(&bob_rx, TIMEOUT)
+        .expect("evicted oldest single packet should be deliverable again");
+    assert_eq!(recv_hash1_again, hash1);
+    let decrypted = decrypt_delivery(&raw1_again, &bob_id).expect("Decryption failed");
+    assert_eq!(decrypted, b"packet-one");
+
+    alice_node.shutdown();
+    bob_node.shutdown();
+    transport.shutdown();
+}
+
+#[test]
+fn test_single_duplicate_does_not_refresh_recency() {
+    let (
+        transport,
+        alice_node,
+        _alice_rx,
+        bob_node,
+        bob_rx,
+        _alice_id,
+        bob_id,
+        _alice_dest,
+        _bob_dest,
+        _alice_announced,
+        bob_announced,
+    ) = setup_two_peers_announced_no_proof_with_packet_hashlist(2);
+
+    let dest_to_bob = Destination::single_out(APP_NAME, &["msg", "rx"], &bob_announced);
+
+    let oldest_hash = alice_node.send_packet(&dest_to_bob, b"oldest").unwrap();
+    let (_, oldest_raw, recv_oldest_hash) =
+        wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive oldest packet");
+    assert_eq!(recv_oldest_hash, oldest_hash);
+
+    let newer_hash = alice_node.send_packet(&dest_to_bob, b"newer").unwrap();
+    let (_, newer_raw, recv_newer_hash) =
+        wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive newer packet");
+    assert_eq!(recv_newer_hash, newer_hash);
+
+    alice_node
+        .send_raw(oldest_raw.clone(), rns_core::constants::DESTINATION_SINGLE, None)
+        .unwrap();
+    assert!(
+        wait_for_delivery(&bob_rx, Duration::from_millis(500)).is_none(),
+        "duplicate oldest packet should be suppressed"
+    );
+
+    alice_node.send_packet(&dest_to_bob, b"fresh").unwrap();
+    wait_for_delivery(&bob_rx, TIMEOUT).expect("Bob did not receive fresh packet");
+
+    alice_node
+        .send_raw(newer_raw.clone(), rns_core::constants::DESTINATION_SINGLE, None)
+        .unwrap();
+    assert!(
+        wait_for_delivery(&bob_rx, Duration::from_millis(500)).is_none(),
+        "newer packet should still be retained after duplicate of oldest"
+    );
+
+    alice_node
+        .send_raw(oldest_raw, rns_core::constants::DESTINATION_SINGLE, None)
+        .unwrap();
+    let (_, oldest_raw_again, recv_oldest_hash_again) = wait_for_delivery(&bob_rx, TIMEOUT)
+        .expect("oldest packet should be deliverable again after FIFO eviction");
+    assert_eq!(recv_oldest_hash_again, oldest_hash);
+    let decrypted =
+        decrypt_delivery(&oldest_raw_again, &bob_id).expect("Decryption failed");
+    assert_eq!(decrypted, b"oldest");
+
+    alice_node.shutdown();
+    bob_node.shutdown();
+    transport.shutdown();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1471,6 +1715,7 @@ fn test_group_message_delivery() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
@@ -1566,6 +1811,7 @@ fn test_group_wrong_key_fails() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
@@ -2651,6 +2897,7 @@ fn test_udp_announce_and_message() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
@@ -2701,6 +2948,7 @@ fn test_udp_announce_and_message() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
@@ -2855,6 +3103,7 @@ fn discovery_announce_received_by_client() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
@@ -2910,6 +3159,7 @@ fn discovery_announce_received_by_client() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
@@ -3024,6 +3274,7 @@ fn discovery_announce_through_relay() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
@@ -3089,6 +3340,7 @@ fn discovery_announce_through_relay() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]
@@ -3142,6 +3394,7 @@ fn discovery_announce_through_relay() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
             registry: None,
             #[cfg(feature = "rns-hooks")]

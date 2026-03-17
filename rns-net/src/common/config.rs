@@ -60,6 +60,8 @@ pub struct ReticulumSection {
     /// Maximum number of alternative paths stored per destination.
     /// Default 1 (single path, backward-compatible).
     pub max_paths_per_destination: usize,
+    /// Maximum number of packet hashes retained for duplicate suppression.
+    pub packet_hashlist_max_entries: usize,
     /// TTL for recalled known destinations without an active path, in seconds.
     pub known_destinations_ttl: u64,
     #[cfg(feature = "rns-hooks")]
@@ -97,6 +99,7 @@ impl Default for ReticulumSection {
             required_discovery_value: None,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             known_destinations_ttl: 48 * 60 * 60,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: false,
@@ -501,6 +504,13 @@ fn build_reticulum_section(kvs: &HashMap<String, String>) -> Result<ReticulumSec
         })?;
         section.max_paths_per_destination = n.max(1);
     }
+    if let Some(v) = kvs.get("packet_hashlist_max_entries") {
+        let n = v.parse::<usize>().map_err(|_| ConfigError::InvalidValue {
+            key: "packet_hashlist_max_entries".into(),
+            value: v.clone(),
+        })?;
+        section.packet_hashlist_max_entries = n.max(1);
+    }
     if let Some(v) = kvs.get("known_destinations_ttl") {
         section.known_destinations_ttl =
             v.parse::<u64>().map_err(|_| ConfigError::InvalidValue {
@@ -575,6 +585,10 @@ mod tests {
         assert_eq!(config.reticulum.instance_name, "default");
         assert_eq!(config.logging.loglevel, 4);
         assert!(config.interfaces.is_empty());
+        assert_eq!(
+            config.reticulum.packet_hashlist_max_entries,
+            rns_core::constants::HASHLIST_MAXSIZE
+        );
     }
 
     #[cfg(feature = "rns-hooks")]
@@ -645,6 +659,7 @@ use_implicit_proof = False
 respond_to_probes = True
 network_identity = /home/user/.reticulum/identity
 known_destinations_ttl = 1234
+packet_hashlist_max_entries = 321
 "#;
         let config = parse(input).unwrap();
         assert!(config.reticulum.enable_transport);
@@ -660,6 +675,7 @@ known_destinations_ttl = 1234
             Some("/home/user/.reticulum/identity")
         );
         assert_eq!(config.reticulum.known_destinations_ttl, 1234);
+        assert_eq!(config.reticulum.packet_hashlist_max_entries, 321);
     }
 
     #[test]

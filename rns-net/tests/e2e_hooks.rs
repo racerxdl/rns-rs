@@ -221,6 +221,7 @@ fn start_transport_node(port: u16) -> RnsNode {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
@@ -268,6 +269,7 @@ fn start_client_node(port: u16, identity: &Identity, callbacks: Box<dyn Callback
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             registry: None,
             #[cfg(feature = "rns-hooks")]
             provider_bridge: None,

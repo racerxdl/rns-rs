@@ -143,6 +143,8 @@ pub struct TransportConfig {
     /// when the primary becomes unresponsive.  Default 1 (single path,
     /// backward-compatible with Python Reticulum behaviour).
     pub max_paths_per_destination: usize,
+    /// Maximum number of packet hashes retained for duplicate suppression.
+    pub packet_hashlist_max_entries: usize,
 }
 
 #[cfg(test)]
@@ -164,10 +166,15 @@ mod tests {
             identity_hash: None,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            packet_hashlist_max_entries: crate::constants::HASHLIST_MAXSIZE,
         };
         assert!(!cfg.transport_enabled);
         assert!(cfg.identity_hash.is_none());
         assert!(!cfg.prefer_shorter_path);
         assert_eq!(cfg.max_paths_per_destination, 1);
+        assert_eq!(
+            cfg.packet_hashlist_max_entries,
+            crate::constants::HASHLIST_MAXSIZE
+        );
     }
 }

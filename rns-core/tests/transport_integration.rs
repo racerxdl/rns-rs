@@ -70,6 +70,7 @@ impl TestHarness {
             },
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+        packet_hashlist_max_entries: crate::constants::HASHLIST_MAXSIZE,
         };
         TestHarness {
             engine: TransportEngine::new(config),
@@ -84,6 +85,7 @@ impl TestHarness {
             identity_hash: Some(identity_hash),
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+        packet_hashlist_max_entries: crate::constants::HASHLIST_MAXSIZE,
         };
         TestHarness {
             engine: TransportEngine::new(config),
@@ -98,6 +100,7 @@ impl TestHarness {
             identity_hash: None,
             prefer_shorter_path: false,
             max_paths_per_destination: max_paths,
+        packet_hashlist_max_entries: crate::constants::HASHLIST_MAXSIZE,
         };
         TestHarness {
             engine: TransportEngine::new(config),

@@ -68,6 +68,7 @@ pub struct TransportEngine {
 
 impl TransportEngine {
     pub fn new(config: TransportConfig) -> Self {
+        let packet_hashlist_max_entries = config.packet_hashlist_max_entries;
         TransportEngine {
             config,
             path_table: BTreeMap::new(),
@@ -75,7 +76,7 @@ impl TransportEngine {
             reverse_table: BTreeMap::new(),
             link_table: BTreeMap::new(),
             held_announces: BTreeMap::new(),
-            packet_hashlist: PacketHashlist::new(constants::HASHLIST_MAXSIZE),
+            packet_hashlist: PacketHashlist::new(packet_hashlist_max_entries),
             rate_limiter: AnnounceRateLimiter::new(),
             path_states: BTreeMap::new(),
             interfaces: BTreeMap::new(),
@@ -1170,9 +1171,6 @@ impl TransportEngine {
             self.tables_last_culled = now;
         }
 
-        // Hashlist rotation
-        self.packet_hashlist.maybe_rotate();
-
         // Cull PR tags if over limit
         if self.discovery_pr_tags.len() > constants::MAX_PR_TAGS {
             let start = self.discovery_pr_tags.len() - constants::MAX_PR_TAGS;
@@ -1564,6 +1562,11 @@ impl TransportEngine {
         &self.config
     }
 
+    pub fn set_packet_hashlist_max_entries(&mut self, max_entries: usize) {
+        self.config.packet_hashlist_max_entries = max_entries;
+        self.packet_hashlist = PacketHashlist::new(max_entries);
+    }
+
     /// Get path table entries as tuples for management queries.
     /// Returns (dest_hash, timestamp, next_hop, hops, expires, interface_name).
     /// Reports primaries only for backward compatibility.
@@ -1708,6 +1711,7 @@ mod tests {
             },
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            packet_hashlist_max_entries: constants::HASHLIST_MAXSIZE,
         }
     }
 
@@ -1935,6 +1939,83 @@ mod tests {
 
         // Should still pass filter (duplicate announce for SINGLE allowed)
         assert!(engine.packet_filter(&packet));
+    }
+
+    #[test]
+    fn test_packet_filter_fifo_eviction_allows_oldest_hash_again() {
+        let mut engine = TransportEngine::new(make_config(false));
+        engine.packet_hashlist = PacketHashlist::new(2);
+
+        let make_packet = |seed: u8| {
+            let flags = PacketFlags {
+                header_type: constants::HEADER_1,
+                context_flag: constants::FLAG_UNSET,
+                transport_type: constants::TRANSPORT_BROADCAST,
+                destination_type: constants::DESTINATION_SINGLE,
+                packet_type: constants::PACKET_TYPE_DATA,
+            };
+            RawPacket::pack(
+                flags,
+                0,
+                &[seed; 16],
+                None,
+                constants::CONTEXT_NONE,
+                &[seed; 4],
+            )
+            .unwrap()
+        };
+
+        let packet1 = make_packet(1);
+        let packet2 = make_packet(2);
+        let packet3 = make_packet(3);
+
+        engine.packet_hashlist.add(packet1.packet_hash);
+        engine.packet_hashlist.add(packet2.packet_hash);
+        assert!(!engine.packet_filter(&packet1));
+
+        engine.packet_hashlist.add(packet3.packet_hash);
+
+        assert!(engine.packet_filter(&packet1));
+        assert!(!engine.packet_filter(&packet2));
+        assert!(!engine.packet_filter(&packet3));
+    }
+
+    #[test]
+    fn test_packet_filter_duplicate_does_not_refresh_recency() {
+        let mut engine = TransportEngine::new(make_config(false));
+        engine.packet_hashlist = PacketHashlist::new(2);
+
+        let make_packet = |seed: u8| {
+            let flags = PacketFlags {
+                header_type: constants::HEADER_1,
+                context_flag: constants::FLAG_UNSET,
+                transport_type: constants::TRANSPORT_BROADCAST,
+                destination_type: constants::DESTINATION_SINGLE,
+                packet_type: constants::PACKET_TYPE_DATA,
+            };
+            RawPacket::pack(
+                flags,
+                0,
+                &[seed; 16],
+                None,
+                constants::CONTEXT_NONE,
+                &[seed; 4],
+            )
+            .unwrap()
+        };
+
+        let packet1 = make_packet(1);
+        let packet2 = make_packet(2);
+        let packet3 = make_packet(3);
+
+        engine.packet_hashlist.add(packet1.packet_hash);
+        engine.packet_hashlist.add(packet2.packet_hash);
+        engine.packet_hashlist.add(packet2.packet_hash);
+        engine.packet_hashlist.add(packet3.packet_hash);
+
+        assert!(engine.packet_filter(&packet1));
+        assert!(!engine.packet_filter(&packet2));
+        assert!(!engine.packet_filter(&packet3));
     }
 
     #[test]

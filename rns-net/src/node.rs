@@ -267,6 +267,8 @@ pub struct NodeConfig {
     /// Maximum number of alternative paths stored per destination.
     /// Default 1 (single path, backward-compatible).
     pub max_paths_per_destination: usize,
+    /// Maximum number of packet hashes retained for duplicate suppression.
+    pub packet_hashlist_max_entries: usize,
     /// TTL for recalled known destinations without an active path.
     pub known_destinations_ttl: Duration,
     /// Custom interface registry. If `None`, uses `InterfaceRegistry::with_builtins()`.
@@ -534,6 +536,7 @@ impl RnsNode {
             respond_to_probes: rns_config.reticulum.respond_to_probes,
             prefer_shorter_path: rns_config.reticulum.prefer_shorter_path,
             max_paths_per_destination: rns_config.reticulum.max_paths_per_destination,
+            packet_hashlist_max_entries: rns_config.reticulum.packet_hashlist_max_entries,
             known_destinations_ttl: Duration::from_secs(
                 rns_config.reticulum.known_destinations_ttl,
             ),
@@ -575,12 +578,14 @@ impl RnsNode {
             identity_hash: Some(*identity.hash()),
             prefer_shorter_path: config.prefer_shorter_path,
             max_paths_per_destination: config.max_paths_per_destination,
+            packet_hashlist_max_entries: config.packet_hashlist_max_entries,
         };
 
         let (tx, rx) = event::channel();
         let tick_interval_ms = Arc::new(AtomicU64::new(1000));
         let mut driver = Driver::new(transport_config, rx, tx.clone(), callbacks);
         driver.set_tick_interval_handle(Arc::clone(&tick_interval_ms));
+        driver.set_packet_hashlist_max_entries(config.packet_hashlist_max_entries);
         driver.known_destinations_ttl = config.known_destinations_ttl.as_secs_f64();
         driver.runtime_config_defaults.known_destinations_ttl = config.known_destinations_ttl.as_secs_f64();
 
@@ -1795,6 +1800,7 @@ mod tests {
                 respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
@@ -1832,6 +1838,7 @@ mod tests {
                 respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
@@ -1869,6 +1876,7 @@ mod tests {
                 respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
@@ -2266,6 +2274,7 @@ enable_transport = False
                 respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
@@ -2312,6 +2321,7 @@ enable_transport = False
                 respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
@@ -2354,6 +2364,7 @@ enable_transport = False
                 respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
@@ -2393,6 +2404,7 @@ enable_transport = False
                 respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
@@ -2439,6 +2451,7 @@ enable_transport = False
                 respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
@@ -2486,6 +2499,7 @@ enable_transport = False
                 respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
@@ -2531,6 +2545,7 @@ enable_transport = False
                 respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
@@ -2587,6 +2602,7 @@ enable_transport = False
                 respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]
@@ -2635,6 +2651,7 @@ enable_transport = False
                 respond_to_probes: false,
                 prefer_shorter_path: false,
                 max_paths_per_destination: 1,
+                packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
                 known_destinations_ttl: DEFAULT_KNOWN_DESTINATIONS_TTL,
                 registry: None,
                 #[cfg(feature = "rns-hooks")]

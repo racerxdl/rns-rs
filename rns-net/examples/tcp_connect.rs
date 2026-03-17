@@ -83,6 +83,7 @@ fn main() {
             respond_to_probes: false,
             prefer_shorter_path: false,
             max_paths_per_destination: 1,
+            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             known_destinations_ttl: std::time::Duration::from_secs(48 * 60 * 60),
             registry: None,
             #[cfg(feature = "rns-hooks")]
