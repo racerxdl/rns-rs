@@ -30,8 +30,8 @@ impl Default for ProviderBridgeConfig {
         Self {
             enabled: false,
             socket_path: PathBuf::from("/tmp/rns-provider.sock"),
-            queue_max_events: 1024,
-            queue_max_bytes: 1024 * 1024,
+            queue_max_events: 8192,
+            queue_max_bytes: 4 * 1024 * 1024,
             overflow_policy: OverflowPolicy::DropNewest,
             node_instance: "default".to_string(),
         }
@@ -74,6 +74,8 @@ struct BridgeState {
     next_seq: u64,
     connected: bool,
     shutdown: bool,
+    queue_max_events: usize,
+    queue_max_bytes: usize,
 }
 
 struct BridgeShared {
@@ -96,6 +98,8 @@ impl ProviderBridge {
         let listener = UnixListener::bind(&config.socket_path)?;
         listener.set_nonblocking(true)?;
 
+        let queue_max_events = config.queue_max_events;
+        let queue_max_bytes = config.queue_max_bytes;
         let shared = Arc::new(BridgeShared {
             config,
             state: Mutex::new(BridgeState {
@@ -105,6 +109,8 @@ impl ProviderBridge {
                 next_seq: 1,
                 connected: false,
                 shutdown: false,
+                queue_max_events,
+                queue_max_bytes,
             }),
             condvar: Condvar::new(),
         });
@@ -142,6 +148,22 @@ impl ProviderBridge {
             }),
         };
         enqueue_serialized(&self.shared, &mut state, envelope);
+    }
+
+    pub fn queue_max_events(&self) -> usize {
+        self.shared.state.lock().unwrap().queue_max_events
+    }
+
+    pub fn set_queue_max_events(&self, value: usize) {
+        self.shared.state.lock().unwrap().queue_max_events = value;
+    }
+
+    pub fn queue_max_bytes(&self) -> usize {
+        self.shared.state.lock().unwrap().queue_max_bytes
+    }
+
+    pub fn set_queue_max_bytes(&self, value: usize) {
+        self.shared.state.lock().unwrap().queue_max_bytes = value;
     }
 }
 
@@ -272,12 +294,12 @@ fn enqueue_serialized(
         }
     };
 
-    if encoded.len() > shared.config.queue_max_bytes {
+    if encoded.len() > state.queue_max_bytes {
         state.dropped_count = state.dropped_count.saturating_add(1);
         return;
     }
 
-    while !can_fit(shared, state, encoded.len()) {
+    while !can_fit(state, encoded.len()) {
         match shared.config.overflow_policy {
             OverflowPolicy::DropNewest => {
                 state.dropped_count = state.dropped_count.saturating_add(1);
@@ -300,9 +322,9 @@ fn enqueue_serialized(
     shared.condvar.notify_one();
 }
 
-fn can_fit(shared: &Arc<BridgeShared>, state: &BridgeState, len: usize) -> bool {
-    state.queue.len() < shared.config.queue_max_events
-        && state.queued_bytes.saturating_add(len) <= shared.config.queue_max_bytes
+fn can_fit(state: &BridgeState, len: usize) -> bool {
+    state.queue.len() < state.queue_max_events
+        && state.queued_bytes.saturating_add(len) <= state.queue_max_bytes
 }
 
 fn take_seq(state: &mut BridgeState) -> u64 {

@@ -586,6 +586,10 @@ impl RnsNode {
 
         #[cfg(feature = "rns-hooks")]
         if let Some(provider_config) = config.provider_bridge.clone() {
+            driver.runtime_config_defaults.provider_queue_max_events =
+                provider_config.queue_max_events;
+            driver.runtime_config_defaults.provider_queue_max_bytes =
+                provider_config.queue_max_bytes;
             if provider_config.enabled {
                 match crate::provider_bridge::ProviderBridge::start(provider_config) {
                     Ok(bridge) => driver.provider_bridge = Some(bridge),

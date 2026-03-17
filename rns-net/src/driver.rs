@@ -80,6 +80,10 @@ pub(crate) struct RuntimeConfigDefaults {
     pub(crate) discovery_cleanup_interval_ticks: u32,
     pub(crate) management_announce_interval_secs: f64,
     pub(crate) direct_connect_policy: crate::event::HolePunchPolicy,
+    #[cfg(feature = "rns-hooks")]
+    pub(crate) provider_queue_max_events: usize,
+    #[cfg(feature = "rns-hooks")]
+    pub(crate) provider_queue_max_bytes: usize,
 }
 
 #[cfg(feature = "iface-backbone")]
@@ -523,6 +527,12 @@ impl Driver {
             discovery_cleanup_interval_ticks: DEFAULT_DISCOVERY_CLEANUP_INTERVAL_TICKS,
             management_announce_interval_secs: DEFAULT_MANAGEMENT_ANNOUNCE_INTERVAL_SECS,
             direct_connect_policy: crate::event::HolePunchPolicy::default(),
+            #[cfg(feature = "rns-hooks")]
+            provider_queue_max_events: crate::provider_bridge::ProviderBridgeConfig::default()
+                .queue_max_events,
+            #[cfg(feature = "rns-hooks")]
+            provider_queue_max_bytes: crate::provider_bridge::ProviderBridgeConfig::default()
+                .queue_max_bytes,
         };
         Driver {
             engine,
@@ -980,6 +990,36 @@ impl Driver {
                 RuntimeConfigApplyMode::Immediate,
                 "Policy for incoming direct-connect proposals.",
             )),
+            #[cfg(feature = "rns-hooks")]
+            "provider.queue_max_events" => {
+                let value = self
+                    .provider_bridge
+                    .as_ref()
+                    .map(|b| b.queue_max_events())
+                    .unwrap_or(defaults.provider_queue_max_events);
+                Some(make_entry(
+                    key,
+                    RuntimeConfigValue::Int(value as i64),
+                    RuntimeConfigValue::Int(defaults.provider_queue_max_events as i64),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Max queued events in the provider bridge.",
+                ))
+            }
+            #[cfg(feature = "rns-hooks")]
+            "provider.queue_max_bytes" => {
+                let value = self
+                    .provider_bridge
+                    .as_ref()
+                    .map(|b| b.queue_max_bytes())
+                    .unwrap_or(defaults.provider_queue_max_bytes);
+                Some(make_entry(
+                    key,
+                    RuntimeConfigValue::Int(value as i64),
+                    RuntimeConfigValue::Int(defaults.provider_queue_max_bytes as i64),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Max queued bytes in the provider bridge.",
+                ))
+            }
             _ => {
                 #[cfg(feature = "iface-backbone")]
                 if let Some(entry) = self.backbone_runtime_entry(key) {
@@ -1041,6 +1081,14 @@ impl Driver {
         .filter_map(|key| self.runtime_config_entry(key))
         .collect();
 
+        #[cfg(feature = "rns-hooks")]
+        {
+            entries.extend(
+                ["provider.queue_max_events", "provider.queue_max_bytes"]
+                    .into_iter()
+                    .filter_map(|key| self.runtime_config_entry(key)),
+            );
+        }
         #[cfg(feature = "iface-backbone")]
         {
             entries.extend(self.list_backbone_runtime_config());
@@ -4975,6 +5023,38 @@ impl Driver {
                         self.holepunch_manager.set_policy(policy);
                         Ok(())
                     }
+                    #[cfg(feature = "rns-hooks")]
+                    "provider.queue_max_events" => {
+                        match Self::expect_u64(value, &key) {
+                            Ok(v) if v > 0 => {
+                                if let Some(ref bridge) = self.provider_bridge {
+                                    bridge.set_queue_max_events(v as usize);
+                                }
+                                Ok(())
+                            }
+                            Ok(_) => Err(RuntimeConfigError {
+                                code: RuntimeConfigErrorCode::InvalidValue,
+                                message: format!("{} must be >= 1", key),
+                            }),
+                            Err(err) => Err(err),
+                        }
+                    }
+                    #[cfg(feature = "rns-hooks")]
+                    "provider.queue_max_bytes" => {
+                        match Self::expect_u64(value, &key) {
+                            Ok(v) if v > 0 => {
+                                if let Some(ref bridge) = self.provider_bridge {
+                                    bridge.set_queue_max_bytes(v as usize);
+                                }
+                                Ok(())
+                            }
+                            Ok(_) => Err(RuntimeConfigError {
+                                code: RuntimeConfigErrorCode::InvalidValue,
+                                message: format!("{} must be >= 1", key),
+                            }),
+                            Err(err) => Err(err),
+                        }
+                    }
                     #[cfg(feature = "iface-backbone")]
                     _ if key.starts_with("backbone.") => self
                         .set_backbone_runtime_config(&key, value),
@@ -5063,6 +5143,20 @@ impl Driver {
                     "global.direct_connect_policy" => {
                         self.holepunch_manager
                             .set_policy(defaults.direct_connect_policy);
+                        Ok(())
+                    }
+                    #[cfg(feature = "rns-hooks")]
+                    "provider.queue_max_events" => {
+                        if let Some(ref bridge) = self.provider_bridge {
+                            bridge.set_queue_max_events(defaults.provider_queue_max_events);
+                        }
+                        Ok(())
+                    }
+                    #[cfg(feature = "rns-hooks")]
+                    "provider.queue_max_bytes" => {
+                        if let Some(ref bridge) = self.provider_bridge {
+                            bridge.set_queue_max_bytes(defaults.provider_queue_max_bytes);
+                        }
                         Ok(())
                     }
                     #[cfg(feature = "iface-backbone")]
@@ -9433,6 +9527,78 @@ mod tests {
         };
         assert_eq!(entry.value, RuntimeConfigValue::Null);
         assert!(driver.interfaces.get(&InterfaceId(1)).unwrap().ifac.is_none());
+    }
+
+    #[cfg(feature = "rns-hooks")]
+    #[test]
+    fn runtime_config_sets_provider_bridge_values() {
+        let mut driver = new_test_driver();
+
+        let dir = tempfile::tempdir().unwrap();
+        let socket_path = dir.path().join("provider.sock");
+        let bridge = crate::provider_bridge::ProviderBridge::start(
+            crate::provider_bridge::ProviderBridgeConfig {
+                enabled: true,
+                socket_path,
+                queue_max_events: 1024,
+                queue_max_bytes: 1024 * 1024,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        driver.runtime_config_defaults.provider_queue_max_events = 1024;
+        driver.runtime_config_defaults.provider_queue_max_bytes = 1024 * 1024;
+        driver.provider_bridge = Some(bridge);
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "provider.queue_max_events".into(),
+            value: RuntimeConfigValue::Int(4096),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected set ok");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Int(4096));
+        assert_eq!(
+            entry.source,
+            RuntimeConfigSource::RuntimeOverride,
+        );
+
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "provider.queue_max_bytes".into(),
+            value: RuntimeConfigValue::Int(2 * 1024 * 1024),
+        });
+        let QueryResponse::RuntimeConfigSet(Ok(entry)) = response else {
+            panic!("expected set ok");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Int(2 * 1024 * 1024));
+
+        // Reject zero values
+        let response = driver.handle_query_mut(QueryRequest::SetRuntimeConfig {
+            key: "provider.queue_max_events".into(),
+            value: RuntimeConfigValue::Int(0),
+        });
+        assert!(matches!(
+            response,
+            QueryResponse::RuntimeConfigSet(Err(_))
+        ));
+
+        // Reset
+        let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
+            key: "provider.queue_max_events".into(),
+        });
+        let QueryResponse::RuntimeConfigReset(Ok(entry)) = response else {
+            panic!("expected reset ok");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Int(1024));
+        assert_eq!(entry.source, RuntimeConfigSource::Startup);
+
+        let response = driver.handle_query_mut(QueryRequest::ResetRuntimeConfig {
+            key: "provider.queue_max_bytes".into(),
+        });
+        let QueryResponse::RuntimeConfigReset(Ok(entry)) = response else {
+            panic!("expected reset ok");
+        };
+        assert_eq!(entry.value, RuntimeConfigValue::Int(1024 * 1024));
     }
 
     #[test]
