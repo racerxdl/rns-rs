@@ -421,7 +421,7 @@ fn poll_loop(
                                     state.reject_count = state.reject_count.saturating_add(1);
                                 }
                                 peer_state.lock().unwrap().upsert_snapshot(&peers);
-                                log::warn!(
+                                log::debug!(
                                     "[{}] rejecting blacklisted peer {}",
                                     name,
                                     peer_addr
