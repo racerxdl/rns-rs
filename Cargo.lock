@@ -1970,7 +1970,7 @@ dependencies = [
 
 [[package]]
 name = "rns-core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "log",
  "rns-crypto",
@@ -2032,7 +2032,7 @@ dependencies = [
 
 [[package]]
 name = "rns-net"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "bincode",
  "bzip2",
