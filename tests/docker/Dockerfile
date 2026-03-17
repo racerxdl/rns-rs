@@ -7,6 +7,7 @@ COPY rns-net rns-net
 COPY rns-cli rns-cli
 COPY rns-ctl rns-ctl
 COPY rns-hooks rns-hooks
+COPY rns-stats-hook rns-stats-hook
 RUN cargo build --release --bin rns-ctl --features rns-hooks
 
 FROM debian:bookworm-slim

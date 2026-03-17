@@ -203,37 +203,6 @@ fn try_connect(config: &TcpClientConfig) -> io::Result<TcpStream> {
     Ok(stream)
 }
 
-fn connect_with_retry(config: &TcpClientConfig) -> io::Result<TcpStream> {
-    match try_connect(config) {
-        Ok(stream) => return Ok(stream),
-        Err(initial_err) => {
-            let mut last_err = initial_err;
-            let mut attempts = 0u32;
-
-            loop {
-                let runtime = config.runtime.lock().unwrap().clone();
-                if let Some(max) = runtime.max_reconnect_tries {
-                    if attempts >= max {
-                        return Err(last_err);
-                    }
-                }
-
-                thread::sleep(runtime.reconnect_wait);
-                attempts += 1;
-                log::info!("[{}] initial connect retry {} ...", config.name, attempts);
-
-                match try_connect(config) {
-                    Ok(stream) => return Ok(stream),
-                    Err(err) => {
-                        log::warn!("[{}] initial connect failed: {}", config.name, err);
-                        last_err = err;
-                    }
-                }
-            }
-        }
-    }
-}
-
 /// Create a TCP socket, bind it to a network device, then connect with timeout.
 #[cfg(target_os = "linux")]
 fn connect_with_device(
@@ -358,7 +327,7 @@ fn socket_addr_to_raw(addr: &std::net::SocketAddr) -> (libc::sockaddr_storage, l
 
 /// Connect and start the reader thread. Returns the writer for the driver.
 pub fn start(config: TcpClientConfig, tx: EventSender) -> io::Result<Box<dyn Writer>> {
-    let stream = connect_with_retry(&config)?;
+    let stream = try_connect(&config)?;
     let reader_stream = stream.try_clone()?;
     let writer_stream = stream.try_clone()?;
 

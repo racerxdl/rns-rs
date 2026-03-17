@@ -1980,6 +1980,123 @@ enable_transport = False
     }
 
     #[test]
+    fn from_config_starts_rpc_when_share_instance_enabled() {
+        let dir = std::env::temp_dir().join(format!("rns-test-rpc-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let rpc_port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+
+        let config = format!(
+            r#"
+[reticulum]
+enable_transport = False
+share_instance = Yes
+instance_control_port = {}
+
+[interfaces]
+"#,
+            rpc_port
+        );
+
+        fs::write(dir.join("config"), config).unwrap();
+
+        let node = RnsNode::from_config(Some(&dir), Box::new(NoopCallbacks)).unwrap();
+
+        thread::sleep(Duration::from_millis(100));
+
+        let _client = std::net::TcpStream::connect(format!("127.0.0.1:{}", rpc_port)).unwrap();
+
+        node.shutdown();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn from_config_starts_rpc_when_transport_enabled() {
+        let dir = std::env::temp_dir().join(format!("rns-test-rpc-transport-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let rpc_port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+
+        let config = format!(
+            r#"
+[reticulum]
+enable_transport = True
+share_instance = Yes
+instance_control_port = {}
+
+[interfaces]
+"#,
+            rpc_port
+        );
+
+        fs::write(dir.join("config"), config).unwrap();
+
+        let node = RnsNode::from_config(Some(&dir), Box::new(NoopCallbacks)).unwrap();
+
+        thread::sleep(Duration::from_millis(100));
+
+        let _client = std::net::TcpStream::connect(format!("127.0.0.1:{}", rpc_port)).unwrap();
+
+        node.shutdown();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn from_config_starts_rpc_when_tcp_client_is_unreachable() {
+        let dir = std::env::temp_dir().join(format!("rns-test-rpc-unreachable-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        let rpc_port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let unreachable_port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+
+        let config = format!(
+            r#"
+[reticulum]
+enable_transport = True
+share_instance = Yes
+instance_control_port = {}
+
+[interfaces]
+  [[Unreachable Upstream]]
+    type = TCPClientInterface
+    target_host = 127.0.0.1
+    target_port = {}
+"#,
+            rpc_port, unreachable_port
+        );
+
+        fs::write(dir.join("config"), config).unwrap();
+
+        let node = RnsNode::from_config(Some(&dir), Box::new(NoopCallbacks)).unwrap();
+
+        thread::sleep(Duration::from_millis(100));
+
+        let _client = std::net::TcpStream::connect(format!("127.0.0.1:{}", rpc_port)).unwrap();
+
+        node.shutdown();
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn test_parse_interface_mode() {
         use rns_core::constants::*;
 
