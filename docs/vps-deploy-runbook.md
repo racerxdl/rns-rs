@@ -1,0 +1,196 @@
+# VPS Deploy Runbook
+
+This runbook documents the current deployment procedure for the public VPS
+(`root@vps`) running:
+
+- `rnsd`
+- `rns-statsd`
+
+It is based on the production findings in:
+
+- [vps-production-findings-2026-03-15.md](/home/lelloman/lelloprojects/rns-rs/docs/vps-production-findings-2026-03-15.md)
+- [vps-production-findings-2026-03-17.md](/home/lelloman/lelloprojects/rns-rs/docs/vps-production-findings-2026-03-17.md)
+
+## 1. Build release binaries
+
+From the repo root:
+
+```bash
+cargo build --release --bin rnsd --bin rns-statsd --bin rns-ctl
+target/release/rnsd --version
+target/release/rns-statsd --version
+target/release/rns-ctl --version
+```
+
+Expected result: all three binaries report the same target commit.
+
+## 2. Upload test binaries first
+
+Do not replace the live binaries before testing startup on the VPS.
+
+```bash
+ssh root@vps 'cat > /usr/local/bin/rnsd.new' < target/release/rnsd
+ssh root@vps 'cat > /usr/local/bin/rns-statsd.new' < target/release/rns-statsd
+ssh root@vps 'cat > /usr/local/bin/rns-ctl.test' < target/release/rns-ctl
+ssh root@vps 'chmod +x /usr/local/bin/rnsd.new /usr/local/bin/rns-statsd.new'
+```
+
+Verify the uploaded versions:
+
+```bash
+ssh root@vps '/usr/local/bin/rnsd.new --version'
+ssh root@vps '/usr/local/bin/rns-statsd.new --version'
+ssh root@vps '/usr/local/bin/rns-ctl.test --version'
+```
+
+## 3. Run the isolated VPS startup probe
+
+Use the helper script:
+
+```bash
+bash scripts/bisect-vps-rpc.sh
+```
+
+The probe is considered good only if the test daemon on the VPS starts both:
+
+- the shared-instance listener
+- the RPC listener
+
+On success, the VPS output should show listeners like:
+
+- `127.0.0.1:47428`
+- `127.0.0.1:47429`
+
+If the probe fails, stop here. Do not touch the live services.
+
+## 4. Check current live state
+
+Before rollout, capture the live versions and service state:
+
+```bash
+ssh root@vps '/usr/local/bin/rnsd --version'
+ssh root@vps '/usr/local/bin/rns-statsd --version'
+ssh root@vps 'systemctl is-active rnsd rns-statsd'
+```
+
+## 5. Back up and promote the binaries
+
+Replace the live binaries only after the isolated probe passes.
+
+Example using the versions that were live before the `f1ab29d` rollout:
+
+```bash
+ssh root@vps '
+  set -e
+  cp /usr/local/bin/rnsd /usr/local/bin/rnsd.bak-f96ef5d
+  cp /usr/local/bin/rns-statsd /usr/local/bin/rns-statsd.bak-339e071
+  install -m 0755 /usr/local/bin/rnsd.new /usr/local/bin/rnsd
+  install -m 0755 /usr/local/bin/rns-statsd.new /usr/local/bin/rns-statsd
+'
+```
+
+Adjust the backup suffixes to match the versions currently deployed.
+
+## 6. Restart `rnsd` first
+
+Restart the daemon before `rns-statsd`:
+
+```bash
+ssh root@vps '
+  systemctl restart rnsd
+  sleep 6
+  systemctl --no-pager --full status rnsd | sed -n "1,40p"
+  ss -ltnp | grep -E "37428|37429|4242" || true
+'
+```
+
+Required checks:
+
+- `rnsd.service` is `active (running)`
+- `0.0.0.0:4242` is listening
+- `127.0.0.1:37429` is listening
+
+`127.0.0.1:37428` may also be present when the shared instance listener is up.
+
+If the RPC port is missing, roll back immediately.
+
+## 7. Restart `rns-statsd`
+
+Once `rnsd` is confirmed healthy:
+
+```bash
+ssh root@vps '
+  systemctl restart rns-statsd
+  sleep 6
+  systemctl --no-pager --full status rns-statsd | sed -n "1,40p"
+  journalctl -u rns-statsd -n 20 --no-pager
+'
+```
+
+Important behavior:
+
+- `rns-statsd` may fail once or twice immediately after an `rnsd` restart with
+  `rpc connect failed: Connection refused`
+- with `Restart=always`, it should recover automatically once `rnsd` finishes
+  bringing up the RPC listener
+
+This is expected during restart sequencing. The final state must still be
+`active (running)`.
+
+## 8. Final verification
+
+After both services are restarted:
+
+```bash
+ssh root@vps '
+  systemctl is-active rnsd rns-statsd
+  /usr/local/bin/rnsd --version
+  /usr/local/bin/rns-statsd --version
+  ss -ltnp | grep -E "37429|4242"
+'
+```
+
+Healthy result:
+
+- both services are `active`
+- both binaries report the intended release version
+- `rnsd` is listening on:
+  - `0.0.0.0:4242`
+  - `127.0.0.1:37429`
+
+Useful log checks:
+
+```bash
+ssh root@vps 'journalctl -u rnsd -n 20 --no-pager'
+ssh root@vps 'journalctl -u rns-statsd -n 20 --no-pager'
+```
+
+## 9. Rollback
+
+If the new `rnsd` does not expose the RPC listener, restore the backups and
+restart in the same order:
+
+```bash
+ssh root@vps '
+  set -e
+  install -m 0755 /usr/local/bin/rnsd.bak-OLD /usr/local/bin/rnsd
+  install -m 0755 /usr/local/bin/rns-statsd.bak-OLD /usr/local/bin/rns-statsd
+  systemctl restart rnsd
+  sleep 6
+  systemctl restart rns-statsd
+'
+```
+
+Replace `OLD` with the actual backup suffixes.
+
+Then rerun the final verification commands from section 8.
+
+## 10. Notes
+
+- The safest deployment path is: build locally, upload test binaries, run the
+  isolated VPS probe, then promote the live binaries.
+- The isolated probe exists specifically to catch startup failures where
+  `rnsd` never reaches the RPC listener.
+- The current live service paths are:
+  - `/usr/local/bin/rnsd`
+  - `/usr/local/bin/rns-statsd`
