@@ -1268,6 +1268,14 @@ fn backbone_peer_state_to_pickle(entries: &[BackbonePeerStateEntry]) -> PickleVa
                         PickleValue::String("reject_count".into()),
                         PickleValue::Int(entry.reject_count as i64),
                     ),
+                    (
+                        PickleValue::String("penalty_level".into()),
+                        PickleValue::Int(entry.penalty_level as i64),
+                    ),
+                    (
+                        PickleValue::String("connect_rate_events".into()),
+                        PickleValue::Int(entry.connect_rate_events as i64),
+                    ),
                 ])
             })
             .collect(),

@@ -263,6 +263,8 @@ pub struct BackbonePeerStateEntry {
     pub blacklisted_remaining_secs: Option<f64>,
     pub blacklist_reason: Option<String>,
     pub reject_count: u64,
+    pub penalty_level: u8,
+    pub connect_rate_events: usize,
 }
 
 /// Queries that can be sent to the driver.

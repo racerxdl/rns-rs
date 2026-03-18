@@ -1335,6 +1335,22 @@ impl Driver {
                 runtime.abuse.flap_max_connection_age = Self::set_optional_duration(value, key)?;
                 Ok(())
             }
+            "connect_rate_threshold" => {
+                runtime.abuse.connect_rate_threshold = Self::set_optional_usize(value, key)?;
+                Ok(())
+            }
+            "connect_rate_window_secs" => {
+                runtime.abuse.connect_rate_window = Self::set_optional_duration(value, key)?;
+                Ok(())
+            }
+            "max_penalty_duration_secs" => {
+                runtime.abuse.max_penalty_duration = Self::set_optional_duration(value, key)?;
+                Ok(())
+            }
+            "penalty_decay_interval_secs" => {
+                runtime.abuse.penalty_decay_interval = Self::set_optional_duration(value, key)?;
+                Ok(())
+            }
             "max_connections" => {
                 runtime.max_connections = Self::set_optional_usize(value, key)?;
                 Ok(())
@@ -1493,6 +1509,10 @@ impl Driver {
             "flap_blacklist_threshold" => runtime.abuse.flap_threshold = startup.abuse.flap_threshold,
             "flap_blacklist_window_secs" => runtime.abuse.flap_window = startup.abuse.flap_window,
             "flap_max_connection_age_secs" => runtime.abuse.flap_max_connection_age = startup.abuse.flap_max_connection_age,
+            "connect_rate_threshold" => runtime.abuse.connect_rate_threshold = startup.abuse.connect_rate_threshold,
+            "connect_rate_window_secs" => runtime.abuse.connect_rate_window = startup.abuse.connect_rate_window,
+            "max_penalty_duration_secs" => runtime.abuse.max_penalty_duration = startup.abuse.max_penalty_duration,
+            "penalty_decay_interval_secs" => runtime.abuse.penalty_decay_interval = startup.abuse.penalty_decay_interval,
             "max_connections" => runtime.max_connections = startup.max_connections,
             _ => {
                 return Err(RuntimeConfigError {
@@ -3292,6 +3312,10 @@ impl Driver {
                 "flap_blacklist_threshold",
                 "flap_blacklist_window_secs",
                 "flap_max_connection_age_secs",
+                "connect_rate_threshold",
+                "connect_rate_window_secs",
+                "max_penalty_duration_secs",
+                "penalty_decay_interval_secs",
                 "max_connections",
             ] {
                 let key = format!("backbone.{}.{}", name, suffix);
@@ -3491,6 +3515,30 @@ impl Driver {
                     RuntimeConfigValue::Float(startup.abuse.flap_max_connection_age.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
                     RuntimeConfigApplyMode::Immediate,
                     "Only connections shorter than this count as flap events; 0 disables.",
+                )),
+                "connect_rate_threshold" => Some(make_entry(
+                    RuntimeConfigValue::Int(current.abuse.connect_rate_threshold.unwrap_or(0) as i64),
+                    RuntimeConfigValue::Int(startup.abuse.connect_rate_threshold.unwrap_or(0) as i64),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Connection attempts within the rate window needed before penalty; 0 disables.",
+                )),
+                "connect_rate_window_secs" => Some(make_entry(
+                    RuntimeConfigValue::Float(current.abuse.connect_rate_window.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
+                    RuntimeConfigValue::Float(startup.abuse.connect_rate_window.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Window for counting connection rate attempts; 0 disables.",
+                )),
+                "max_penalty_duration_secs" => Some(make_entry(
+                    RuntimeConfigValue::Float(current.abuse.max_penalty_duration.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
+                    RuntimeConfigValue::Float(startup.abuse.max_penalty_duration.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Maximum penalty ban duration cap; 0 means no cap (exponential only).",
+                )),
+                "penalty_decay_interval_secs" => Some(make_entry(
+                    RuntimeConfigValue::Float(current.abuse.penalty_decay_interval.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
+                    RuntimeConfigValue::Float(startup.abuse.penalty_decay_interval.map(|d| d.as_secs_f64()).unwrap_or(0.0)),
+                    RuntimeConfigApplyMode::Immediate,
+                    "Time of clean behavior needed to decay penalty level by 1; 0 disables decay.",
                 )),
                 "max_connections" => Some(make_entry(
                     RuntimeConfigValue::Int(current.max_connections.unwrap_or(0) as i64),
@@ -6973,6 +7021,10 @@ mod tests {
                 flap_threshold: Some(8),
                 flap_window: Some(Duration::from_secs(60)),
                 flap_max_connection_age: Some(Duration::from_secs(5)),
+                connect_rate_threshold: Some(5),
+                connect_rate_window: Some(Duration::from_secs(3)),
+                max_penalty_duration: Some(Duration::from_secs(3600)),
+                penalty_decay_interval: Some(Duration::from_secs(300)),
             },
         };
         let peer_state = Arc::new(std::sync::Mutex::new(
@@ -9023,6 +9075,8 @@ mod tests {
                 blacklisted_remaining_secs: Some(120.0),
                 blacklist_reason: Some("repeated idle timeouts".into()),
                 reject_count: 7,
+                penalty_level: 0,
+                connect_rate_events: 0,
             });
 
         let response = driver.handle_query(QueryRequest::BackbonePeerState {
@@ -9064,6 +9118,8 @@ mod tests {
                 blacklisted_remaining_secs: None,
                 blacklist_reason: None,
                 reject_count: 0,
+                penalty_level: 0,
+                connect_rate_events: 0,
             });
 
         let response = driver.handle_query_mut(QueryRequest::ClearBackbonePeerState {

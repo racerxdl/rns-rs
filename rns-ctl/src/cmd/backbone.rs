@@ -106,10 +106,10 @@ fn print_blacklist(response: &PickleValue) {
     }
 
     println!(
-        "{:<24} {:<40} {:>5} {:>5} {:>5} {:>9} {:>8}  {}",
-        "Interface", "IP", "Conn", "Idle", "Flap", "BlkSecs", "Rejects", "Reason"
+        "{:<24} {:<40} {:>5} {:>5} {:>5} {:>4} {:>5} {:>9} {:>8}  {}",
+        "Interface", "IP", "Conn", "Idle", "Flap", "Lvl", "Rate", "BlkSecs", "Rejects", "Reason"
     );
-    println!("{}", "-".repeat(118));
+    println!("{}", "-".repeat(128));
     for entry in entries {
         let interface = entry.get("interface").and_then(|v| v.as_str()).unwrap_or("-");
         let ip = entry.get("ip").and_then(|v| v.as_str()).unwrap_or("-");
@@ -123,6 +123,14 @@ fn print_blacklist(response: &PickleValue) {
             .unwrap_or(0);
         let flap = entry
             .get("flap_events")
+            .and_then(|v| v.as_int())
+            .unwrap_or(0);
+        let penalty_level = entry
+            .get("penalty_level")
+            .and_then(|v| v.as_int())
+            .unwrap_or(0);
+        let rate = entry
+            .get("connect_rate_events")
             .and_then(|v| v.as_int())
             .unwrap_or(0);
         let blacklist = entry
@@ -139,8 +147,8 @@ fn print_blacklist(response: &PickleValue) {
             .and_then(|v| v.as_str())
             .unwrap_or("");
         println!(
-            "{:<24} {:<40} {:>5} {:>5} {:>5} {:>9} {:>8}  {}",
-            interface, ip, connected, idle, flap, blacklist, rejects, reason
+            "{:<24} {:<40} {:>5} {:>5} {:>5} {:>4} {:>5} {:>9} {:>8}  {}",
+            interface, ip, connected, idle, flap, penalty_level, rate, blacklist, rejects, reason
         );
     }
 }
@@ -162,6 +170,8 @@ fn pickle_list_to_json(value: &PickleValue) -> Value {
                     "blacklisted_remaining_secs": entry.get("blacklisted_remaining_secs").and_then(|v| v.as_float()),
                     "blacklist_reason": entry.get("blacklist_reason").and_then(|v| v.as_str()),
                     "reject_count": entry.get("reject_count").and_then(|v| v.as_int()),
+                    "penalty_level": entry.get("penalty_level").and_then(|v| v.as_int()),
+                    "connect_rate_events": entry.get("connect_rate_events").and_then(|v| v.as_int()),
                 })
             })
             .collect(),
