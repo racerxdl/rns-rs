@@ -9,8 +9,9 @@ use crate::packet::RawPacket;
 ///
 /// Follows Transport.py:939-1179:
 /// 1. If path known and hops > 1 → rewrite HEADER_1 to HEADER_2 with next_hop, send on path interface
-/// 2. If path known and hops == 1 → send as-is on path interface
-/// 3. No path → broadcast on all OUT interfaces (with mode filtering for announces)
+/// 2. If path known and hops == 1 on a shared client → rewrite HEADER_1 to HEADER_2
+/// 3. If path known and hops <= 1 otherwise → send as-is on path interface
+/// 4. No path → broadcast on all OUT interfaces (with mode filtering for announces)
 pub fn route_outbound(
     path_table: &alloc::collections::BTreeMap<[u8; 16], PathSet>,
     interfaces: &alloc::collections::BTreeMap<InterfaceId, InterfaceInfo>,
@@ -32,22 +33,16 @@ pub fn route_outbound(
             .get(&packet.destination_hash)
             .and_then(|ps| ps.primary())
         {
-            if path_entry.hops > 1 {
+            let is_shared_client = interfaces
+                .get(&path_entry.receiving_interface)
+                .map(|iface| iface.is_local_client)
+                .unwrap_or(false);
+
+            if path_entry.hops > 1 || (path_entry.hops == 1 && is_shared_client) {
                 if packet.flags.header_type == constants::HEADER_1 {
-                    // Rewrite H1 → H2 with transport
-                    let new_flags = (constants::HEADER_2 << 6)
-                        | (constants::TRANSPORT_TRANSPORT << 4)
-                        | (packet.raw[0] & 0x0F);
-
-                    let mut new_raw = Vec::new();
-                    new_raw.push(new_flags);
-                    new_raw.push(packet.raw[1]); // hops
-                    new_raw.extend_from_slice(&path_entry.next_hop); // transport_id = next hop
-                    new_raw.extend_from_slice(&packet.raw[2..]); // dest_hash + context + data
-
                     actions.push(TransportAction::SendOnInterface {
                         interface: path_entry.receiving_interface,
-                        raw: new_raw,
+                        raw: inject_transport_header(packet, &path_entry.next_hop),
                     });
                 }
                 // If already HEADER_2, just forward (shouldn't normally happen for outbound)
@@ -124,6 +119,18 @@ pub fn route_outbound(
     }
 
     actions
+}
+
+fn inject_transport_header(packet: &RawPacket, next_hop: &[u8; 16]) -> Vec<u8> {
+    let new_flags =
+        (constants::HEADER_2 << 6) | (constants::TRANSPORT_TRANSPORT << 4) | (packet.raw[0] & 0x0F);
+
+    let mut new_raw = Vec::new();
+    new_raw.push(new_flags);
+    new_raw.push(packet.raw[1]); // hops
+    new_raw.extend_from_slice(next_hop); // transport_id = next hop
+    new_raw.extend_from_slice(&packet.raw[2..]); // dest_hash + context + data
+    new_raw
 }
 
 /// Determine whether an announce should be transmitted on a given interface.
@@ -219,6 +226,12 @@ mod tests {
         }
     }
 
+    fn make_local_client_interface(id: u64, mode: u8) -> InterfaceInfo {
+        let mut iface = make_interface(id, mode);
+        iface.is_local_client = true;
+        iface
+    }
+
     use super::super::tables::PathEntry;
 
     fn make_path(hops: u8, iface: u64) -> PathSet {
@@ -289,7 +302,8 @@ mod tests {
         let mut paths = BTreeMap::new();
         paths.insert(dest, make_path(1, 2));
 
-        let interfaces = BTreeMap::new();
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(InterfaceId(2), make_interface(2, constants::MODE_FULL));
         let local_dests = BTreeMap::new();
         let packet = make_data_packet(&dest);
 
@@ -310,6 +324,45 @@ mod tests {
                 // Should remain HEADER_1
                 let flags = PacketFlags::unpack(raw[0]);
                 assert_eq!(flags.header_type, constants::HEADER_1);
+            }
+            _ => panic!("Expected SendOnInterface"),
+        }
+    }
+
+    #[test]
+    fn test_outbound_direct_hop_shared_client_injects_transport() {
+        let dest = [0x23; 16];
+        let mut paths = BTreeMap::new();
+        paths.insert(dest, make_path(1, 2));
+
+        let mut interfaces = BTreeMap::new();
+        interfaces.insert(
+            InterfaceId(2),
+            make_local_client_interface(2, constants::MODE_FULL),
+        );
+        let local_dests = BTreeMap::new();
+        let packet = make_data_packet(&dest);
+
+        let actions = route_outbound(
+            &paths,
+            &interfaces,
+            &local_dests,
+            &packet,
+            constants::DESTINATION_SINGLE,
+            None,
+            1000.0,
+        );
+
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            TransportAction::SendOnInterface { interface, raw } => {
+                assert_eq!(*interface, InterfaceId(2));
+                let flags = PacketFlags::unpack(raw[0]);
+                assert_eq!(flags.header_type, constants::HEADER_2);
+                assert_eq!(flags.transport_type, constants::TRANSPORT_TRANSPORT);
+                assert_eq!(raw[1], packet.raw[1]);
+                assert_eq!(&raw[2..18], &[0xAA; 16]);
+                assert_eq!(&raw[18..], &packet.raw[2..]);
             }
             _ => panic!("Expected SendOnInterface"),
         }
