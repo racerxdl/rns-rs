@@ -1469,6 +1469,61 @@ impl TransportEngine {
         self.link_table.len()
     }
 
+    /// Number of path table entries.
+    pub fn path_table_count(&self) -> usize {
+        self.path_table.len()
+    }
+
+    /// Number of announce table entries.
+    pub fn announce_table_count(&self) -> usize {
+        self.announce_table.len()
+    }
+
+    /// Number of reverse table entries.
+    pub fn reverse_table_count(&self) -> usize {
+        self.reverse_table.len()
+    }
+
+    /// Number of held announces.
+    pub fn held_announces_count(&self) -> usize {
+        self.held_announces.len()
+    }
+
+    /// Number of entries in the packet hashlist.
+    pub fn packet_hashlist_len(&self) -> usize {
+        self.packet_hashlist.len()
+    }
+
+    /// Number of entries in the rate limiter.
+    pub fn rate_limiter_count(&self) -> usize {
+        self.rate_limiter.len()
+    }
+
+    /// Number of blackholed identities.
+    pub fn blackholed_count(&self) -> usize {
+        self.blackholed_identities.len()
+    }
+
+    /// Number of tunnel table entries.
+    pub fn tunnel_count(&self) -> usize {
+        self.tunnel_table.len()
+    }
+
+    /// Number of discovery PR tags.
+    pub fn discovery_pr_tags_count(&self) -> usize {
+        self.discovery_pr_tags.len()
+    }
+
+    /// Number of discovery path requests.
+    pub fn discovery_path_requests_count(&self) -> usize {
+        self.discovery_path_requests.len()
+    }
+
+    /// Number of local destinations.
+    pub fn local_destinations_count(&self) -> usize {
+        self.local_destinations.len()
+    }
+
     /// Access the rate limiter for reading rate table entries.
     pub fn rate_limiter(&self) -> &AnnounceRateLimiter {
         &self.rate_limiter

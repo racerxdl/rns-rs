@@ -120,6 +120,10 @@ impl Default for BackboneConfig {
     }
 }
 
+/// Maximum pending buffer size per client (512 KB). Clients exceeding this are
+/// disconnected to prevent unbounded memory growth from slow readers.
+const MAX_PENDING_BYTES: usize = 512 * 1024;
+
 /// Writer that sends HDLC-framed data over a cloned TCP stream (server mode).
 struct BackboneWriter {
     stream: TcpStream,
@@ -176,6 +180,11 @@ impl BackboneWriter {
                         if now.duration_since(*started) >= timeout {
                             return Err(self.disconnect_for_write_stall(timeout));
                         }
+                    }
+                    if self.pending.len() + data[written..].len() > MAX_PENDING_BYTES {
+                        return Err(self.disconnect_for_write_stall(
+                            write_stall_timeout.unwrap_or(Duration::from_secs(30)),
+                        ));
                     }
                     self.pending.extend_from_slice(&data[written..]);
                     return Err(io::Error::new(

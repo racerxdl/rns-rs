@@ -828,13 +828,15 @@ pub fn endpoint_to_socket_addr(ep: &Endpoint) -> Option<SocketAddr> {
     }
 }
 
-/// Number of active sessions (for testing).
-#[cfg(test)]
 impl HolePunchManager {
-    fn session_count(&self) -> usize {
+    /// Number of active sessions.
+    pub fn session_count(&self) -> usize {
         self.sessions.len()
     }
+}
 
+#[cfg(test)]
+impl HolePunchManager {
     fn has_session_for_link(&self, link_id: &[u8; 16]) -> bool {
         self.link_to_session.contains_key(link_id)
     }

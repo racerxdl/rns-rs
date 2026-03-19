@@ -471,6 +471,8 @@ pub struct Driver {
     pub(crate) discovery_cleanup_counter: u32,
     /// Runtime-configurable discovery cleanup interval.
     pub(crate) discovery_cleanup_interval_ticks: u32,
+    /// Tick counter for periodic MEMSTATS logging (every 300 ticks = ~5 min).
+    pub(crate) memory_stats_counter: u32,
     /// Tick counter for periodic memory/cache cleanup (every ~3600 ticks = ~1 hour).
     pub(crate) cache_cleanup_counter: u32,
     /// Tick counter for incremental announce-cache cleanup scheduling.
@@ -614,6 +616,7 @@ impl Driver {
             discovery_cleanup_counter: 0,
             discovery_cleanup_interval_ticks: runtime_config_defaults
                 .discovery_cleanup_interval_ticks,
+            memory_stats_counter: 0,
             cache_cleanup_counter: 0,
             announce_cache_cleanup_counter: 0,
             known_destinations_cleanup_interval_ticks: runtime_config_defaults
@@ -3932,6 +3935,13 @@ impl Driver {
 
                     self.tick_discovery_announcer(now);
 
+                    // Periodic MEMSTATS logging (~every 5 min / 300 ticks)
+                    self.memory_stats_counter += 1;
+                    if self.memory_stats_counter >= 300 {
+                        self.memory_stats_counter = 0;
+                        self.log_memory_stats();
+                    }
+
                     // Periodic discovery cleanup
                     if self.discover_interfaces {
                         self.discovery_cleanup_counter += 1;
@@ -6849,6 +6859,46 @@ impl Driver {
             &disc_dest[..4],
         );
         self.dispatch_all(outbound_actions);
+    }
+
+    /// Read RSS from /proc/self/statm (Linux only).
+    fn rss_mb() -> Option<f64> {
+        let statm = std::fs::read_to_string("/proc/self/statm").ok()?;
+        let rss_pages: u64 = statm.split_whitespace().nth(1)?.parse().ok()?;
+        Some(rss_pages as f64 * 4096.0 / (1024.0 * 1024.0))
+    }
+
+    /// Log sizes of all major collections for memory growth diagnostics.
+    fn log_memory_stats(&self) {
+        let rss = Self::rss_mb()
+            .map(|v| format!("{:.1}", v))
+            .unwrap_or_else(|| "N/A".into());
+        log::info!(
+            "MEMSTATS rss_mb={} known_dest={} path={} announce={} reverse={} \
+             link={} held_ann={} hashlist={} rate_lim={} blackhole={} tunnel={} \
+             pr_tags={} disc_pr={} sent_pkt={} completed={} local_dest={} \
+             shared_ann={} lm_links={} hp_sessions={} proof_strat={}",
+            rss,
+            self.known_destinations.len(),
+            self.engine.path_table_count(),
+            self.engine.announce_table_count(),
+            self.engine.reverse_table_count(),
+            self.engine.link_table_count(),
+            self.engine.held_announces_count(),
+            self.engine.packet_hashlist_len(),
+            self.engine.rate_limiter_count(),
+            self.engine.blackholed_count(),
+            self.engine.tunnel_count(),
+            self.engine.discovery_pr_tags_count(),
+            self.engine.discovery_path_requests_count(),
+            self.sent_packets.len(),
+            self.completed_proofs.len(),
+            self.local_destinations.len(),
+            self.shared_announces.len(),
+            self.link_manager.link_count(),
+            self.holepunch_manager.session_count(),
+            self.proof_strategies.len(),
+        );
     }
 
     /// Emit management and/or blackhole announces if enabled and due.

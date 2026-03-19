@@ -2,6 +2,10 @@
 //!
 //! Starts an RNS node from config, optionally with RPC server for external tools.
 
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 use std::fs;
 use std::path::Path;
 use std::sync::mpsc;

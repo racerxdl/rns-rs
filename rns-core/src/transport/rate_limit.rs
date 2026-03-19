@@ -15,6 +15,11 @@ impl AnnounceRateLimiter {
         }
     }
 
+    /// Number of entries in the rate table.
+    pub fn len(&self) -> usize {
+        self.table.len()
+    }
+
     /// Iterate over all rate table entries.
     pub fn entries(&self) -> impl Iterator<Item = (&[u8; 16], &RateEntry)> {
         self.table.iter()
