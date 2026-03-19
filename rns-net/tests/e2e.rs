@@ -3437,3 +3437,350 @@ fn discovery_announce_through_relay() {
     discoverable.shutdown();
     let _ = std::fs::remove_dir_all(&tmp_dir);
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Issue #4: Shared instance client 1-hop transport injection
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// When a shared instance client sends a SINGLE DATA packet to a destination
+// that is 1 hop away (reachable through the daemon's external interface),
+// the daemon silently drops the packet because it arrives as HEADER_1 with
+// no transport_id.  The daemon's handle_inbound has no forwarding logic for
+// this case.
+//
+// These E2E tests set up a real shared instance daemon with a shared client
+// and a remote TCP peer, demonstrating the failure.
+
+/// Start a daemon with share_instance=true, a TCP server for remote peers,
+/// and a local server for shared instance clients.
+fn start_shared_daemon(tcp_port: u16, shared_port: u16, instance_name: &str) -> RnsNode {
+    let node = RnsNode::start(
+        NodeConfig {
+            panic_on_interface_error: true,
+            transport_enabled: true,
+            identity: Some(Identity::new(&mut OsRng)),
+            interfaces: vec![InterfaceConfig {
+                name: String::new(),
+                type_name: "TCPServerInterface".to_string(),
+                config_data: Box::new(TcpServerConfig {
+                    name: "Daemon TCP".into(),
+                    listen_ip: "127.0.0.1".into(),
+                    listen_port: tcp_port,
+                    interface_id: InterfaceId(1),
+                    max_connections: None,
+                    ..TcpServerConfig::default()
+                }),
+                mode: MODE_FULL,
+                ifac: None,
+                discovery: None,
+            }],
+            share_instance: true,
+            instance_name: instance_name.into(),
+            shared_instance_port: shared_port,
+            rpc_port: 0,
+            cache_dir: None,
+            management: Default::default(),
+            probe_port: None,
+            probe_addrs: vec![],
+            probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
+            device: None,
+            hooks: Vec::new(),
+            discover_interfaces: false,
+            discovery_required_value: None,
+            respond_to_probes: false,
+            prefer_shorter_path: false,
+            max_paths_per_destination: 1,
+            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
+            known_destinations_ttl: KNOWN_DESTINATIONS_TTL,
+            registry: None,
+            #[cfg(feature = "rns-hooks")]
+            provider_bridge: None,
+        },
+        Box::new(TransportCallbacks),
+    )
+    .expect("Failed to start shared daemon");
+
+    // Wait for TCP server to be ready
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        match std::net::TcpStream::connect(("127.0.0.1", tcp_port)) {
+            Ok(stream) => {
+                drop(stream);
+                break;
+            }
+            Err(_) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(25)),
+            Err(err) => panic!("Daemon TCP listener on {} did not come up: {}", tcp_port, err),
+        }
+    }
+
+    // Wait a bit for the local server to start too
+    std::thread::sleep(Duration::from_millis(100));
+
+    node
+}
+
+/// Start a shared instance client connecting to the daemon.
+fn start_shared_client(
+    shared_port: u16,
+    instance_name: &str,
+    callbacks: Box<dyn Callbacks>,
+) -> RnsNode {
+    use rns_net::SharedClientConfig;
+
+    RnsNode::connect_shared(
+        SharedClientConfig {
+            instance_name: instance_name.into(),
+            port: shared_port,
+            rpc_port: 0,
+        },
+        callbacks,
+    )
+    .expect("Failed to connect shared client")
+}
+
+#[test]
+fn test_issue4_shared_client_announce_reaches_remote() {
+    // Verify that announces from a shared client propagate to remote TCP peers.
+    // This is a prerequisite for message delivery and confirms the announce
+    // path works even if data delivery is broken.
+    let tcp_port = find_free_port();
+    let shared_port = find_free_port();
+    let instance_name = format!("issue4-ann-{}", tcp_port);
+
+    let daemon = start_shared_daemon(tcp_port, shared_port, &instance_name);
+
+    // Start a remote TCP peer (Bob)
+    let bob_id = Identity::new(&mut OsRng);
+    let (bob_tx, bob_rx) = mpsc::channel();
+    let bob_node = start_client_node(tcp_port, &bob_id, Box::new(TestCallbacks::new(bob_tx)));
+    let bob_dest = Destination::single_in(
+        APP_NAME,
+        &["issue4", "ann"],
+        IdentityHash(*bob_id.hash()),
+    )
+    .set_proof_strategy(ProofStrategy::ProveAll);
+    bob_node
+        .register_destination_with_proof(&bob_dest, Some(bob_id.get_private_key().unwrap()))
+        .unwrap();
+
+    // Start a shared client (Alice)
+    let alice_id = Identity::new(&mut OsRng);
+    let (alice_tx, alice_rx) = mpsc::channel();
+    let alice_node = start_shared_client(
+        shared_port,
+        &instance_name,
+        Box::new(TestCallbacks::new(alice_tx)),
+    );
+    let alice_dest = Destination::single_in(
+        APP_NAME,
+        &["issue4", "ann"],
+        IdentityHash(*alice_id.hash()),
+    )
+    .set_proof_strategy(ProofStrategy::ProveAll);
+    alice_node
+        .register_destination_with_proof(&alice_dest, Some(alice_id.get_private_key().unwrap()))
+        .unwrap();
+
+    // Wait for interfaces to settle
+    wait_for_event(&alice_rx, TIMEOUT, |e| {
+        matches!(e, TestEvent::InterfaceUp(_)).then_some(())
+    })
+    .expect("Alice InterfaceUp timed out");
+    wait_for_event(&bob_rx, TIMEOUT, |e| {
+        matches!(e, TestEvent::InterfaceUp(_)).then_some(())
+    })
+    .expect("Bob InterfaceUp timed out");
+    std::thread::sleep(SETTLE);
+
+    // Alice (shared client) announces
+    alice_node
+        .announce(&alice_dest, &alice_id, Some(b"issue4"))
+        .unwrap();
+
+    // Bob should receive Alice's announce
+    let announced = wait_for_announce(&bob_rx, &alice_dest.hash, TIMEOUT);
+    assert!(
+        announced.is_some(),
+        "Bob should receive Alice's announce from shared client"
+    );
+
+    alice_node.shutdown();
+    bob_node.shutdown();
+    daemon.shutdown();
+}
+
+#[test]
+fn test_issue4_shared_client_message_to_remote_peer() {
+    // This test demonstrates the core bug: a shared instance client sends
+    // a SINGLE encrypted message to a remote TCP peer that is 1-hop away.
+    // The daemon should forward the message, but currently drops it.
+    let tcp_port = find_free_port();
+    let shared_port = find_free_port();
+    let instance_name = format!("issue4-msg-{}", tcp_port);
+
+    let daemon = start_shared_daemon(tcp_port, shared_port, &instance_name);
+
+    // Start Bob (remote TCP peer)
+    let bob_id = Identity::new(&mut OsRng);
+    let (bob_tx, bob_rx) = mpsc::channel();
+    let bob_node = start_client_node(tcp_port, &bob_id, Box::new(TestCallbacks::new(bob_tx)));
+    let bob_dest = Destination::single_in(
+        APP_NAME,
+        &["issue4", "msg"],
+        IdentityHash(*bob_id.hash()),
+    )
+    .set_proof_strategy(ProofStrategy::ProveAll);
+    bob_node
+        .register_destination_with_proof(&bob_dest, Some(bob_id.get_private_key().unwrap()))
+        .unwrap();
+
+    // Start Alice (shared client)
+    let alice_id = Identity::new(&mut OsRng);
+    let (alice_tx, alice_rx) = mpsc::channel();
+    let alice_node = start_shared_client(
+        shared_port,
+        &instance_name,
+        Box::new(TestCallbacks::new(alice_tx)),
+    );
+    let alice_dest = Destination::single_in(
+        APP_NAME,
+        &["issue4", "msg"],
+        IdentityHash(*alice_id.hash()),
+    )
+    .set_proof_strategy(ProofStrategy::ProveAll);
+    alice_node
+        .register_destination_with_proof(&alice_dest, Some(alice_id.get_private_key().unwrap()))
+        .unwrap();
+
+    // Wait for interfaces
+    wait_for_event(&alice_rx, TIMEOUT, |e| {
+        matches!(e, TestEvent::InterfaceUp(_)).then_some(())
+    })
+    .expect("Alice InterfaceUp timed out");
+    wait_for_event(&bob_rx, TIMEOUT, |e| {
+        matches!(e, TestEvent::InterfaceUp(_)).then_some(())
+    })
+    .expect("Bob InterfaceUp timed out");
+    std::thread::sleep(SETTLE);
+
+    // Bob announces so Alice can discover him
+    let bob_announced = announce_with_retry(
+        &bob_node,
+        &bob_dest,
+        &bob_id,
+        Some(b"bob"),
+        &alice_rx,
+    );
+    assert!(
+        bob_announced.is_some(),
+        "Alice should receive Bob's announce"
+    );
+    let bob_announced = bob_announced.unwrap();
+
+    // Alice sends an encrypted message to Bob
+    let dest_to_bob = Destination::single_out(APP_NAME, &["issue4", "msg"], &bob_announced);
+    let plaintext = b"Hello from shared client!";
+    alice_node.send_packet(&dest_to_bob, plaintext).unwrap();
+
+    // Bob should receive the message — but currently doesn't (issue #4)
+    let delivery = wait_for_delivery(&bob_rx, Duration::from_secs(5));
+
+    assert!(
+        delivery.is_some(),
+        "ISSUE #4: Bob did not receive message from shared client — \
+         the daemon dropped the 1-hop HEADER_1 packet from the local client interface"
+    );
+
+    if let Some((_, raw, _)) = delivery {
+        let decrypted = decrypt_delivery(&raw, &bob_id).expect("Decryption failed");
+        assert_eq!(decrypted, plaintext);
+    }
+
+    alice_node.shutdown();
+    bob_node.shutdown();
+    daemon.shutdown();
+}
+
+#[test]
+fn test_issue4_remote_peer_message_to_shared_client() {
+    // Reverse direction: remote TCP peer sends a message to the shared client.
+    // The daemon has the shared client's destination registered and should
+    // deliver it locally.  This direction may or may not work depending on
+    // whether the daemon registers the shared client's destinations.
+    let tcp_port = find_free_port();
+    let shared_port = find_free_port();
+    let instance_name = format!("issue4-rev-{}", tcp_port);
+
+    let daemon = start_shared_daemon(tcp_port, shared_port, &instance_name);
+
+    // Start Bob (remote TCP peer)
+    let bob_id = Identity::new(&mut OsRng);
+    let (bob_tx, bob_rx) = mpsc::channel();
+    let bob_node = start_client_node(tcp_port, &bob_id, Box::new(TestCallbacks::new(bob_tx)));
+
+    // Start Alice (shared client)
+    let alice_id = Identity::new(&mut OsRng);
+    let (alice_tx, alice_rx) = mpsc::channel();
+    let alice_node = start_shared_client(
+        shared_port,
+        &instance_name,
+        Box::new(TestCallbacks::new(alice_tx)),
+    );
+    let alice_dest = Destination::single_in(
+        APP_NAME,
+        &["issue4", "rev"],
+        IdentityHash(*alice_id.hash()),
+    )
+    .set_proof_strategy(ProofStrategy::ProveAll);
+    alice_node
+        .register_destination_with_proof(&alice_dest, Some(alice_id.get_private_key().unwrap()))
+        .unwrap();
+
+    // Wait for interfaces
+    wait_for_event(&alice_rx, TIMEOUT, |e| {
+        matches!(e, TestEvent::InterfaceUp(_)).then_some(())
+    })
+    .expect("Alice InterfaceUp timed out");
+    wait_for_event(&bob_rx, TIMEOUT, |e| {
+        matches!(e, TestEvent::InterfaceUp(_)).then_some(())
+    })
+    .expect("Bob InterfaceUp timed out");
+    std::thread::sleep(SETTLE);
+
+    // Alice announces so Bob can discover her
+    let alice_announced = announce_with_retry(
+        &alice_node,
+        &alice_dest,
+        &alice_id,
+        Some(b"alice"),
+        &bob_rx,
+    );
+    assert!(
+        alice_announced.is_some(),
+        "Bob should receive Alice's announce from shared client"
+    );
+    let alice_announced = alice_announced.unwrap();
+
+    // Bob sends an encrypted message to Alice
+    let dest_to_alice = Destination::single_out(APP_NAME, &["issue4", "rev"], &alice_announced);
+    let plaintext = b"Hello shared client from remote!";
+    bob_node.send_packet(&dest_to_alice, plaintext).unwrap();
+
+    // Alice should receive the message
+    let delivery = wait_for_delivery(&alice_rx, Duration::from_secs(5));
+
+    assert!(
+        delivery.is_some(),
+        "ISSUE #4 (reverse): Alice (shared client) did not receive message from Bob — \
+         the daemon may not forward external packets to local clients for 1-hop destinations"
+    );
+
+    if let Some((_, raw, _)) = delivery {
+        let decrypted = decrypt_delivery(&raw, &alice_id).expect("Decryption failed");
+        assert_eq!(decrypted, plaintext);
+    }
+
+    alice_node.shutdown();
+    bob_node.shutdown();
+    daemon.shutdown();
+}

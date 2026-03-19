@@ -1506,3 +1506,161 @@ fn test_multipath_cull_individual_paths() {
     assert_eq!(ps.len(), 1);
     assert_eq!(ps.primary().unwrap().next_hop, [0x02; 16]);
 }
+
+// =============================================================================
+// Issue #4: Shared instance client 1-hop transport injection
+// =============================================================================
+//
+// When a shared instance client learns that a remote destination is exactly
+// 1 hop away behind its daemon, outbound packets must still be injected into
+// transport on the local shared-instance interface. The bug was that Rust
+// only did this rewrite for paths with hops > 1.
+
+#[test]
+fn test_issue4_shared_client_outbound_data_to_1hop_dest() {
+    // Simulate a shared client engine. It only has a local shared-instance
+    // interface, and it has learned Bob's path through that interface with
+    // an effective hop count of 1.
+
+    let (identity, dest_hash, name_hash, _id_hash) = make_test_identity();
+    let random_hash = make_random_hash_with_timebase(500, [0xCC, 0xDD, 0xEE, 0xFF, 0x11]);
+
+    let announce_raw =
+        build_announce_packet(&identity, &dest_hash, &name_hash, &random_hash, 1, None);
+
+    let mut harness = TestHarness::new(false);
+
+    // Register the shared-instance interface used by the client.
+    harness.engine.register_interface(InterfaceInfo {
+        id: InterfaceId(1),
+        name: "local_client".into(),
+        mode: constants::MODE_FULL,
+        out_capable: true,
+        in_capable: true,
+        bitrate: None,
+        announce_rate_target: None,
+        announce_rate_grace: 0,
+        announce_rate_penalty: 0.0,
+        announce_cap: constants::ANNOUNCE_CAP,
+        is_local_client: true,
+        wants_tunnel: false,
+        tunnel_id: None,
+        mtu: constants::MTU as u32,
+        ingress_control: false,
+        ia_freq: 0.0,
+        started: 0.0,
+    });
+
+    // Feed Bob's announce from the local shared-instance interface. Since the
+    // interface is marked as local_client, the inbound hop compensation keeps
+    // the learned path at 1 hop.
+    let _announce_actions = harness.inbound(&announce_raw, InterfaceId(1));
+    assert!(
+        harness.engine.has_path(&dest_hash),
+        "Shared client should have path to Bob"
+    );
+    assert_eq!(harness.engine.hops_to(&dest_hash), Some(1));
+
+    // Now build a DATA packet from the shared client to Bob's destination.
+    let data_flags = PacketFlags {
+        header_type: constants::HEADER_1,
+        context_flag: constants::FLAG_UNSET,
+        transport_type: constants::TRANSPORT_BROADCAST,
+        destination_type: constants::DESTINATION_SINGLE,
+        packet_type: constants::PACKET_TYPE_DATA,
+    };
+    let data_packet = RawPacket::pack(
+        data_flags,
+        0,
+        &dest_hash,
+        None,
+        constants::CONTEXT_NONE,
+        b"hello from shared client",
+    )
+    .unwrap();
+
+    let actions = harness.outbound(&data_packet, constants::DESTINATION_SINGLE, None);
+
+    let send_action = actions.iter().find_map(|a| match a {
+        TransportAction::SendOnInterface { interface, raw } => Some((interface, raw)),
+        _ => None,
+    });
+
+    let (interface, raw) = send_action.expect(
+        "shared client should emit a transport-injected outbound packet for 1-hop dest",
+    );
+    assert_eq!(*interface, InterfaceId(1));
+    let flags = PacketFlags::unpack(raw[0]);
+    assert_eq!(flags.header_type, constants::HEADER_2);
+    assert_eq!(flags.transport_type, constants::TRANSPORT_TRANSPORT);
+}
+
+#[test]
+fn test_issue4_shared_client_outbound_linkrequest_to_1hop_dest() {
+    // Same scenario as above, but with a LINKREQUEST packet.
+
+    let (identity, dest_hash, name_hash, _id_hash) = make_test_identity();
+    let random_hash = make_random_hash_with_timebase(500, [0xDD, 0xEE, 0xFF, 0x11, 0x22]);
+
+    let announce_raw =
+        build_announce_packet(&identity, &dest_hash, &name_hash, &random_hash, 1, None);
+
+    let mut harness = TestHarness::new(false);
+
+    harness.engine.register_interface(InterfaceInfo {
+        id: InterfaceId(1),
+        name: "local_client".into(),
+        mode: constants::MODE_FULL,
+        out_capable: true,
+        in_capable: true,
+        bitrate: None,
+        announce_rate_target: None,
+        announce_rate_grace: 0,
+        announce_rate_penalty: 0.0,
+        announce_cap: constants::ANNOUNCE_CAP,
+        is_local_client: true,
+        wants_tunnel: false,
+        tunnel_id: None,
+        mtu: constants::MTU as u32,
+        ingress_control: false,
+        ia_freq: 0.0,
+        started: 0.0,
+    });
+
+    let _announce_actions = harness.inbound(&announce_raw, InterfaceId(1));
+    assert!(harness.engine.has_path(&dest_hash));
+    assert_eq!(harness.engine.hops_to(&dest_hash), Some(1));
+
+    // Build a LINKREQUEST packet from the shared client.
+    let lr_flags = PacketFlags {
+        header_type: constants::HEADER_1,
+        context_flag: constants::FLAG_UNSET,
+        transport_type: constants::TRANSPORT_BROADCAST,
+        destination_type: constants::DESTINATION_SINGLE,
+        packet_type: constants::PACKET_TYPE_LINKREQUEST,
+    };
+    let lr_packet = RawPacket::pack(
+        lr_flags,
+        0,
+        &dest_hash,
+        None,
+        constants::CONTEXT_NONE,
+        b"linkrequest-payload",
+    )
+    .unwrap();
+
+    let actions = harness.outbound(&lr_packet, constants::DESTINATION_SINGLE, None);
+
+    let send_action = actions.iter().find_map(|a| match a {
+        TransportAction::SendOnInterface { interface, raw } => Some((interface, raw)),
+        _ => None,
+    });
+
+    let (interface, raw) = send_action.expect(
+        "shared client should emit a transport-injected linkrequest for 1-hop dest",
+    );
+    assert_eq!(*interface, InterfaceId(1));
+    let flags = PacketFlags::unpack(raw[0]);
+    assert_eq!(flags.header_type, constants::HEADER_2);
+    assert_eq!(flags.transport_type, constants::TRANSPORT_TRANSPORT);
+}

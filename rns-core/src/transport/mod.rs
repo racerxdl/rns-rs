@@ -3018,4 +3018,166 @@ mod tests {
         assert!(!engine.discovery_path_requests.contains_key(&dest));
         assert_eq!(engine.discovery_path_requests_waiting(&dest), None);
     }
+
+    // =========================================================================
+    // Issue #4: Shared instance client 1-hop transport injection
+    // =========================================================================
+
+    /// Helper: build a valid announce packet for use in issue #4 tests.
+    fn build_announce_for_issue4(dest_hash: &[u8; 16], name_hash: &[u8; 10]) -> Vec<u8> {
+        let identity =
+            rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0x99; 32]));
+        let random_hash = [0x42u8; 10];
+        let (announce_data, _) = crate::announce::AnnounceData::pack(
+            &identity,
+            dest_hash,
+            name_hash,
+            &random_hash,
+            None,
+            None,
+        )
+        .unwrap();
+        let flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_ANNOUNCE,
+        };
+        RawPacket::pack(flags, 0, dest_hash, None, constants::CONTEXT_NONE, &announce_data)
+            .unwrap()
+            .raw
+    }
+
+    #[test]
+    fn test_issue4_local_client_single_data_to_1hop_rewrites_on_outbound() {
+        // Shared clients learn remote paths via their local shared-instance
+        // interface and must inject transport headers on outbound when the
+        // destination is exactly 1 hop away behind the daemon.
+
+        let mut engine = TransportEngine::new(make_config(false));
+        engine.register_interface(make_local_client_interface(1));
+
+        let identity =
+            rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0x99; 32]));
+        let dest_hash = crate::destination::destination_hash(
+            "issue4",
+            &["test"],
+            Some(identity.hash()),
+        );
+        let name_hash = crate::destination::name_hash("issue4", &["test"]);
+        let announce_raw = build_announce_for_issue4(&dest_hash, &name_hash);
+
+        // Model the announce as already forwarded by the shared daemon to
+        // the local client. The raw hop count is 1 so that after the local
+        // client hop compensation the learned path remains 1 hop away.
+        let mut announce_packet = RawPacket::unpack(&announce_raw).unwrap();
+        announce_packet.raw[1] = 1;
+        let mut rng = rns_crypto::FixedRng::new(&[0; 32]);
+        engine.handle_inbound(&announce_packet.raw, InterfaceId(1), 1000.0, &mut rng);
+        assert!(engine.has_path(&dest_hash));
+        assert_eq!(engine.hops_to(&dest_hash), Some(1));
+
+        // Build DATA from the shared client to the 1-hop destination.
+        let data_flags = PacketFlags {
+            header_type: constants::HEADER_1,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_BROADCAST,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        let data_packet = RawPacket::pack(
+            data_flags,
+            0,
+            &dest_hash,
+            None,
+            constants::CONTEXT_NONE,
+            b"hello",
+        )
+        .unwrap();
+
+        let actions = engine.handle_outbound(
+            &data_packet,
+            constants::DESTINATION_SINGLE,
+            None,
+            1001.0,
+        );
+
+        let send = actions.iter().find_map(|a| match a {
+            TransportAction::SendOnInterface { interface, raw } => Some((interface, raw)),
+            _ => None,
+        });
+        let (interface, raw) = send.expect("shared client should emit a transport-injected packet");
+        assert_eq!(*interface, InterfaceId(1));
+        let flags = PacketFlags::unpack(raw[0]);
+        assert_eq!(flags.header_type, constants::HEADER_2);
+        assert_eq!(flags.transport_type, constants::TRANSPORT_TRANSPORT);
+    }
+
+    #[test]
+    fn test_issue4_external_data_to_1hop_via_transport_works() {
+        // Control test: when a DATA packet arrives from an external interface
+        // with HEADER_2 and the daemon's transport_id, the daemon correctly
+        // forwards it via step 5.  This proves the multi-hop path works;
+        // it's only the 1-hop shared-client case that's broken.
+
+        let daemon_id = [0x42; 16];
+        let mut engine = TransportEngine::new(TransportConfig {
+            transport_enabled: true,
+            identity_hash: Some(daemon_id),
+            prefer_shorter_path: false,
+            max_paths_per_destination: 1,
+            packet_hashlist_max_entries: constants::HASHLIST_MAXSIZE,
+        });
+        engine.register_interface(make_interface(1, constants::MODE_FULL)); // inbound
+        engine.register_interface(make_interface(2, constants::MODE_FULL)); // outbound to Bob
+
+        let identity =
+            rns_crypto::identity::Identity::new(&mut rns_crypto::FixedRng::new(&[0x99; 32]));
+        let dest_hash = crate::destination::destination_hash(
+            "issue4",
+            &["ctrl"],
+            Some(identity.hash()),
+        );
+        let name_hash = crate::destination::name_hash("issue4", &["ctrl"]);
+        let announce_raw = build_announce_for_issue4(&dest_hash, &name_hash);
+
+        // Feed announce from interface 2 (Bob's side), hops=0 → stored as hops=1
+        let mut rng = rns_crypto::FixedRng::new(&[0; 32]);
+        engine.handle_inbound(&announce_raw, InterfaceId(2), 1000.0, &mut rng);
+        assert_eq!(engine.hops_to(&dest_hash), Some(1));
+
+        // Now send a HEADER_2 transport packet addressed to the daemon
+        // (simulating what Alice would send in a multi-hop scenario)
+        let h2_flags = PacketFlags {
+            header_type: constants::HEADER_2,
+            context_flag: constants::FLAG_UNSET,
+            transport_type: constants::TRANSPORT_TRANSPORT,
+            destination_type: constants::DESTINATION_SINGLE,
+            packet_type: constants::PACKET_TYPE_DATA,
+        };
+        // Build HEADER_2 manually: [flags, hops, transport_id(16), dest_hash(16), context, data...]
+        let mut h2_raw = Vec::new();
+        h2_raw.push(h2_flags.pack());
+        h2_raw.push(0); // hops
+        h2_raw.extend_from_slice(&daemon_id); // transport_id = daemon
+        h2_raw.extend_from_slice(&dest_hash);
+        h2_raw.push(constants::CONTEXT_NONE);
+        h2_raw.extend_from_slice(b"hello via transport");
+
+        let mut rng2 = rns_crypto::FixedRng::new(&[0x22; 32]);
+        let actions = engine.handle_inbound(&h2_raw, InterfaceId(1), 1001.0, &mut rng2);
+
+        // This SHOULD forward via step 5 (transport forwarding)
+        let has_send = actions.iter().any(|a| {
+            matches!(
+                a,
+                TransportAction::SendOnInterface { interface, .. } if *interface == InterfaceId(2)
+            )
+        });
+        assert!(
+            has_send,
+            "HEADER_2 transport packet should be forwarded (control test)"
+        );
+    }
 }
