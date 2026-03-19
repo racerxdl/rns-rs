@@ -1309,6 +1309,16 @@ impl LinkManager {
         actions
     }
 
+    /// Tear down all managed links.
+    pub fn teardown_all_links(&mut self) -> Vec<LinkManagerAction> {
+        let link_ids: Vec<LinkId> = self.links.keys().copied().collect();
+        let mut actions = Vec::new();
+        for link_id in link_ids {
+            actions.extend(self.teardown_link(&link_id));
+        }
+        actions
+    }
+
     /// Handle a response on a link.
     fn handle_response(&self, link_id: &LinkId, plaintext: &[u8]) -> Vec<LinkManagerAction> {
         use rns_core::msgpack;

@@ -347,72 +347,160 @@ fn make_local_interface_info(id: InterfaceId) -> InterfaceInfo {
 
 // ==================== LOCAL CLIENT ====================
 
-/// Start a local client (connect to shared instance).
-/// Tries Unix socket first on Linux, falls back to TCP.
-/// Returns the writer for the driver.
-pub fn start_client(config: LocalClientConfig, tx: EventSender) -> io::Result<Box<dyn Writer>> {
-    let id = config.interface_id;
+#[cfg(target_os = "linux")]
+enum LocalClientStream {
+    Unix(std::os::unix::net::UnixStream),
+    Tcp(TcpStream),
+}
 
-    // Try Unix socket first on Linux
-    #[cfg(target_os = "linux")]
-    {
-        match unix_socket::try_connect_unix(&config.instance_name) {
-            Ok(stream) => {
-                log::info!(
-                    "[{}] Connected to shared instance via Unix socket: rns/{}",
-                    config.name,
-                    config.instance_name
-                );
-
-                let writer_stream = stream.try_clone()?;
-                let _ = tx.send(Event::InterfaceUp(id, None, None));
-
-                let client_tx = tx;
-                thread::Builder::new()
-                    .name(format!("local-client-reader-{}", id.0))
-                    .spawn(move || {
-                        unix_reader_loop(stream, id, client_tx);
-                    })?;
-
-                return Ok(Box::new(UnixLocalWriter {
-                    stream: writer_stream,
-                }));
-            }
-            Err(e) => {
-                log::info!(
-                    "[{}] Unix socket connect failed ({}), trying TCP",
-                    config.name,
-                    e
-                );
-            }
+#[cfg(target_os = "linux")]
+impl LocalClientStream {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self {
+            LocalClientStream::Unix(stream) => stream.read(buf),
+            LocalClientStream::Tcp(stream) => stream.read(buf),
         }
     }
 
-    // Fallback: TCP
+    fn writer(&self) -> io::Result<Box<dyn Writer>> {
+        match self {
+            LocalClientStream::Unix(stream) => Ok(Box::new(UnixLocalWriter {
+                stream: stream.try_clone()?,
+            })),
+            LocalClientStream::Tcp(stream) => Ok(Box::new(LocalWriter {
+                stream: stream.try_clone()?,
+            })),
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+type LocalClientStream = TcpStream;
+
+#[cfg(not(target_os = "linux"))]
+fn local_client_stream_writer(stream: &LocalClientStream) -> io::Result<Box<dyn Writer>> {
+    Ok(Box::new(LocalWriter {
+        stream: stream.try_clone()?,
+    }))
+}
+
+#[cfg(target_os = "linux")]
+fn local_client_stream_writer(stream: &LocalClientStream) -> io::Result<Box<dyn Writer>> {
+    stream.writer()
+}
+
+fn try_connect_tcp(config: &LocalClientConfig) -> io::Result<TcpStream> {
     let addr = format!("127.0.0.1:{}", config.port);
     let stream = TcpStream::connect(&addr)?;
     stream.set_nodelay(true)?;
-
     log::info!(
         "[{}] Connected to shared instance via TCP {}",
         config.name,
         addr
     );
+    Ok(stream)
+}
 
-    let reader_stream = stream.try_clone()?;
-    let writer_stream = stream.try_clone()?;
+#[cfg(target_os = "linux")]
+fn try_connect_local_client(config: &LocalClientConfig) -> io::Result<LocalClientStream> {
+    match unix_socket::try_connect_unix(&config.instance_name) {
+        Ok(stream) => {
+            log::info!(
+                "[{}] Connected to shared instance via Unix socket: rns/{}",
+                config.name,
+                config.instance_name
+            );
+            Ok(LocalClientStream::Unix(stream))
+        }
+        Err(e) => {
+            log::info!(
+                "[{}] Unix socket connect failed ({}), trying TCP",
+                config.name,
+                e
+            );
+            try_connect_tcp(config).map(LocalClientStream::Tcp)
+        }
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn try_connect_local_client(config: &LocalClientConfig) -> io::Result<LocalClientStream> {
+    try_connect_tcp(config)
+}
+
+fn reconnect_local_client(config: &LocalClientConfig, tx: &EventSender) -> LocalClientStream {
+    loop {
+        thread::sleep(config.reconnect_wait);
+        match try_connect_local_client(config) {
+            Ok(stream) => match local_client_stream_writer(&stream) {
+                Ok(writer) => {
+                    let _ = tx.send(Event::InterfaceUp(config.interface_id, Some(writer), None));
+                    return stream;
+                }
+                Err(e) => {
+                    log::warn!("[{}] failed to clone reconnect writer: {}", config.name, e);
+                }
+            },
+            Err(e) => {
+                log::warn!("[{}] reconnect failed: {}", config.name, e);
+            }
+        }
+    }
+}
+
+fn local_client_reader_loop(mut stream: LocalClientStream, config: LocalClientConfig, tx: EventSender) {
+    let id = config.interface_id;
+    let mut decoder = hdlc::Decoder::new();
+    let mut buf = [0u8; 4096];
+
+    loop {
+        match stream.read(&mut buf) {
+            Ok(0) => {
+                log::warn!("[{}] shared connection closed", config.name);
+                let _ = tx.send(Event::InterfaceDown(id));
+                stream = reconnect_local_client(&config, &tx);
+                decoder = hdlc::Decoder::new();
+            }
+            Ok(n) => {
+                for frame in decoder.feed(&buf[..n]) {
+                    if tx
+                        .send(Event::Frame {
+                            interface_id: id,
+                            data: frame,
+                        })
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!("[{}] shared read error: {}", config.name, e);
+                let _ = tx.send(Event::InterfaceDown(id));
+                stream = reconnect_local_client(&config, &tx);
+                decoder = hdlc::Decoder::new();
+            }
+        }
+    }
+}
+
+/// Start a local client (connect to shared instance).
+/// Tries Unix socket first on Linux, falls back to TCP.
+/// Returns the writer for the driver.
+pub fn start_client(config: LocalClientConfig, tx: EventSender) -> io::Result<Box<dyn Writer>> {
+    let id = config.interface_id;
+    let stream = try_connect_local_client(&config)?;
+    let writer = local_client_stream_writer(&stream)?;
 
     let _ = tx.send(Event::InterfaceUp(id, None, None));
 
     thread::Builder::new()
         .name(format!("local-client-reader-{}", id.0))
         .spawn(move || {
-            tcp_reader_loop(reader_stream, id, tx);
+            local_client_reader_loop(stream, config, tx);
         })?;
 
-    Ok(Box::new(LocalWriter {
-        stream: writer_stream,
-    }))
+    Ok(writer)
 }
 
 // --- Factory implementations ---

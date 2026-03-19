@@ -106,6 +106,13 @@ pub enum Event<W: Send> {
     },
     /// Register a local destination.
     RegisterDestination { dest_hash: [u8; 16], dest_type: u8 },
+    /// Remember the latest explicit SINGLE announce for shared-client replay.
+    StoreSharedAnnounce {
+        dest_hash: [u8; 16],
+        name_hash: [u8; 10],
+        identity_prv_key: [u8; 64],
+        app_data: Option<Vec<u8>>,
+    },
     /// Deregister a local destination.
     DeregisterDestination { dest_hash: [u8; 16] },
     /// Deregister a link destination (stop accepting incoming links).
@@ -532,6 +539,17 @@ impl<W: Send> fmt::Debug for Event<W> {
                 .debug_struct("RegisterDestination")
                 .field("dest_hash", dest_hash)
                 .field("dest_type", dest_type)
+                .finish(),
+            Event::StoreSharedAnnounce {
+                dest_hash,
+                name_hash,
+                app_data,
+                ..
+            } => f
+                .debug_struct("StoreSharedAnnounce")
+                .field("dest_hash", dest_hash)
+                .field("name_hash", name_hash)
+                .field("app_data_len", &app_data.as_ref().map(|d| d.len()))
                 .finish(),
             Event::DeregisterDestination { dest_hash } => f
                 .debug_struct("DeregisterDestination")

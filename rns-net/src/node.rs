@@ -1473,6 +1473,19 @@ impl RnsNode {
         )
         .map_err(|_| SendError)?;
 
+        if dest.dest_type == rns_core::types::DestinationType::Single {
+            if let Some(identity_prv_key) = identity.get_private_key() {
+                self.tx
+                    .send(Event::StoreSharedAnnounce {
+                        dest_hash: dest.hash.0,
+                        name_hash,
+                        identity_prv_key,
+                        app_data: app_data.map(|d| d.to_vec()),
+                    })
+                    .map_err(|_| SendError)?;
+            }
+        }
+
         self.send_raw(packet.raw, dest.dest_type.to_wire_constant(), None)
     }
 

@@ -1537,6 +1537,43 @@ impl TransportEngine {
         removed
     }
 
+    /// Drop all path entries learned via a given interface.
+    pub fn drop_paths_for_interface(&mut self, interface: InterfaceId) -> usize {
+        let mut removed = 0usize;
+        let mut cleared_destinations = Vec::new();
+        for (dest_hash, ps) in self.path_table.iter_mut() {
+            let before = ps.len();
+            ps.retain(|entry| entry.receiving_interface != interface);
+            if ps.is_empty() {
+                cleared_destinations.push(*dest_hash);
+            }
+            removed += before - ps.len();
+        }
+        self.path_table.retain(|_, ps| !ps.is_empty());
+        for dest_hash in cleared_destinations {
+            self.path_states.remove(&dest_hash);
+        }
+        removed
+    }
+
+    /// Drop all reverse table entries that reference a given interface.
+    pub fn drop_reverse_for_interface(&mut self, interface: InterfaceId) -> usize {
+        let before = self.reverse_table.len();
+        self.reverse_table.retain(|_, entry| {
+            entry.receiving_interface != interface && entry.outbound_interface != interface
+        });
+        before - self.reverse_table.len()
+    }
+
+    /// Drop all link table entries that reference a given interface.
+    pub fn drop_links_for_interface(&mut self, interface: InterfaceId) -> usize {
+        let before = self.link_table.len();
+        self.link_table.retain(|_, entry| {
+            entry.next_hop_interface != interface && entry.received_interface != interface
+        });
+        before - self.link_table.len()
+    }
+
     /// Drop all pending announce retransmissions and bandwidth queues.
     pub fn drop_announce_queues(&mut self) {
         self.announce_table.clear();

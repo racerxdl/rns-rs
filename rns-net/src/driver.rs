@@ -352,6 +352,13 @@ fn infer_interface_type(name: &str) -> String {
 
 pub use crate::common::callbacks::Callbacks;
 
+#[derive(Clone)]
+struct SharedAnnounceRecord {
+    name_hash: [u8; 10],
+    identity_prv_key: [u8; 64],
+    app_data: Option<Vec<u8>>,
+}
+
 /// The driver loop. Owns the engine and all interface entries.
 pub struct Driver {
     pub(crate) engine: TransportEngine,
@@ -396,6 +403,10 @@ pub struct Driver {
     pub(crate) completed_proofs: HashMap<[u8; 32], (f64, f64)>,
     /// Locally registered destinations: hash → dest_type.
     pub(crate) local_destinations: HashMap<[u8; 16], u8>,
+    /// Latest explicit SINGLE announces to replay after shared-client reconnect.
+    shared_announces: HashMap<[u8; 16], SharedAnnounceRecord>,
+    /// Shared local interfaces that went down and should replay announces on reconnect.
+    shared_reconnect_pending: HashMap<InterfaceId, bool>,
     /// Hole-punch manager for direct P2P connections.
     pub(crate) holepunch_manager: HolePunchManager,
     /// Event sender for worker threads to send results back to the driver loop.
@@ -556,6 +567,8 @@ impl Driver {
             sent_packets: HashMap::new(),
             completed_proofs: HashMap::new(),
             local_destinations,
+            shared_announces: HashMap::new(),
+            shared_reconnect_pending: HashMap::new(),
             holepunch_manager: HolePunchManager::new(
                 vec![],
                 rns_core::holepunch::ProbeProtocol::Rnsp,
@@ -750,6 +763,109 @@ impl Driver {
 
     pub(crate) fn set_packet_hashlist_max_entries(&mut self, max_entries: usize) {
         self.engine.set_packet_hashlist_max_entries(max_entries);
+    }
+
+    fn build_shared_announce_raw(
+        &mut self,
+        dest_hash: &[u8; 16],
+        record: &SharedAnnounceRecord,
+        path_response: bool,
+    ) -> Option<Vec<u8>> {
+        let identity = rns_crypto::identity::Identity::from_private_key(&record.identity_prv_key);
+
+        let mut random_hash = [0u8; 10];
+        self.rng.fill_bytes(&mut random_hash[..5]);
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_secs();
+        random_hash[5..10].copy_from_slice(&now_secs.to_be_bytes()[3..8]);
+
+        let (announce_data, _has_ratchet) = rns_core::announce::AnnounceData::pack(
+            &identity,
+            dest_hash,
+            &record.name_hash,
+            &random_hash,
+            None,
+            record.app_data.as_deref(),
+        )
+        .ok()?;
+
+        let flags = rns_core::packet::PacketFlags {
+            header_type: rns_core::constants::HEADER_1,
+            context_flag: rns_core::constants::FLAG_UNSET,
+            transport_type: rns_core::constants::TRANSPORT_BROADCAST,
+            destination_type: rns_core::constants::DESTINATION_SINGLE,
+            packet_type: rns_core::constants::PACKET_TYPE_ANNOUNCE,
+        };
+        let context = if path_response {
+            rns_core::constants::CONTEXT_PATH_RESPONSE
+        } else {
+            rns_core::constants::CONTEXT_NONE
+        };
+
+        rns_core::packet::RawPacket::pack(flags, 0, dest_hash, None, context, &announce_data)
+            .ok()
+            .map(|packet| packet.raw)
+    }
+
+    fn replay_shared_announces(&mut self) {
+        let records: Vec<([u8; 16], SharedAnnounceRecord)> = self
+            .shared_announces
+            .iter()
+            .map(|(dest_hash, record)| (*dest_hash, record.clone()))
+            .collect();
+        for (dest_hash, record) in records {
+            if let Some(raw) = self.build_shared_announce_raw(&dest_hash, &record, true) {
+                let event = Event::SendOutbound {
+                    raw,
+                    dest_type: rns_core::constants::DESTINATION_SINGLE,
+                    attached_interface: None,
+                };
+                match event {
+                    Event::SendOutbound {
+                        raw,
+                        dest_type,
+                        attached_interface,
+                    } => match RawPacket::unpack(&raw) {
+                        Ok(packet) => {
+                            let actions = self.engine.handle_outbound(
+                                &packet,
+                                dest_type,
+                                attached_interface,
+                                time::now(),
+                            );
+                            self.dispatch_all(actions);
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                "Shared announce replay failed for {:02x?}: {:?}",
+                                &dest_hash[..4],
+                                e
+                            );
+                        }
+                    },
+                    _ => unreachable!(),
+                }
+            }
+        }
+    }
+
+    fn handle_shared_interface_down(&mut self, id: InterfaceId) {
+        let dropped_paths = self.engine.drop_paths_for_interface(id);
+        let dropped_reverse = self.engine.drop_reverse_for_interface(id);
+        let dropped_links = self.engine.drop_links_for_interface(id);
+        self.engine.drop_announce_queues();
+        let link_actions = self.link_manager.teardown_all_links();
+        self.dispatch_link_actions(link_actions);
+        self.shared_reconnect_pending.insert(id, true);
+        log::info!(
+            "[{}] cleared shared state: {} paths, {} reverse entries, {} transport links",
+            id.0,
+            dropped_paths,
+            dropped_reverse,
+            dropped_links
+        );
     }
 
     #[cfg(feature = "iface-backbone")]
@@ -3937,6 +4053,7 @@ impl Driver {
                 }
                 Event::InterfaceUp(id, new_writer, info) => {
                     let wants_tunnel;
+                    let mut replay_shared_announces = false;
                     if let Some(mut info) = info {
                         // New dynamic interface (e.g., TCP server client connection)
                         log::info!("[{}] dynamic interface registered", id.0);
@@ -3988,45 +4105,57 @@ impl Driver {
                                 self.forward_hook_side_effects("InterfaceUp", e);
                             }
                         }
-                    } else if let Some(entry) = self.interfaces.get_mut(&id) {
-                        // Existing interface reconnected
-                        log::info!("[{}] interface online", id.0);
-                        wants_tunnel = entry.info.wants_tunnel;
-                        entry.online = true;
-                        if let Some(writer) = new_writer {
-                            log::info!("[{}] writer refreshed after reconnect", id.0);
-                            entry.writer = writer;
-                        }
-                        self.callbacks.on_interface_up(id);
-                        #[cfg(feature = "rns-hooks")]
-                        {
-                            let ctx = HookContext::Interface { interface_id: id.0 };
-                            let now = time::now();
-                            let engine_ref = EngineRef {
-                                engine: &self.engine,
-                                interfaces: &self.interfaces,
-                                link_manager: &self.link_manager,
-                                now,
-                            };
-                            let provider_events_enabled = self.provider_events_enabled();
-                            if let Some(ref e) = run_hook_inner(
-                                &mut self.hook_slots[HookPoint::InterfaceUp as usize].programs,
-                                &self.hook_manager,
-                                &engine_ref,
-                                &ctx,
-                                now,
-                                provider_events_enabled,
-                            ) {
-                                self.forward_hook_side_effects("InterfaceUp", e);
-                            }
-                        }
                     } else {
-                        wants_tunnel = false;
+                        // Existing interface reconnected
+                        let is_local_client = self
+                            .interfaces
+                            .get(&id)
+                            .map(|entry| entry.info.is_local_client)
+                            .unwrap_or(false);
+                        replay_shared_announces = is_local_client
+                            && self.shared_reconnect_pending.remove(&id).unwrap_or(false);
+                        if let Some(entry) = self.interfaces.get_mut(&id) {
+                            log::info!("[{}] interface online", id.0);
+                            wants_tunnel = entry.info.wants_tunnel;
+                            entry.online = true;
+                            if let Some(writer) = new_writer {
+                                log::info!("[{}] writer refreshed after reconnect", id.0);
+                                entry.writer = writer;
+                            }
+                            self.callbacks.on_interface_up(id);
+                            #[cfg(feature = "rns-hooks")]
+                            {
+                                let ctx = HookContext::Interface { interface_id: id.0 };
+                                let now = time::now();
+                                let engine_ref = EngineRef {
+                                    engine: &self.engine,
+                                    interfaces: &self.interfaces,
+                                    link_manager: &self.link_manager,
+                                    now,
+                                };
+                                let provider_events_enabled = self.provider_events_enabled();
+                                if let Some(ref e) = run_hook_inner(
+                                    &mut self.hook_slots[HookPoint::InterfaceUp as usize].programs,
+                                    &self.hook_manager,
+                                    &engine_ref,
+                                    &ctx,
+                                    now,
+                                    provider_events_enabled,
+                                ) {
+                                    self.forward_hook_side_effects("InterfaceUp", e);
+                                }
+                            }
+                        } else {
+                            wants_tunnel = false;
+                        }
                     }
 
                     // Trigger tunnel synthesis if the interface wants it
                     if wants_tunnel {
                         self.synthesize_tunnel_for_interface(id);
+                    }
+                    if replay_shared_announces {
+                        self.replay_shared_announces();
                     }
                 }
                 Event::InterfaceDown(id) => {
@@ -4038,16 +4167,22 @@ impl Driver {
                     }
 
                     if let Some(entry) = self.interfaces.get(&id) {
-                        if entry.dynamic {
+                        let is_dynamic = entry.dynamic;
+                        let is_local_client = entry.info.is_local_client;
+                        let interface_name = entry.info.name.clone();
+                        if is_dynamic {
                             // Dynamic interfaces are removed entirely
                             log::info!("[{}] dynamic interface removed", id.0);
-                            self.interface_runtime_defaults.remove(&entry.info.name);
+                            self.interface_runtime_defaults.remove(&interface_name);
                             self.engine.deregister_interface(id);
                             self.interfaces.remove(&id);
                         } else {
                             // Static interfaces are just marked offline
                             log::info!("[{}] interface offline", id.0);
                             self.interfaces.get_mut(&id).unwrap().online = false;
+                            if is_local_client {
+                                self.handle_shared_interface_down(id);
+                            }
                         }
                         self.callbacks.on_interface_down(id);
                         #[cfg(feature = "rns-hooks")]
@@ -4132,9 +4267,25 @@ impl Driver {
                     self.engine.register_destination(dest_hash, dest_type);
                     self.local_destinations.insert(dest_hash, dest_type);
                 }
+                Event::StoreSharedAnnounce {
+                    dest_hash,
+                    name_hash,
+                    identity_prv_key,
+                    app_data,
+                } => {
+                    self.shared_announces.insert(
+                        dest_hash,
+                        SharedAnnounceRecord {
+                            name_hash,
+                            identity_prv_key,
+                            app_data,
+                        },
+                    );
+                }
                 Event::DeregisterDestination { dest_hash } => {
                     self.engine.deregister_destination(&dest_hash);
                     self.local_destinations.remove(&dest_hash);
+                    self.shared_announces.remove(&dest_hash);
                 }
                 Event::Query(request, response_tx) => {
                     let response = self.handle_query_mut(request);
