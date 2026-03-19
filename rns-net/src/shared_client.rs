@@ -181,6 +181,12 @@ impl RnsNode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hdlc;
+    use rns_core::packet::RawPacket;
+    use rns_core::types::IdentityHash;
+    use rns_crypto::identity::Identity;
+    use rns_crypto::OsRng;
+    use std::io::Read;
     use std::sync::atomic::AtomicU64;
     use std::sync::mpsc;
     use std::sync::Arc;
@@ -315,6 +321,78 @@ mod tests {
         }
         // The packet may or may not arrive as a Frame depending on transport
         // routing, so we don't assert on it — the important thing is no crash.
+
+        node.shutdown();
+    }
+
+    #[test]
+    fn shared_client_replays_single_announces_after_reconnect() {
+        let port = find_free_port();
+        let addr = format!("127.0.0.1:{}", port);
+        let instance_name = format!("test-shared-replay-{}", port);
+
+        let listener1 = std::net::TcpListener::bind(&addr).unwrap();
+        let (accepted1_tx, accepted1_rx) = mpsc::channel();
+        thread::spawn(move || {
+            let (stream, _) = listener1.accept().unwrap();
+            accepted1_tx.send(stream).unwrap();
+        });
+
+        let node = RnsNode::connect_shared(
+            SharedClientConfig {
+                instance_name,
+                port,
+                rpc_port: 0,
+            },
+            Box::new(NoopCallbacks),
+        )
+        .unwrap();
+
+        let identity = Identity::new(&mut OsRng);
+        let dest = crate::destination::Destination::single_in(
+            "shared-replay",
+            &["echo"],
+            IdentityHash(*identity.hash()),
+        );
+        node.register_destination(dest.hash.0, dest.dest_type.to_wire_constant())
+            .unwrap();
+        node.announce(&dest, &identity, Some(b"hello")).unwrap();
+
+        let mut stream1 = accepted1_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        stream1
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+
+        let mut decoder = hdlc::Decoder::new();
+        let mut buf = [0u8; 4096];
+        let n = stream1.read(&mut buf).unwrap();
+        let frames = decoder.feed(&buf[..n]);
+        assert!(!frames.is_empty(), "expected initial announce frame");
+        let packet1 = RawPacket::unpack(&frames[0]).unwrap();
+        assert_eq!(packet1.destination_hash, dest.hash.0);
+        assert_eq!(packet1.context, rns_core::constants::CONTEXT_NONE);
+
+        drop(stream1);
+
+        let listener2 = std::net::TcpListener::bind(&addr).unwrap();
+        let (accepted2_tx, accepted2_rx) = mpsc::channel();
+        thread::spawn(move || {
+            let (stream, _) = listener2.accept().unwrap();
+            accepted2_tx.send(stream).unwrap();
+        });
+
+        let mut stream2 = accepted2_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        stream2
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+
+        let mut decoder = hdlc::Decoder::new();
+        let n = stream2.read(&mut buf).unwrap();
+        let frames = decoder.feed(&buf[..n]);
+        assert!(!frames.is_empty(), "expected replayed announce frame");
+        let packet2 = RawPacket::unpack(&frames[0]).unwrap();
+        assert_eq!(packet2.destination_hash, dest.hash.0);
+        assert_eq!(packet2.context, rns_core::constants::CONTEXT_PATH_RESPONSE);
 
         node.shutdown();
     }

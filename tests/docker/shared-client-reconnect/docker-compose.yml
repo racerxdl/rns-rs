@@ -1,0 +1,40 @@
+# Shared client reconnection test topology.
+#
+# Tests that rns-ctl http --daemon (LocalClientInterface) reconnects
+# after the local rnsd daemon restarts.
+#
+# - daemon: standalone RNS node with TCP server (the "remote" node)
+# - client: runs rnsd (share_instance=Yes) + rns-ctl http --daemon
+#           The HTTP API is served by the shared client, not the daemon.
+
+services:
+  daemon:
+    image: rns-test
+    container_name: reconnect-daemon
+    volumes:
+      - ./configs/daemon:/etc/rns:ro
+    ports:
+      - "8081:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+
+  client:
+    image: rns-test
+    container_name: reconnect-client
+    volumes:
+      - ./configs/client:/etc/rns:ro
+      - ./entrypoint-client.sh:/entrypoint-client.sh:ro
+    ports:
+      - "8082:8080"
+    depends_on:
+      daemon:
+        condition: service_healthy
+    entrypoint: ["sh", "/entrypoint-client.sh"]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 30

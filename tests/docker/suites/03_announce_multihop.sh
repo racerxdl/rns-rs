@@ -12,6 +12,10 @@ if [[ "${TOPO_TYPE:-chain}" != "chain" ]]; then
   skip_suite "Multi-hop announce test requires chain topology"
 fi
 
+if [[ "${TOPOLOGY:-}" == "chain-3" && "${RNS_E2E_SKIP_CHAIN3_REDUNDANT_SUITE03:-0}" == "1" ]]; then
+  skip_suite "chain-3 coverage is redundant here; suite 03 runs separately on chain-5"
+fi
+
 PORT_A="${NODE_A_PORT:?Need NODE_A_PORT}"
 
 # Determine chain length from topology

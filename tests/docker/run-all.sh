@@ -73,6 +73,7 @@ TEST_RESULTS_FILE="$(mktemp "${TMPDIR:-/tmp}/rns-test-results.XXXXXX")"
 trap 'rm -f "$TEST_RESULTS_FILE"' EXIT
 
 source "${SCRIPT_DIR}/lib/summary.sh"
+source "${SCRIPT_DIR}/lib/readiness.sh"
 
 TOTAL_RUNS=0
 TOTAL_FAILED=0
@@ -131,6 +132,15 @@ run_round() {
   set +a
   export TOPO_TYPE="$topo_type" TOPO_N="$topo_n" TOPOLOGY="$topology"
 
+  echo "Waiting for topology readiness..."
+  if ! wait_for_topology_ready "$TOPO_TYPE" "$TOPO_N" 30; then
+    echo "FAIL: Topology readiness check failed for ${topology}"
+    RESULTS+=("FAIL  ${description}")
+    (( TOTAL_FAILED++ )) || true
+    docker compose -f "$compose_file" down -v 2>/dev/null || true
+    return
+  fi
+
   # Run suites
   local round_failed=false
   if [[ "$suite_filter" == "all" ]]; then
@@ -140,7 +150,17 @@ run_round() {
       sname="$(basename "$suite" .sh)"
       echo ""
       echo "--- ${sname} ---"
-      if ! bash "$suite"; then
+      settle_topology_runtime 3
+      if ! clear_topology_runtime_state; then
+        round_failed=true
+        echo "FAIL: Could not clear runtime state before ${sname}"
+        continue
+      fi
+      local skip_chain3_suite03="0"
+      if [[ "$topology" == "chain-3" && "$sname" == "03_announce_multihop" ]]; then
+        skip_chain3_suite03="1"
+      fi
+      if ! RNS_E2E_SKIP_CHAIN3_REDUNDANT_SUITE03="$skip_chain3_suite03" bash "$suite"; then
         round_failed=true
         echo "--- Container logs (last 30 lines) ---"
         docker compose -f "$compose_file" logs --tail=30 2>/dev/null || true
@@ -154,6 +174,12 @@ run_round() {
         sname="$(basename "$suite" .sh)"
         echo ""
         echo "--- ${sname} ---"
+        settle_topology_runtime 3
+        if ! clear_topology_runtime_state; then
+          round_failed=true
+          echo "FAIL: Could not clear runtime state before ${sname}"
+          continue
+        fi
         if ! bash "$suite"; then
           round_failed=true
           echo "--- Container logs (last 30 lines) ---"
@@ -188,6 +214,35 @@ for entry in "${MATRIX[@]}"; do
   description="${entry#*  *  }"
   run_round "$topology" "$suite_filter" "$description"
 done
+
+# ── Standalone tests ──────────────────────────────────────────────────────────
+# Tests with custom topologies that don't fit the matrix pattern.
+
+run_standalone() {
+  local test_dir="$1" description="$2"
+
+  (( TOTAL_RUNS++ )) || true
+  echo ""
+  echo "============================================"
+  echo "  [$TOTAL_RUNS] ${description}"
+  echo "============================================"
+  echo ""
+
+  local run_args=()
+  if $NO_TEARDOWN; then
+    run_args+=("--no-teardown")
+  fi
+
+  if SKIP_BUILD=true bash "${test_dir}/run.sh" "${run_args[@]+"${run_args[@]}"}"; then
+    RESULTS+=("PASS  ${description}")
+  else
+    RESULTS+=("FAIL  ${description}")
+    (( TOTAL_FAILED++ )) || true
+  fi
+}
+
+run_standalone "${SCRIPT_DIR}/shared-client-reconnect" \
+  "Shared client reconnection (issue #3)"
 
 ELAPSED=$(( SECONDS - START_TIME ))
 

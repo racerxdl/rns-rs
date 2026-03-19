@@ -103,6 +103,12 @@ set +a
 # Also export topology metadata
 export TOPO_TYPE TOPO_N TOPOLOGY
 
+source "${SCRIPT_DIR}/lib/readiness.sh"
+
+echo ""
+echo "=== Waiting for topology readiness ==="
+wait_for_topology_ready "$TOPO_TYPE" "$TOPO_N" 30
+
 # ── Results file ─────────────────────────────────────────────────────────────
 
 export TEST_RESULTS_FILE
@@ -124,7 +130,20 @@ run_suite() {
   echo ""
   echo "=== Running suite: ${suite_name} ==="
 
-  if bash "$suite_file"; then
+  settle_topology_runtime 3
+  if ! clear_topology_runtime_state; then
+    (( SUITES_RUN++ )) || true
+    (( SUITES_FAILED++ )) || true
+    echo "  Failed to clear runtime state before ${suite_name}"
+    return
+  fi
+
+  local skip_chain3_suite03="${RNS_E2E_SKIP_CHAIN3_REDUNDANT_SUITE03:-0}"
+  if [[ "${TOPOLOGY}" == "chain-3" && -z "${SUITE_FILTER}" && "${suite_name}" == "03_announce_multihop" ]]; then
+    skip_chain3_suite03="1"
+  fi
+
+  if RNS_E2E_SKIP_CHAIN3_REDUNDANT_SUITE03="$skip_chain3_suite03" bash "$suite_file"; then
     (( SUITES_RUN++ )) || true
   else
     (( SUITES_RUN++ )) || true

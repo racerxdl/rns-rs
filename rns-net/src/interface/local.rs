@@ -748,6 +748,80 @@ mod tests {
         );
     }
 
+    #[test]
+    fn client_reconnects_after_tcp_restart() {
+        let port = find_free_port();
+        let addr = format!("127.0.0.1:{}", port);
+        let instance_name = format!("test-reconnect-{}", port);
+
+        let listener1 = TcpListener::bind(&addr).unwrap();
+        let (accepted1_tx, accepted1_rx) = mpsc::channel();
+        thread::spawn(move || {
+            let (stream, _) = listener1.accept().unwrap();
+            accepted1_tx.send(stream).unwrap();
+        });
+
+        let (client_tx, client_rx) = mpsc::channel();
+        let client_config = LocalClientConfig {
+            name: "test-client".into(),
+            instance_name,
+            port,
+            interface_id: InterfaceId(76),
+            reconnect_wait: Duration::from_millis(50),
+        };
+
+        let _writer = start_client(client_config, client_tx).unwrap();
+        let event = client_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(matches!(event, Event::InterfaceUp(InterfaceId(76), None, None)));
+
+        let stream1 = accepted1_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        drop(stream1);
+
+        let event = client_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(matches!(event, Event::InterfaceDown(InterfaceId(76))));
+
+        let listener2 = TcpListener::bind(&addr).unwrap();
+        let (accepted2_tx, accepted2_rx) = mpsc::channel();
+        thread::spawn(move || {
+            let (stream, _) = listener2.accept().unwrap();
+            accepted2_tx.send(stream).unwrap();
+        });
+
+        let mut reconnected_writer = None;
+        for _ in 0..10 {
+            let event = client_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            match event {
+                Event::InterfaceUp(InterfaceId(76), writer, None) if writer.is_some() => {
+                    reconnected_writer = writer;
+                    break;
+                }
+                _ => {}
+            }
+        }
+
+        let mut reconnected_writer = reconnected_writer.expect("missing reconnect writer");
+        let mut stream2 = accepted2_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+
+        let payload = b"server->client".to_vec();
+        stream2.write_all(&hdlc::frame(&payload)).unwrap();
+        let event = client_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        match event {
+            Event::Frame { interface_id, data } => {
+                assert_eq!(interface_id, InterfaceId(76));
+                assert_eq!(data, payload);
+            }
+            other => panic!("expected Frame, got {:?}", other),
+        }
+
+        reconnected_writer.send_frame(b"client->server").unwrap();
+        stream2
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut buf = [0u8; 64];
+        let n = stream2.read(&mut buf).unwrap();
+        assert!(n > 0, "expected bytes from refreshed writer");
+    }
+
     #[cfg(target_os = "linux")]
     #[test]
     fn unix_abstract_socket_helpers_work() {

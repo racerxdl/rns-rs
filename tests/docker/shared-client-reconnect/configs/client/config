@@ -1,0 +1,11 @@
+[reticulum]
+enable_transport = False
+share_instance = Yes
+shared_instance_port = 37428
+instance_control_port = 37429
+
+[interfaces]
+  [[TCP Client]]
+    type = TCPClientInterface
+    target_host = daemon
+    target_port = 4965
