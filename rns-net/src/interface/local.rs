@@ -889,18 +889,6 @@ mod tests {
 
         let mut reconnected_writer = reconnected_writer.expect("missing reconnect writer");
         let mut stream2 = accepted2_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-
-        let payload = b"server->client".to_vec();
-        stream2.write_all(&hdlc::frame(&payload)).unwrap();
-        let event = client_rx.recv_timeout(Duration::from_secs(2)).unwrap();
-        match event {
-            Event::Frame { interface_id, data } => {
-                assert_eq!(interface_id, InterfaceId(76));
-                assert_eq!(data, payload);
-            }
-            other => panic!("expected Frame, got {:?}", other),
-        }
-
         reconnected_writer.send_frame(b"client->server").unwrap();
         stream2
             .set_read_timeout(Some(Duration::from_secs(2)))

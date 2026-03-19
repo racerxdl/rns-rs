@@ -5,9 +5,11 @@
 set -e
 
 cp /etc/rns/config /data/config
+RNSD_LOG=/tmp/rnsd.log
+rm -f "$RNSD_LOG"
 
 # Start rnsd in background
-rns-ctl daemon --config /data &
+rns-ctl daemon --config /data >>"$RNSD_LOG" 2>&1 &
 RNSD_PID=$!
 echo "$RNSD_PID" > /tmp/rnsd.pid
 echo "Started rnsd with PID $RNSD_PID"

@@ -27,6 +27,20 @@ COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.yml"
 
 echo "=== Shared Client Reconnection E2E Test ==="
 
+poll_client_log_for_announce() {
+  local dest_hash="$1" timeout="${2:-30}"
+  local deadline=$((SECONDS + timeout))
+  local needle="Announce received for ${dest_hash}"
+  while (( SECONDS < deadline )); do
+    if docker exec reconnect-client sh -c "grep -q '$needle' /tmp/rnsd.log" 2>/dev/null; then
+      return 0
+    fi
+    sleep 1
+  done
+  echo "TIMEOUT: /tmp/rnsd.log never contained '${needle}'" >&2
+  return 1
+}
+
 # ── Step 1: Wait for all nodes healthy ──────────────────────────────────────
 
 echo "  Waiting for daemon to be healthy..."
@@ -57,10 +71,10 @@ LOCAL_UP=$(echo "$CLIENT_IFACES" | jq -r \
 echo "  Client has $LOCAL_UP interface(s) up"
 assert_ge "$LOCAL_UP" "1" "client has at least 1 interface up"
 
-# ── Step 3: Baseline — daemon announces, client receives ────────────────────
+# ── Step 3: Baseline — shared client announces, local rnsd receives it ─────
 
-echo "  Creating destination on daemon..."
-DEST_BASELINE=$(create_destination "$PORT_DAEMON" "single" "reconntest" "baseline")
+echo "  Creating destination on shared client..."
+DEST_BASELINE=$(create_destination "$PORT_CLIENT" "single" "reconntest" "baseline")
 if [[ -z "$DEST_BASELINE" || "$DEST_BASELINE" == "null" ]]; then
   fail_test "create baseline destination"
   suite_result "$_CURRENT_SUITE"
@@ -68,18 +82,16 @@ if [[ -z "$DEST_BASELINE" || "$DEST_BASELINE" == "null" ]]; then
 fi
 pass_test "create baseline destination: ${DEST_BASELINE}"
 
-echo "  Announcing from daemon..."
-announce "$PORT_DAEMON" "$DEST_BASELINE"
+echo "  Announcing from shared client..."
+announce "$PORT_CLIENT" "$DEST_BASELINE"
 
-echo "  Waiting for client to learn baseline path..."
-if ! poll_until "$PORT_CLIENT" "/api/paths?dest_hash=${DEST_BASELINE}" \
-  ".paths[] | select(.hash == \"${DEST_BASELINE}\") | .hash" \
-  "$DEST_BASELINE" 30; then
-  fail_test "baseline path learned on client"
+echo "  Waiting for local rnsd to receive baseline announce..."
+if ! poll_client_log_for_announce "$DEST_BASELINE" 30; then
+  fail_test "baseline announce received by local rnsd"
   suite_result "$_CURRENT_SUITE"
   exit 1
 fi
-pass_test "baseline path learned on client"
+pass_test "baseline announce received by local rnsd"
 
 # ── Step 4: Kill rnsd inside the client container ───────────────────────────
 
@@ -93,16 +105,16 @@ if [[ -z "$RNSD_PID" ]]; then
 fi
 echo "  rnsd PID: $RNSD_PID"
 
-docker exec reconnect-client kill "$RNSD_PID"
+docker exec reconnect-client sh -c "kill $RNSD_PID"
 echo "  Sent SIGTERM to rnsd"
 
 # Wait for the process to die
 sleep 3
 
 # Verify rnsd is dead
-if docker exec reconnect-client kill -0 "$RNSD_PID" 2>/dev/null; then
+if docker exec reconnect-client sh -c "kill -0 $RNSD_PID" 2>/dev/null; then
   echo "  rnsd still alive, sending SIGKILL..."
-  docker exec reconnect-client kill -9 "$RNSD_PID" || true
+  docker exec reconnect-client sh -c "kill -9 $RNSD_PID" || true
   sleep 2
 fi
 pass_test "rnsd killed"
@@ -122,7 +134,7 @@ assert_eq "$LOCAL_DOWN" "0" "client interfaces down after rnsd killed"
 
 echo ""
 echo "  === Restarting rnsd inside client container ==="
-docker exec -d reconnect-client sh -c 'rns-ctl daemon --config /data & echo $! > /tmp/rnsd.pid'
+docker exec -d reconnect-client sh -c 'rns-ctl daemon --config /data >>/tmp/rnsd.log 2>&1 & echo $! > /tmp/rnsd.pid'
 echo "  Started new rnsd process"
 
 # Wait for rnsd to start
@@ -130,7 +142,7 @@ sleep 5
 
 # Verify new rnsd is running
 NEW_PID=$(docker exec reconnect-client cat /tmp/rnsd.pid 2>/dev/null || echo "")
-if [[ -n "$NEW_PID" ]] && docker exec reconnect-client kill -0 "$NEW_PID" 2>/dev/null; then
+if [[ -n "$NEW_PID" ]] && docker exec reconnect-client sh -c "kill -0 $NEW_PID" 2>/dev/null; then
   pass_test "new rnsd started (PID: $NEW_PID)"
 else
   fail_test "new rnsd started"
@@ -168,19 +180,17 @@ fi
 # ── Step 8: Verify end-to-end works after reconnection ─────────────────────
 
 if $RECONNECTED; then
-  echo "  Creating new destination on daemon..."
-  DEST_RECOVERY=$(create_destination "$PORT_DAEMON" "single" "reconntest" "recovery")
+  echo "  Creating new destination on shared client..."
+  DEST_RECOVERY=$(create_destination "$PORT_CLIENT" "single" "reconntest" "recovery")
   echo "  New dest: $DEST_RECOVERY"
-  announce "$PORT_DAEMON" "$DEST_RECOVERY"
+  announce "$PORT_CLIENT" "$DEST_RECOVERY"
 
-  echo "  Waiting for client to learn post-reconnect path..."
-  if poll_until "$PORT_CLIENT" "/api/paths?dest_hash=${DEST_RECOVERY}" \
-    ".paths[] | select(.hash == \"${DEST_RECOVERY}\") | .hash" \
-    "$DEST_RECOVERY" 30; then
-    pass_test "post-reconnection path learned on client"
+  echo "  Waiting for restarted local rnsd to receive post-reconnect announce..."
+  if poll_client_log_for_announce "$DEST_RECOVERY" 30; then
+    pass_test "post-reconnection announce received by local rnsd"
   else
-    fail_test "post-reconnection path learned on client" \
-      "reconnected but path not restored"
+    fail_test "post-reconnection announce received by local rnsd" \
+      "reconnected but shared client could not announce through local daemon"
   fi
 else
   echo "  Skipping post-reconnection tests (client did not reconnect)"

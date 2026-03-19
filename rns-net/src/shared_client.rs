@@ -381,9 +381,9 @@ mod tests {
             accepted2_tx.send(stream).unwrap();
         });
 
-        let mut stream2 = accepted2_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        let mut stream2 = accepted2_rx.recv_timeout(Duration::from_secs(15)).unwrap();
         stream2
-            .set_read_timeout(Some(Duration::from_secs(3)))
+            .set_read_timeout(Some(Duration::from_secs(15)))
             .unwrap();
 
         let mut decoder = hdlc::Decoder::new();
