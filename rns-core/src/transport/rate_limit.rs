@@ -20,6 +20,11 @@ impl AnnounceRateLimiter {
         self.table.len()
     }
 
+    /// Returns true when the rate table has no entries.
+    pub fn is_empty(&self) -> bool {
+        self.table.is_empty()
+    }
+
     /// Iterate over all rate table entries.
     pub fn entries(&self) -> impl Iterator<Item = (&[u8; 16], &RateEntry)> {
         self.table.iter()
