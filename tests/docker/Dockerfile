@@ -8,6 +8,7 @@ COPY rns-cli rns-cli
 COPY rns-ctl rns-ctl
 COPY rns-hooks rns-hooks
 COPY rns-stats-hook rns-stats-hook
+RUN rustup target add wasm32-unknown-unknown
 RUN cargo build --release --bin rns-ctl --features rns-hooks
 
 FROM debian:bookworm-slim
