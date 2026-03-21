@@ -125,6 +125,7 @@ fn start_test_server_with_config(
             packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
             known_destinations_ttl: Duration::from_secs(48 * 60 * 60),
             registry: None,
+            #[cfg(feature = "rns-hooks")]
             provider_bridge: None,
         },
         callbacks,
@@ -408,6 +409,15 @@ fn test_get_announces_empty() {
     let json = res.json();
     let announces = json["announces"].as_array().unwrap();
     assert!(announces.is_empty());
+    server.shutdown();
+}
+
+#[test]
+fn test_clear_announce_queues() {
+    let server = start_test_server();
+    let res = http_post(server.port, "/api/announce_queues/clear", "{}");
+    assert_eq!(res.status, 200);
+    assert_eq!(res.json()["status"], "ok");
     server.shutdown();
 }
 
@@ -894,6 +904,7 @@ mod tls_tests {
                 probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
                 known_destinations_ttl: Duration::from_secs(48 * 60 * 60),
                 registry: None,
+                #[cfg(feature = "rns-hooks")]
                 provider_bridge: None,
             },
             callbacks,

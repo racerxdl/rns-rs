@@ -74,6 +74,7 @@ pub fn handle_request(
         ("POST", "/api/resource") => handle_post_resource(req, node),
         ("POST", "/api/path/request") => handle_post_path_request(req, node),
         ("POST", "/api/direct_connect") => handle_post_direct_connect(req, node),
+        ("POST", "/api/announce_queues/clear") => handle_post_clear_announce_queues(node),
 
         // Hook management
         ("GET", "/api/hooks") => handle_list_hooks(node),
@@ -715,6 +716,15 @@ fn handle_post_direct_connect(req: &HttpRequest, node: &NodeHandle) -> HttpRespo
     with_node(node, |n| match n.propose_direct_connect(link_id) {
         Ok(()) => HttpResponse::ok(json!({"status": "proposed"})),
         Err(_) => HttpResponse::internal_error("Direct connect proposal failed"),
+    })
+}
+
+fn handle_post_clear_announce_queues(node: &NodeHandle) -> HttpResponse {
+    with_node(node, |n| match n.query(QueryRequest::DropAnnounceQueues) {
+        Ok(QueryResponse::DropAnnounceQueues) => {
+            HttpResponse::ok(json!({"status": "ok"}))
+        }
+        _ => HttpResponse::internal_error("Query failed"),
     })
 }
 
