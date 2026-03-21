@@ -700,7 +700,8 @@ impl TransportEngine {
         // Ingress control: hold announces from unknown destinations during bursts
         if !self.has_path(&packet.destination_hash) {
             if let Some(info) = self.interfaces.get(&iface) {
-                if info.ingress_control
+                if packet.context != constants::CONTEXT_PATH_RESPONSE
+                    && info.ingress_control
                     && self.ingress_control.should_ingress_limit(
                         iface,
                         info.ia_freq,
