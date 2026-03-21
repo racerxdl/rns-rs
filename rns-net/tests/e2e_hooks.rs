@@ -96,20 +96,17 @@ impl Callbacks for TransportCallbacks {
 // ─── Helper functions ────────────────────────────────────────────────────────
 
 fn find_free_port() -> u16 {
-    use std::collections::HashSet;
-    use std::sync::Mutex;
-    static USED_PORTS: Mutex<Option<HashSet<u16>>> = Mutex::new(None);
+    use std::sync::atomic::{AtomicU16, Ordering};
 
-    let mut used = USED_PORTS.lock().unwrap();
-    let set = used.get_or_insert_with(HashSet::new);
+    static NEXT_PORT: AtomicU16 = AtomicU16::new(0);
+
+    let pid = std::process::id() as u16;
+    let base = 20_000 + (pid % 250) * 160;
+    let _ = NEXT_PORT.compare_exchange(0, base, Ordering::SeqCst, Ordering::SeqCst);
 
     loop {
-        let port = std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
-        if set.insert(port) {
+        let port = NEXT_PORT.fetch_add(1, Ordering::SeqCst);
+        if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
             return port;
         }
     }
