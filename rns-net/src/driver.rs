@@ -5881,7 +5881,7 @@ impl Driver {
                         if let Ok(packet) = RawPacket::unpack(&raw) {
                             let actions = self.engine.handle_path_request(
                                 &packet.data,
-                                InterfaceId(0), // no specific interface
+                                receiving_interface,
                                 time::now(),
                             );
                             self.dispatch_all(actions);
