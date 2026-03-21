@@ -10,7 +10,6 @@
 [![rns-hooks-sdk](https://img.shields.io/crates/v/rns-hooks-sdk.svg?label=rns-hooks-sdk)](https://crates.io/crates/rns-hooks-sdk)
 [![rns-hooks-abi](https://img.shields.io/crates/v/rns-hooks-abi.svg?label=rns-hooks-abi)](https://crates.io/crates/rns-hooks-abi)
 [![rns-stats-hook](https://img.shields.io/crates/v/rns-stats-hook.svg?label=rns-stats-hook)](https://crates.io/crates/rns-stats-hook)
-[![rns-esp32](https://img.shields.io/crates/v/rns-esp32.svg?label=rns-esp32)](https://crates.io/crates/rns-esp32)
 
 A Rust implementation of [Reticulum](https://github.com/markqvist/Reticulum), the cryptography-based networking stack for building resilient networks with readily available hardware.
 
