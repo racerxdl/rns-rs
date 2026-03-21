@@ -100,33 +100,13 @@ fn start_test_server_with_config(
 
     let identity = Identity::new(&mut OsRng);
     let node = RnsNode::start(
-        NodeConfig { panic_on_interface_error: false,
+        NodeConfig {
             transport_enabled: false,
             identity: Some(Identity::from_private_key(
                 &identity.get_private_key().unwrap(),
             )),
             interfaces,
-            share_instance: false,
-            instance_name: "default".into(),
-            shared_instance_port: 37428,
-            rpc_port: 0,
-            cache_dir: None,
-            management: Default::default(),
-            probe_port: None,
-            probe_addrs: vec![],
-            probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
-            device: None,
-            hooks: Vec::new(),
-            discover_interfaces: false,
-            discovery_required_value: None,
-            respond_to_probes: false,
-            prefer_shorter_path: false,
-            max_paths_per_destination: 1,
-            packet_hashlist_max_entries: rns_core::constants::HASHLIST_MAXSIZE,
-            known_destinations_ttl: Duration::from_secs(48 * 60 * 60),
-            registry: None,
-            #[cfg(feature = "rns-hooks")]
-            provider_bridge: None,
+            ..NodeConfig::default()
         },
         callbacks,
     )
@@ -880,32 +860,13 @@ mod tls_tests {
 
         let identity = rns_crypto::identity::Identity::new(&mut rns_crypto::OsRng);
         let node = RnsNode::start(
-            NodeConfig { panic_on_interface_error: false,
+            NodeConfig {
                 transport_enabled: false,
                 identity: Some(rns_crypto::identity::Identity::from_private_key(
                     &identity.get_private_key().unwrap(),
                 )),
                 interfaces: vec![],
-                share_instance: false,
-                instance_name: "default".into(),
-                shared_instance_port: 37428,
-                rpc_port: 0,
-                cache_dir: None,
-                management: Default::default(),
-                probe_port: None,
-                probe_addrs: vec![],
-                device: None,
-                hooks: Vec::new(),
-                discover_interfaces: false,
-                discovery_required_value: None,
-                respond_to_probes: false,
-                prefer_shorter_path: false,
-                max_paths_per_destination: 1,
-                probe_protocol: rns_core::holepunch::ProbeProtocol::Rnsp,
-                known_destinations_ttl: Duration::from_secs(48 * 60 * 60),
-                registry: None,
-                #[cfg(feature = "rns-hooks")]
-                provider_bridge: None,
+                ..NodeConfig::default()
             },
             callbacks,
         )
