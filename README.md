@@ -1,11 +1,11 @@
 # rns-rs
 
 [![CI](https://github.com/lelloman/rns-rs/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/lelloman/rns-rs/actions/workflows/ci.yml)
-[![crates.io: rns-crypto](https://img.shields.io/crates/v/rns-crypto.svg)](https://crates.io/crates/rns-crypto)
-[![crates.io: rns-core](https://img.shields.io/crates/v/rns-core.svg)](https://crates.io/crates/rns-core)
-[![crates.io: rns-net](https://img.shields.io/crates/v/rns-net.svg)](https://crates.io/crates/rns-net)
-[![crates.io: rns-ctl](https://img.shields.io/crates/v/rns-ctl.svg)](https://crates.io/crates/rns-ctl)
-[![crates.io: rns-hooks](https://img.shields.io/crates/v/rns-hooks.svg)](https://crates.io/crates/rns-hooks)
+[![rns-crypto](https://img.shields.io/crates/v/rns-crypto.svg?label=rns-crypto)](https://crates.io/crates/rns-crypto)
+[![rns-core](https://img.shields.io/crates/v/rns-core.svg?label=rns-core)](https://crates.io/crates/rns-core)
+[![rns-net](https://img.shields.io/crates/v/rns-net.svg?label=rns-net)](https://crates.io/crates/rns-net)
+[![rns-ctl](https://img.shields.io/crates/v/rns-ctl.svg?label=rns-ctl)](https://crates.io/crates/rns-ctl)
+[![rns-hooks](https://img.shields.io/crates/v/rns-hooks.svg?label=rns-hooks)](https://crates.io/crates/rns-hooks)
 
 A Rust implementation of [Reticulum](https://github.com/markqvist/Reticulum), the cryptography-based networking stack for building resilient networks with readily available hardware.
 
