@@ -1,11 +1,16 @@
 # rns-rs
 
 [![CI](https://github.com/lelloman/rns-rs/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/lelloman/rns-rs/actions/workflows/ci.yml)
-[![rns-crypto](https://img.shields.io/crates/v/rns-crypto.svg?label=rns-crypto)](https://crates.io/crates/rns-crypto)
 [![rns-core](https://img.shields.io/crates/v/rns-core.svg?label=rns-core)](https://crates.io/crates/rns-core)
+[![rns-crypto](https://img.shields.io/crates/v/rns-crypto.svg?label=rns-crypto)](https://crates.io/crates/rns-crypto)
 [![rns-net](https://img.shields.io/crates/v/rns-net.svg?label=rns-net)](https://crates.io/crates/rns-net)
 [![rns-ctl](https://img.shields.io/crates/v/rns-ctl.svg?label=rns-ctl)](https://crates.io/crates/rns-ctl)
+[![rns-cli](https://img.shields.io/crates/v/rns-cli.svg?label=rns-cli)](https://crates.io/crates/rns-cli)
 [![rns-hooks](https://img.shields.io/crates/v/rns-hooks.svg?label=rns-hooks)](https://crates.io/crates/rns-hooks)
+[![rns-hooks-sdk](https://img.shields.io/crates/v/rns-hooks-sdk.svg?label=rns-hooks-sdk)](https://crates.io/crates/rns-hooks-sdk)
+[![rns-hooks-abi](https://img.shields.io/crates/v/rns-hooks-abi.svg?label=rns-hooks-abi)](https://crates.io/crates/rns-hooks-abi)
+[![rns-stats-hook](https://img.shields.io/crates/v/rns-stats-hook.svg?label=rns-stats-hook)](https://crates.io/crates/rns-stats-hook)
+[![rns-esp32](https://img.shields.io/crates/v/rns-esp32.svg?label=rns-esp32)](https://crates.io/crates/rns-esp32)
 
 A Rust implementation of [Reticulum](https://github.com/markqvist/Reticulum), the cryptography-based networking stack for building resilient networks with readily available hardware.
 
