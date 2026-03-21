@@ -1,5 +1,12 @@
 # rns-rs
 
+[![CI](https://github.com/lelloman/rns-rs/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/lelloman/rns-rs/actions/workflows/ci.yml)
+[![crates.io: rns-crypto](https://img.shields.io/crates/v/rns-crypto.svg)](https://crates.io/crates/rns-crypto)
+[![crates.io: rns-core](https://img.shields.io/crates/v/rns-core.svg)](https://crates.io/crates/rns-core)
+[![crates.io: rns-net](https://img.shields.io/crates/v/rns-net.svg)](https://crates.io/crates/rns-net)
+[![crates.io: rns-ctl](https://img.shields.io/crates/v/rns-ctl.svg)](https://crates.io/crates/rns-ctl)
+[![crates.io: rns-hooks](https://img.shields.io/crates/v/rns-hooks.svg)](https://crates.io/crates/rns-hooks)
+
 A Rust implementation of [Reticulum](https://github.com/markqvist/Reticulum), the cryptography-based networking stack for building resilient networks with readily available hardware.
 
 This is a faithful port of the Python reference implementation, validated against it with 900+ interop tests. `rns-crypto` and `rns-core` are `no_std`-compatible with zero external dependencies, making them suitable for embedded/microcontroller targets. rns-rs also extends Reticulum with features not present in the Python implementation, such as [Direct Link (NAT hole punching)](#direct-link-nat-hole-punching).
