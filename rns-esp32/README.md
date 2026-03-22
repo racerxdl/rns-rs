@@ -53,6 +53,21 @@ Example:
 
 The `-dirty` suffix means the repository had uncommitted changes at build time.
 
+## Pre-built Firmware
+
+Pre-built flashable images are available on the
+[GitHub Releases](https://github.com/lelloman/rns-rs/releases) page.
+
+Flash with esptool:
+```bash
+esptool.py write_flash 0x0 rns-esp32-vX.Y.Z-esp32s3.bin
+```
+
+Or with espflash:
+```bash
+espflash write-bin 0x0 rns-esp32-vX.Y.Z-esp32s3.bin
+```
+
 ## Prerequisites
 
 1. Install Rust with ESP target support:
