@@ -228,6 +228,13 @@ get_identity() {
   ctl_get "$port" "/api/identity/${dest_hash}"
 }
 
+request_path() {
+  local port="$1" dest_hash="$2"
+  local body
+  body=$(jq -n --arg dh "$dest_hash" '{dest_hash: $dh}')
+  ctl_post "$port" "/api/path/request" "$body"
+}
+
 # ── Link helpers ─────────────────────────────────────────────────────────────
 
 # create_link PORT DEST_HASH — creates a link to dest_hash, echoes link_id

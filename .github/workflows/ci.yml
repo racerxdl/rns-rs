@@ -28,6 +28,9 @@ jobs:
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Build hook WASM examples
+        run: ./rns-hooks/build-examples.sh
+
       - name: Run workspace tests
         run: cargo test --workspace
 

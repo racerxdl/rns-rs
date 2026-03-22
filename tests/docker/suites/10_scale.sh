@@ -59,10 +59,25 @@ for trial in $(seq 1 5); do
 
   echo "  Trial ${trial}: spoke-$(printf '%02d' $((src_idx+1))) -> spoke-$(printf '%02d' $((dst_idx+1)))"
 
-  # Wait for identity recall on source spoke
-  if ! poll_until "$src_port" "/api/identity/${dst_hash}" ".dest_hash" "$dst_hash" 30; then
-    fail_test "Trial ${trial}: source cannot recall destination identity"
-    continue
+  # In larger star topologies, spoke-to-spoke discovery may require an
+  # explicit path request after the hub has converged.
+  if ! poll_until "$src_port" "/api/identity/${dst_hash}" ".dest_hash" "$dst_hash" 5; then
+    echo "  Trial ${trial}: requesting path discovery from source spoke..."
+    if ! request_path "$src_port" "$dst_hash" >/dev/null; then
+      fail_test "Trial ${trial}: source path request failed"
+      continue
+    fi
+
+    if ! poll_until "$src_port" "/api/paths?dest_hash=${dst_hash}" \
+      ".paths[]? | .hash" "$dst_hash" 30; then
+      fail_test "Trial ${trial}: source did not learn destination path"
+      continue
+    fi
+
+    if ! poll_until "$src_port" "/api/identity/${dst_hash}" ".dest_hash" "$dst_hash" 30; then
+      fail_test "Trial ${trial}: source cannot recall destination identity after path request"
+      continue
+    fi
   fi
 
   # Send packet
