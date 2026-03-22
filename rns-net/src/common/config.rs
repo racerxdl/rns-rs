@@ -106,9 +106,9 @@ impl Default for ReticulumSection {
             #[cfg(feature = "rns-hooks")]
             provider_socket_path: None,
             #[cfg(feature = "rns-hooks")]
-            provider_queue_max_events: 8192,
+            provider_queue_max_events: 16384,
             #[cfg(feature = "rns-hooks")]
-            provider_queue_max_bytes: 4 * 1024 * 1024,
+            provider_queue_max_bytes: 8 * 1024 * 1024,
             #[cfg(feature = "rns-hooks")]
             provider_overflow_policy: "drop_newest".into(),
         }
